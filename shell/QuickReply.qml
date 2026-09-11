@@ -120,6 +120,11 @@ Item {
 
   function reply(chatId) {
     if (!chatId) return
+    var index = Model.indexOfChat(overlay.results, chatId)
+    if (index >= 0) {
+      overlay.cursor = index
+      chatList.positionViewAtIndex(index, ListView.Contain)
+    }
     overlay.replyChatId = chatId
     overlay.status = ""
     Qt.callLater(function () { composer.forceActiveFocus() })
@@ -172,11 +177,20 @@ Item {
       return
     }
     if (chatId !== overlay.historyChatId) overlay.history = []
-    overlay.service.request("chat.history", { chatId: chatId, fromMessageId: 0, limit: 20 }, function (answer) {
+    overlay.fetchHistory(chatId, 0, serial)
+  }
+
+  // TDLib answers the first page from its local cache, which can hold a single message; one
+  // more page from the oldest message fills the pane.
+  function fetchHistory(chatId, fromMessageId, serial) {
+    overlay.service.request("chat.history", { chatId: chatId, fromMessageId: fromMessageId, limit: 20 }, function (answer) {
       if (serial !== overlay.historySerial) return   // a newer chat was chosen meanwhile
       overlay.historyChatId = chatId
-      overlay.history = answer.ok ? Model.mergeMessages([], answer.result.messages || []) : []
+      var incoming = answer.ok ? (answer.result.messages || []) : []
+      var merged = Model.mergeMessages(fromMessageId ? overlay.history : [], incoming)
+      overlay.history = merged
       Qt.callLater(function () { messageList.positionViewAtEnd() })
+      if (!fromMessageId && merged.length > 0 && merged.length < 12) overlay.fetchHistory(chatId, Model.oldestId(merged), serial)
     })
   }
 
