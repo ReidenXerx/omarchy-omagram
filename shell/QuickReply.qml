@@ -90,6 +90,8 @@ Item {
     var id = Number(payload.chatId)
     if (Number.isSafeInteger(id) && id !== 0) overlay.reply(id)
     else Qt.callLater(function () { search.forceActiveFocus() })
+    // The chat shown may be the same one as last time, so no change would ask for it.
+    historyDelay.restart()
   }
 
   function close() {
