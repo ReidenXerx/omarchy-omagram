@@ -12,8 +12,10 @@ import "../app/Model.js" as Model
 Panel {
   id: root
   moduleName: "reidenxerx.omagram"
-  ipcTarget: "reidenxerx.omagram"
-  manageIpc: false
+  // Summon from a key binding: omarchy-shell reidenxerx.omagram.panel toggle
+  // (its own target, apart from the overlay, which the shell toggles by plugin id).
+  ipcTarget: "reidenxerx.omagram.panel"
+  manageIpc: true
 
   property var anchorItem: null
   property var hostWidget: null
