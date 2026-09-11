@@ -1,0 +1,596 @@
+#!/usr/bin/python3
+"""omagramd -- Omagram's background service: one Telegram session, shared by every Omagram
+surface (the app window, the bar panel, the overlay) over a private local socket.
+
+  omagramd [--with-parent]
+
+--with-parent: exit when the process that started it exits (the shell passes this).
+
+The socket is $XDG_RUNTIME_DIR/omagram/omagram.sock, mode 0600 in a 0700 directory, and a
+connection is served only if the kernel reports the peer is this same user. One instance
+runs per login: a second one exits quietly.
+
+Protocol: newline-delimited JSON. A request is {"id": <int>, "cmd": "<name>", "args": {...}};
+its answer is {"id": <int>, "ok": true, "result": ...} or {"id": <int>, "ok": false,
+"error": "..."}. Everything else the service sends is an event, {"event": "<name>", ...}.
+Lines are capped at 64 KB in, a slow client's backlog at 16 MB out.
+
+Login codes, passwords and the API credentials are handed straight to TDLib or the keyring:
+they are never echoed back, logged or written anywhere.
+"""
+import fcntl
+import json
+import os
+import pathlib
+import queue
+import re
+import selectors
+import signal
+import socket
+import stat
+import struct
+import sys
+import threading
+import time
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import plugin_safety as safe  # noqa: E402
+import omagram_state as model  # noqa: E402
+import omagram_td as td  # noqa: E402
+
+VERSION = "0.1.0"
+RUN = pathlib.Path(safe.runtime_dir()) / "omagram"
+SOCKET = RUN / "omagram.sock"
+LOCK = RUN / "omagram.lock"
+
+LINE_MAX = 64 * 1024
+OUTBOX_MAX = 16 * 1024 * 1024
+CLIENTS_MAX = 16
+REQUEST_LIMITS = {"max_depth": 6, "max_items": 1024, "max_string": 16 * 1024}
+TEXT_MAX = 4096
+IDS_MAX = 100
+CLOSE_TIMEOUT = 5.0
+
+PHONE = re.compile(r"\+?[0-9][0-9 ()-]{4,30}")
+CODE = re.compile(r"[0-9]{3,10}")
+
+LOG = print
+
+
+class BadRequest(Exception):
+    pass
+
+
+def arg_int(args, name, low=None, high=None, default=None):
+    value = args.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise BadRequest(f"{name} must be an integer")
+    if (low is not None and value < low) or (high is not None and value > high):
+        raise BadRequest(f"{name} is out of range")
+    return value
+
+
+def arg_str(args, name, max_len, min_len=1):
+    value = args.get(name)
+    if not isinstance(value, str) or not min_len <= len(value) <= max_len:
+        raise BadRequest(f"{name} must be text of {min_len}-{max_len} characters")
+    return value
+
+
+def arg_ids(args, name):
+    value = args.get(name)
+    if not isinstance(value, list) or not 1 <= len(value) <= IDS_MAX:
+        raise BadRequest(f"{name} must be a list of 1-{IDS_MAX} message ids")
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
+            raise BadRequest(f"{name} must contain message ids")
+    return value
+
+
+class Client:
+    __slots__ = ("sock", "inbox", "outbox")
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.inbox = bytearray()
+        self.outbox = bytearray()
+
+
+class Daemon:
+    def __init__(self, open_client=None, keyring=None):
+        self.open_client = open_client or td.open_client
+        self.keyring = keyring or td
+        self.state = model.State()
+        self.td = None
+        self.auth = {"state": "starting"}
+        self.clients = {}
+        self.pending = {}
+        self.next_extra = 1
+        self.events = queue.Queue()
+        self.stopping = False
+        self.closed = threading.Event()
+        self.sel = selectors.DefaultSelector()
+        self.wake_r, self.wake_w = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+        self.sel.register(self.wake_r, selectors.EVENT_READ, "wake")
+        self.listener = None
+        self.lock_fd = None
+
+    # ---------------------------------------------------------------- lifecycle
+
+    def acquire(self):
+        """True if this is the only instance for this login."""
+        safe.ensure_dir(RUN, 0o700)
+        fd = os.open(LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return False
+        self.lock_fd = fd
+        return True
+
+    def listen(self):
+        try:
+            st = os.stat(SOCKET, follow_symlinks=False)
+            if stat.S_ISSOCK(st.st_mode) and st.st_uid == os.getuid():
+                os.unlink(SOCKET)   # left by an instance that is gone: we hold the lock
+            else:
+                raise safe.UnsafeError(f"{SOCKET} exists and is not our socket")
+        except FileNotFoundError:
+            pass
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
+        old = os.umask(0o177)
+        try:
+            sock.bind(str(SOCKET))
+        finally:
+            os.umask(old)
+        os.chmod(SOCKET, 0o600)
+        sock.listen(8)
+        sock.setblocking(False)
+        self.listener = sock
+        self.sel.register(sock, selectors.EVENT_READ, "listen")
+
+    def wake(self):
+        try:
+            os.write(self.wake_w, b"!")
+        except (BlockingIOError, OSError):
+            pass
+
+    def stop(self, *_):
+        self.stopping = True
+        self.wake()
+
+    def start_td(self):
+        try:
+            self.td = self.open_client()
+        except td.TdUnavailable as e:
+            self.set_auth({"state": "noLibrary", "reason": str(e)})
+            return
+        threading.Thread(target=self.receive_loop, daemon=True).start()
+        # Any request activates a new client; its answer is not needed.
+        self.td_send({"@type": "getOption", "name": "version"})
+
+    def receive_loop(self):
+        while not self.stopping or not self.closed.is_set():
+            event = self.td.receive(1.0)
+            if event is not None:
+                self.events.put(event)
+                self.wake()
+            elif self.stopping and self.closed.is_set():
+                return
+
+    def run(self):
+        self.listen()
+        self.start_td()
+        while not self.stopping:
+            for key, mask in self.sel.select(timeout=1.0):
+                if key.data == "wake":
+                    self.drain_wake()
+                elif key.data == "listen":
+                    self.accept()
+                else:
+                    self.on_socket(key.data, mask)
+            self.process_events()
+        self.shutdown()
+
+    def shutdown(self):
+        if self.td is not None and not self.closed.is_set():
+            # A clean close lets TDLib flush its database; waiting is bounded.
+            self.td.send({"@type": "close"})
+            deadline = time.monotonic() + CLOSE_TIMEOUT
+            while not self.closed.is_set() and time.monotonic() < deadline:
+                try:
+                    event = self.events.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                if _auth_type(event) == "authorizationStateClosed":
+                    self.closed.set()
+        self.closed.set()
+        for client in list(self.clients.values()):
+            self.drop(client)
+        if self.listener is not None:
+            self.sel.unregister(self.listener)
+            self.listener.close()
+            try:
+                os.unlink(SOCKET)
+            except OSError:
+                pass
+
+    # ---------------------------------------------------------------- TDLib
+
+    def td_send(self, query, client=None, rid=None, transform=None):
+        if self.td is None:
+            if client is not None:
+                self.respond_error(client, rid, "Telegram is not available")
+            return
+        extra = self.next_extra
+        self.next_extra += 1
+        if client is not None:
+            self.pending[extra] = (client, rid, transform)
+        query = dict(query)
+        query["@extra"] = extra
+        self.td.send(query)
+
+    def process_events(self):
+        while True:
+            try:
+                event = self.events.get_nowait()
+            except queue.Empty:
+                return
+            self.handle_td(event)
+
+    def handle_td(self, event):
+        if self.td is not None and event.get("@client_id") not in (None, self.td.client_id):
+            return
+        extra = event.get("@extra")
+        if isinstance(extra, int) and extra in self.pending:
+            client, rid, transform = self.pending.pop(extra)
+            if client.sock.fileno() in self.clients:
+                if event.get("@type") == "error":
+                    self.respond_error(client, rid, model._str(event.get("message"), 200), model._int(event.get("code")))
+                else:
+                    try:
+                        result = transform(event) if transform else {}
+                    except Exception:   # a malformed answer must not take the service down
+                        result = {}
+                    self.respond(client, rid, result)
+            return
+        if event.get("@type") == "updateAuthorizationState":
+            self.on_auth(event.get("authorization_state"))
+            return
+        for out in self.state.apply(event):
+            self.broadcast(out)
+
+    def on_auth(self, value):
+        kind = model._obj(value).get("@type")
+        if kind == "authorizationStateWaitTdlibParameters":
+            self.send_parameters()
+        elif kind == "authorizationStateReady":
+            self.set_auth({"state": "ready"})
+            self.td_send({"@type": "loadChats", "chat_list": {"@type": "chatListMain"}, "limit": 100})
+            self.td_send({"@type": "getMe"})
+        elif kind == "authorizationStateClosed":
+            if self.stopping:
+                self.closed.set()
+                return
+            # Logged out or the session was terminated elsewhere: start over, signed out.
+            self.state = model.State()
+            self.set_auth({"state": "starting"})
+            self.td.new_client()
+            self.td_send({"@type": "getOption", "name": "version"})
+        else:
+            self.set_auth(model.auth_view(value))
+
+    def send_parameters(self):
+        try:
+            credentials = self.keyring.load_credentials()
+            if credentials is None:
+                self.set_auth({"state": "needCredentials"})
+                return
+            key = self.keyring.database_key()
+            query = self.keyring.tdlib_parameters(credentials[0], credentials[1], key, VERSION)
+        except (td.TdUnavailable, safe.UnsafeError, OSError) as e:
+            self.set_auth({"state": "error", "reason": str(e)[:200]})
+            return
+        self.td_send(query)
+
+    def set_auth(self, auth):
+        self.auth = auth
+        self.broadcast({"event": "auth", "auth": auth})
+
+    # ---------------------------------------------------------------- sockets
+
+    def accept(self):
+        try:
+            conn, _ = self.listener.accept()
+        except (BlockingIOError, OSError):
+            return
+        try:
+            creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+            _, uid, _ = struct.unpack("3i", creds)
+        except OSError:
+            conn.close()
+            return
+        if uid != os.getuid() or len(self.clients) >= CLIENTS_MAX:
+            conn.close()
+            return
+        conn.setblocking(False)
+        client = Client(conn)
+        self.clients[conn.fileno()] = client
+        self.sel.register(conn, selectors.EVENT_READ, client)
+
+    def drop(self, client):
+        fd = client.sock.fileno()
+        if fd in self.clients:
+            del self.clients[fd]
+            try:
+                self.sel.unregister(client.sock)
+            except (KeyError, ValueError):
+                pass
+        for extra in [e for e, (c, _, _) in self.pending.items() if c is client]:
+            del self.pending[extra]
+        client.sock.close()
+
+    def on_socket(self, client, mask):
+        if mask & selectors.EVENT_WRITE:
+            self.flush(client)
+        if mask & selectors.EVENT_READ:
+            try:
+                chunk = client.sock.recv(65536)
+            except BlockingIOError:
+                return
+            except OSError:
+                self.drop(client)
+                return
+            if not chunk:
+                self.drop(client)
+                return
+            client.inbox += chunk
+            while True:
+                newline = client.inbox.find(b"\n")
+                if newline < 0:
+                    break
+                line = bytes(client.inbox[:newline])
+                del client.inbox[:newline + 1]
+                if len(line) > LINE_MAX:
+                    self.drop(client)
+                    return
+                self.handle_line(client, line)
+                if client.sock.fileno() not in self.clients:
+                    return
+            if len(client.inbox) > LINE_MAX:
+                self.drop(client)
+
+    def send_to(self, client, value):
+        data = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+        if len(client.outbox) + len(data) > OUTBOX_MAX:
+            self.drop(client)   # not reading: better a reconnect than unbounded memory
+            return
+        client.outbox += data
+        self.flush(client)
+
+    def flush(self, client):
+        if client.sock.fileno() not in self.clients:
+            return
+        try:
+            while client.outbox:
+                sent = client.sock.send(client.outbox)
+                del client.outbox[:sent]
+        except BlockingIOError:
+            pass
+        except OSError:
+            self.drop(client)
+            return
+        events = selectors.EVENT_READ | (selectors.EVENT_WRITE if client.outbox else 0)
+        try:
+            self.sel.modify(client.sock, events, client)
+        except (KeyError, ValueError):
+            pass
+
+    def broadcast(self, value):
+        for client in list(self.clients.values()):
+            self.send_to(client, value)
+
+    def respond(self, client, rid, result):
+        self.send_to(client, {"id": rid, "ok": True, "result": result})
+
+    def respond_error(self, client, rid, message, code=0):
+        self.send_to(client, {"id": rid, "ok": False, "error": message or "failed", "code": code})
+
+    # ---------------------------------------------------------------- requests
+
+    def handle_line(self, client, line):
+        try:
+            request = safe.loads(line, **REQUEST_LIMITS)
+        except (ValueError, UnicodeDecodeError, safe.UnsafeError):
+            self.respond_error(client, None, "not a JSON request")
+            return
+        if not isinstance(request, dict):
+            self.respond_error(client, None, "not a request")
+            return
+        rid = request.get("id")
+        if isinstance(rid, bool) or not isinstance(rid, int):
+            self.respond_error(client, None, "id must be an integer")
+            return
+        cmd = request.get("cmd")
+        args = request.get("args", {})
+        handler = COMMANDS.get(cmd) if isinstance(cmd, str) else None
+        if handler is None or not isinstance(args, dict):
+            self.respond_error(client, rid, "unknown command")
+            return
+        name, needs_ready = handler
+        if needs_ready and self.auth.get("state") != "ready":
+            self.respond_error(client, rid, "not signed in")
+            return
+        try:
+            getattr(self, name)(client, rid, args)
+        except BadRequest as e:
+            self.respond_error(client, rid, str(e))
+
+    def cmd_hello(self, client, rid, args):
+        self.respond(client, rid, {"version": VERSION, "auth": self.auth, "meId": self.state.me_id,
+                                   "chats": self.state.chat_list("main", 100)})
+
+    def cmd_credentials_set(self, client, rid, args):
+        api_id, api_hash = args.get("apiId"), args.get("apiHash")
+        if isinstance(api_id, int) and not isinstance(api_id, bool):
+            api_id = str(api_id)
+        if not self.keyring.valid_credentials(api_id, api_hash):
+            raise BadRequest("the API id is a number and the API hash is 32 hexadecimal characters")
+        if not self.keyring.save_credentials(api_id, api_hash):
+            self.respond_error(client, rid, "the keyring did not accept the credentials")
+            return
+        self.respond(client, rid, {})
+        if self.auth.get("state") in ("needCredentials", "error"):
+            self.set_auth({"state": "starting"})
+            self.send_parameters()
+
+    def cmd_auth_phone(self, client, rid, args):
+        phone = arg_str(args, "phone", 32, 5)
+        if not PHONE.fullmatch(phone):
+            raise BadRequest("that does not look like a phone number")
+        self.td_send({"@type": "setAuthenticationPhoneNumber", "phone_number": re.sub(r"[ ()-]", "", phone),
+                      "settings": None}, client, rid)
+
+    def cmd_auth_code(self, client, rid, args):
+        code = arg_str(args, "code", 10, 3)
+        if not CODE.fullmatch(code):
+            raise BadRequest("the code is digits only")
+        self.td_send({"@type": "checkAuthenticationCode", "code": code}, client, rid)
+
+    def cmd_auth_password(self, client, rid, args):
+        self.td_send({"@type": "checkAuthenticationPassword", "password": arg_str(args, "password", 512)}, client, rid)
+
+    def cmd_auth_qr(self, client, rid, args):
+        self.td_send({"@type": "requestQrCodeAuthentication", "other_user_ids": []}, client, rid)
+
+    def cmd_auth_logout(self, client, rid, args):
+        self.td_send({"@type": "logOut"}, client, rid)
+
+    def cmd_chats_load(self, client, rid, args):
+        limit = arg_int(args, "limit", 1, 500, 100)
+
+        def done(event):
+            return {"done": False}
+        self.td_send({"@type": "loadChats", "chat_list": {"@type": "chatListMain"}, "limit": limit}, client, rid, done)
+
+    def cmd_chat_list(self, client, rid, args):
+        key = args.get("list", "main")
+        if not isinstance(key, str) or not re.fullmatch(r"main|archive|folder:[0-9]{1,10}", key):
+            raise BadRequest("list is main, archive or folder:<id>")
+        self.respond(client, rid, {"chats": self.state.chat_list(key, arg_int(args, "limit", 1, 500, 200))})
+
+    def cmd_chat_history(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        query = {"@type": "getChatHistory", "chat_id": chat_id,
+                 "from_message_id": arg_int(args, "fromMessageId", 0, None, 0),
+                 "offset": arg_int(args, "offset", -99, 0, 0),
+                 "limit": arg_int(args, "limit", 1, 100, 50),
+                 "only_local": False}
+
+        def messages(event):
+            found = [self.state.message(m) for m in model._list(event.get("messages"), 100)]
+            return {"chatId": chat_id, "messages": [m for m in found if m]}
+        self.td_send(query, client, rid, messages)
+
+    def cmd_chat_open(self, client, rid, args):
+        self.td_send({"@type": "openChat", "chat_id": arg_int(args, "chatId")}, client, rid)
+
+    def cmd_chat_close(self, client, rid, args):
+        self.td_send({"@type": "closeChat", "chat_id": arg_int(args, "chatId")}, client, rid)
+
+    def cmd_chat_read(self, client, rid, args):
+        self.td_send({"@type": "viewMessages", "chat_id": arg_int(args, "chatId"),
+                      "message_ids": arg_ids(args, "messageIds"),
+                      "source": {"@type": "messageSourceChatHistory"}, "force_read": True}, client, rid)
+
+    def cmd_message_send(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        text = arg_str(args, "text", TEXT_MAX)
+        reply = None
+        if args.get("replyToMessageId") is not None:
+            reply = {"@type": "inputMessageReplyToMessage", "message_id": arg_int(args, "replyToMessageId", 1),
+                     "quote": None, "checklist_task_id": 0, "poll_option_id": ""}
+        self.td_send({"@type": "sendMessage", "chat_id": chat_id, "topic_id": None, "reply_to": reply,
+                      "options": None, "reply_markup": None,
+                      "input_message_content": {"@type": "inputMessageText",
+                                                "text": {"@type": "formattedText", "text": text, "entities": []},
+                                                "link_preview_options": None, "clear_draft": True}},
+                     client, rid, self.state.message)
+
+    def cmd_message_edit(self, client, rid, args):
+        self.td_send({"@type": "editMessageText", "chat_id": arg_int(args, "chatId"),
+                      "message_id": arg_int(args, "messageId", 1), "reply_markup": None,
+                      "input_message_content": {"@type": "inputMessageText",
+                                                "text": {"@type": "formattedText", "text": arg_str(args, "text", TEXT_MAX),
+                                                         "entities": []},
+                                                "link_preview_options": None, "clear_draft": False}},
+                     client, rid, self.state.message)
+
+    def cmd_message_delete(self, client, rid, args):
+        revoke = args.get("revoke", True)
+        if not isinstance(revoke, bool):
+            raise BadRequest("revoke must be true or false")
+        self.td_send({"@type": "deleteMessages", "chat_id": arg_int(args, "chatId"),
+                      "message_ids": arg_ids(args, "messageIds"), "revoke": revoke}, client, rid)
+
+    def drain_wake(self):
+        try:
+            while os.read(self.wake_r, 4096):
+                pass
+        except (BlockingIOError, OSError):
+            pass
+
+
+COMMANDS = {
+    "hello": ("cmd_hello", False),
+    "credentials.set": ("cmd_credentials_set", False),
+    "auth.phone": ("cmd_auth_phone", False),
+    "auth.code": ("cmd_auth_code", False),
+    "auth.password": ("cmd_auth_password", False),
+    "auth.qr": ("cmd_auth_qr", False),
+    "auth.logout": ("cmd_auth_logout", True),
+    "chats.load": ("cmd_chats_load", True),
+    "chats.list": ("cmd_chat_list", True),
+    "chat.history": ("cmd_chat_history", True),
+    "chat.open": ("cmd_chat_open", True),
+    "chat.close": ("cmd_chat_close", True),
+    "chat.read": ("cmd_chat_read", True),
+    "message.send": ("cmd_message_send", True),
+    "message.edit": ("cmd_message_edit", True),
+    "message.delete": ("cmd_message_delete", True),
+}
+
+
+def _auth_type(event):
+    if not isinstance(event, dict) or event.get("@type") != "updateAuthorizationState":
+        return None
+    return model._obj(event.get("authorization_state")).get("@type")
+
+
+def main(argv):
+    if argv[1:] not in ([], ["--with-parent"]):
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    if argv[1:] == ["--with-parent"]:
+        safe.die_with_parent()
+    daemon = Daemon()
+    try:
+        if not daemon.acquire():
+            return 0
+    except (safe.UnsafeError, OSError) as e:
+        print(f"omagramd: {e}", file=sys.stderr)
+        return 1
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, daemon.stop)
+    try:
+        daemon.run()
+    except (safe.UnsafeError, OSError) as e:
+        print(f"omagramd: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

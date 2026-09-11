@@ -1,0 +1,157 @@
+#!/usr/bin/python3
+"""Build TDLib's JSON library for Omagram and install it where Omagram loads it from.
+
+  omagram-build-tdlib            fetch, build and install the pinned TDLib
+  omagram-build-tdlib --check    only report whether a usable library is installed
+
+TDLib is Telegram's official client library (Boost licence). No distribution package is
+used because none is maintained for Arch; this builds the exact commit Omagram was tested
+with. Nothing is installed system-wide and nothing needs root:
+
+  source   ~/.cache/omagram/td            (git, pinned commit)
+  build    ~/.cache/omagram/build          (log: ~/.cache/omagram/build.log)
+  library  ~/.local/share/omagram/lib/libtdjson.so   (a private regular file, mode 0644)
+
+Build requirements: cmake, gperf, a C++17 compiler (clang or gcc), openssl, zlib, git.
+Parallel jobs are sized to the machine's memory (about 2 GB per job), because TDLib's
+largest translation units need that much and an out-of-memory build fails confusingly.
+"""
+import os
+import pathlib
+import shutil
+import sys
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import plugin_safety as safe  # noqa: E402
+import omagram_td as td  # noqa: E402
+
+TDLIB_REPO = "https://github.com/tdlib/td.git"
+TDLIB_COMMIT = "d1085f9cebc5a62379991ae1652673954f229c1f"
+TDLIB_VERSION = "1.8.67"
+
+CACHE = pathlib.Path(safe.home_dir()) / ".cache/omagram"
+SOURCE = CACHE / "td"
+BUILD = CACHE / "build"
+LOG = CACHE / "build.log"
+
+TOOLS = ("git", "cmake", "gperf")
+COMPILERS = ("clang++", "g++")
+GIT_TIMEOUT = 900
+CONFIGURE_TIMEOUT = 600
+BUILD_TIMEOUT = 4 * 3600
+OUTPUT_MAX = 64 * 1024 * 1024
+GB = 1024 ** 3
+
+
+def say(message):
+    print(message, flush=True)
+
+
+def memory_jobs():
+    try:
+        pages, page = os.sysconf("SC_PHYS_PAGES"), os.sysconf("SC_PAGE_SIZE")
+        total = pages * page
+    except (ValueError, OSError):
+        total = 8 * GB
+    return max(1, min(os.cpu_count() or 1, total // (2 * GB)))
+
+
+def check_tools():
+    missing = [t for t in TOOLS if not safe.has_tool(t)]
+    compiler = next((c for c in COMPILERS if safe.has_tool(c)), None)
+    if compiler is None:
+        missing.append("clang or gcc")
+    return missing, compiler
+
+
+def run_logged(argv, timeout, cwd=None, env=None):
+    r = safe.run(argv, timeout=timeout, max_output=OUTPUT_MAX, cwd=cwd, env=env)
+    safe.write_file(LOG, (LOG.read_bytes() if LOG.exists() else b"") + b"\n$ " + " ".join(argv).encode() + b"\n"
+                    + r.stdout + r.stderr, mode=0o600)
+    return r
+
+
+def fetch():
+    if not (SOURCE / ".git").is_dir():
+        say(f"Fetching TDLib {TDLIB_VERSION}…")
+        r = run_logged(["git", "clone", "--filter=blob:none", "--no-checkout", TDLIB_REPO, str(SOURCE)], GIT_TIMEOUT)
+        if not r.ok:
+            return False
+    head = safe.run(["git", "-C", str(SOURCE), "rev-parse", "HEAD"], timeout=30, max_output=4096)
+    if head.ok and head.text().strip() == TDLIB_COMMIT:
+        return True
+    r = run_logged(["git", "-C", str(SOURCE), "fetch", "--depth", "1", "origin", TDLIB_COMMIT], GIT_TIMEOUT)
+    if not r.ok:
+        r = run_logged(["git", "-C", str(SOURCE), "fetch", "origin"], GIT_TIMEOUT)
+    if not r.ok:
+        return False
+    return run_logged(["git", "-C", str(SOURCE), "checkout", "--quiet", TDLIB_COMMIT], GIT_TIMEOUT).ok
+
+
+def build(compiler):
+    safe.ensure_dir(BUILD, 0o700)
+    c_compiler = "clang" if compiler == "clang++" else "gcc"
+    env = {"CC": str(safe.tool(c_compiler)), "CXX": str(safe.tool(compiler))}
+    generator = ["-G", "Ninja"] if safe.has_tool("ninja") else []
+    say("Configuring…")
+    r = run_logged(["cmake", *generator, "-DCMAKE_BUILD_TYPE=Release", "-DTD_ENABLE_LTO=OFF", str(SOURCE)],
+                   CONFIGURE_TIMEOUT, cwd=str(BUILD), env=env)
+    if not r.ok:
+        return None
+    jobs = memory_jobs()
+    say(f"Building (about 10–30 minutes, {jobs} parallel jobs)…")
+    r = run_logged(["cmake", "--build", ".", "--target", "tdjson", "--parallel", str(jobs)],
+                   BUILD_TIMEOUT, cwd=str(BUILD), env=env)
+    if not r.ok:
+        return None
+    candidates = sorted(p for p in BUILD.glob("libtdjson.so*") if p.is_file() and not p.is_symlink())
+    return candidates[-1] if candidates else None
+
+
+def install(built):
+    safe.ensure_dir(td.LIB.parent, 0o700)
+    os.chmod(td.DATA, 0o700)
+    safe.write_file(td.LIB, built.read_bytes(), mode=0o644)
+    return verify()
+
+
+def verify():
+    try:
+        client = td.TdClient(td.library_path())
+    except td.TdUnavailable as e:
+        say(f"Not usable: {e}")
+        return False
+    version = client.execute({"@type": "getOption", "name": "version"}) or {}
+    say(f"TDLib {version.get('value', '?')} is ready at {td.LIB}")
+    return True
+
+
+def main(argv):
+    if argv[1:] == ["--check"]:
+        return 0 if verify() else 1
+    if argv[1:]:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    missing, compiler = check_tools()
+    if missing:
+        say("Missing build tools: " + ", ".join(missing))
+        say("On Arch: sudo pacman -S --needed cmake gperf clang openssl zlib git")
+        return 1
+    safe.ensure_dir(CACHE, 0o700)
+    if not fetch():
+        say(f"Could not fetch TDLib; see {LOG}")
+        return 1
+    built = build(compiler)
+    if built is None:
+        say(f"The build failed; see {LOG}")
+        return 1
+    return 0 if install(built) else 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except (safe.UnsafeError, OSError) as e:
+        print(f"omagram-build-tdlib: {e}", file=sys.stderr)
+        sys.exit(1)
