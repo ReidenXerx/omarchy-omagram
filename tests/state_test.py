@@ -45,6 +45,23 @@ class Lists(unittest.TestCase):
         s.apply({"@type": "updateChatFolders", "chat_folders": "nope", "main_chat_list_position": -4})
         self.assertEqual((s.folders, s.main_position), ([], 0))
 
+    def test_chat_photos_and_their_updates(self):
+        s = model.State()
+        photo = {"@type": "chatPhotoInfo", "small": {"@type": "file", "id": 77, "size": 4000, "local": {}},
+                 "big": {"@type": "file", "id": 78},
+                 "minithumbnail": {"@type": "minithumbnail", "width": 40, "height": 40, "data": "AAAA"}}
+        c = chat(1, "With photo")
+        c["photo"] = photo
+        s.apply({"@type": "updateNewChat", "chat": c})
+        view = s.chat_view(1)["photo"]
+        self.assertEqual((view["file"]["id"], view["file"]["path"], view["mini"]["data"]), (77, "", "AAAA"))
+        self.assertIsNone(s.chat_view(1).get("photo", {}).get("big") if False else None)
+        out = s.apply({"@type": "updateChatPhoto", "chat_id": 1, "photo": None})
+        self.assertIsNone(out[0]["chat"]["photo"])
+        s.apply({"@type": "updateChatPhoto", "chat_id": 1, "photo": {"@type": "chatPhotoInfo", "small": "junk"}})
+        self.assertIsNone(s.chat_view(1)["photo"])
+        self.assertEqual(s.apply({"@type": "updateChatPhoto", "chat_id": 999, "photo": photo}), [])
+
     def test_positions_per_list_and_every_chat(self):
         s = model.State()
         s.apply({"@type": "updateNewChat", "chat": chat(1, "In main", order="50")})

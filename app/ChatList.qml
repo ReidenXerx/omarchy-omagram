@@ -323,6 +323,8 @@ FocusScope {
       boundsBehavior: Flickable.StopAtBounds
       highlightFollowsCurrentItem: false
 
+      WheelScroll {}
+
       Keys.onPressed: function (event) {
         var key = event.key
         var shift = event.modifiers & Qt.ShiftModifier
@@ -404,20 +406,12 @@ FocusScope {
             anchors.rightMargin: Style.space(14)
             spacing: Style.space(12)
 
-            Rectangle {
-              Layout.preferredWidth: Style.space(44)
-              Layout.preferredHeight: Style.space(44)
-              radius: width / 2
-              color: Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.22)
-
-              Text {
-                anchors.centerIn: parent
-                text: Model.initials(row.chat.title)
-                color: app.accent
-                font.family: app.fontFamily
-                font.pixelSize: Style.font.body
-                font.bold: true
-              }
+            Avatar {
+              app: root.app
+              chat: row.chat
+              size: Style.space(44)
+              Layout.preferredWidth: size
+              Layout.preferredHeight: size
             }
 
             ColumnLayout {

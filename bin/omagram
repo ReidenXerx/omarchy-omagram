@@ -38,6 +38,11 @@ APP_ROOT = RUN / "app"
 APP_ID = "omagram"
 OMARCHY_DEFAULT = "/usr/share/omarchy"
 SERVICE_WAIT = 10.0
+# Video decoding on the integrated GPU first. Qt's FFmpeg backend otherwise probes CUDA -- for
+# encoders too, which Omagram never uses -- and that wakes a sleeping NVIDIA card on a hybrid
+# laptop and keeps it powered while anything plays. CUDA stays as the decoding fallback for
+# machines without VA-API. A value set in your environment wins.
+MEDIA_ENV = {"QT_FFMPEG_DECODING_HW_DEVICE_TYPES": "vaapi,cuda", "QT_FFMPEG_ENCODING_HW_DEVICE_TYPES": "vaapi"}
 SHELL_QML = 'import Quickshell\nimport "App" as App\n\nShellRoot {\n  App.Main {}\n}\n'
 
 
@@ -166,8 +171,10 @@ def main(argv):
         return 0
     prepare_root()
     quickshell = str(safe.tool("quickshell"))
-    os.execve(quickshell, ["quickshell", "--no-duplicate", "--path", str(APP_ROOT)],
-              child_env({"QS_APP_ID": APP_ID}))
+    env = {"QS_APP_ID": APP_ID}
+    for name, value in MEDIA_ENV.items():
+        env[name] = os.environ.get(name, value)
+    os.execve(quickshell, ["quickshell", "--no-duplicate", "--path", str(APP_ROOT)], child_env(env))
 
 
 if __name__ == "__main__":

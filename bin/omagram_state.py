@@ -464,6 +464,7 @@ class State:
         return {
             "id": chat["id"],
             "title": chat["title"],
+            "photo": chat["photo"],
             "kind": chat["kind"],
             "userId": chat["userId"],
             "unread": chat["unread"],
@@ -496,6 +497,12 @@ class State:
     def folders_event(self):
         return {"event": "folders", "folders": self.folders, "mainPosition": self.main_position}
 
+    def _photo(self, value):
+        """A chat's small photo (a user's, for a private chat) and its inline thumbnail."""
+        p = _obj(value, "chatPhotoInfo")
+        small = file_view(p.get("small"), self.files_root) if p else None
+        return {"file": small, "mini": minithumbnail(p.get("minithumbnail"))} if small else None
+
     def _new_chat(self, value):
         c = _obj(value, "chat")
         cid = _int(c.get("id"))
@@ -518,6 +525,7 @@ class State:
             "lastReadInbox": _int(c.get("last_read_inbox_message_id")),
             "lastReadOutbox": _int(c.get("last_read_outbox_message_id")),
             "lastMessage": None,
+            "photo": self._photo(c.get("photo")),
         }
         self.chats[cid] = chat
         for position in _list(c.get("positions"), 16):
@@ -547,6 +555,13 @@ class State:
         if not chat:
             return []
         chat["title"] = _str(u.get("title"), TITLE_MAX)
+        return self._chat_event(chat["id"])
+
+    def _on_updateChatPhoto(self, u):
+        chat = self._chat(_int(u.get("chat_id")))
+        if not chat:
+            return []
+        chat["photo"] = self._photo(u.get("photo"))
         return self._chat_event(chat["id"])
 
     def _on_updateChatLastMessage(self, u):

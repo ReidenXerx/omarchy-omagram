@@ -249,9 +249,19 @@ FocusScope {
       Layout.preferredHeight: Style.space(56)
       color: "transparent"
 
-      Column {
+      Avatar {
+        id: headerAvatar
         anchors.left: parent.left
         anchors.leftMargin: Style.space(18)
+        anchors.verticalCenter: parent.verticalCenter
+        app: root.app
+        chat: root.chat
+        size: Style.space(38)
+      }
+
+      Column {
+        anchors.left: headerAvatar.right
+        anchors.leftMargin: Style.space(12)
         anchors.verticalCenter: parent.verticalCenter
         spacing: Style.space(2)
 
@@ -285,6 +295,13 @@ FocusScope {
       boundsBehavior: Flickable.StopAtBounds
       topMargin: Style.space(12)
       bottomMargin: Style.space(12)
+
+      WheelScroll {
+        onScrolled: {
+          root.stickToBottom = messageList.atYEnd
+          if (messageList.contentY <= messageList.originY + Style.space(200) && messageList.count > 0) root.loadOlder()
+        }
+      }
 
       onMovementEnded: root.stickToBottom = atYEnd
       onAtYBeginningChanged: if (atYBeginning && count > 0 && moving) root.loadOlder()
@@ -456,7 +473,10 @@ FocusScope {
             }
           }
 
+          // Under the bubble's content: media inside it (play buttons, photos) takes its own
+          // clicks, and a click anywhere else still selects the message.
           MouseArea {
+            z: -1
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
             onDoubleClicked: root.startReply(row.modelData)

@@ -85,7 +85,7 @@ Item {
 
   MouseArea {
     anchors.fill: parent
-    enabled: view.interactive && view.kind !== "voice" && view.kind !== "file" && view.kind !== "audio"
+    enabled: view.interactive && view.kind !== "file" && view.kind !== "audio"
     cursorShape: Qt.PointingHandCursor
     onClicked: view.activate()
   }

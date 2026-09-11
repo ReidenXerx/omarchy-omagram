@@ -125,6 +125,8 @@ FocusScope {
 
     GridView {
       id: grid
+
+      WheelScroll {}
       Layout.fillWidth: true
       Layout.fillHeight: true
       clip: true

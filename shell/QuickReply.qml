@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
+import "../app"
 import "../app/Model.js" as Model
 
 // Quick switch and reply, summoned with a key: find a chat by typing, read its latest
@@ -322,6 +323,8 @@ Item {
           // ------------------------------------------------ chats
           ListView {
             id: chatList
+
+            WheelScroll {}
             Layout.preferredWidth: Math.round(card.width * 0.36)
             Layout.fillHeight: true
             clip: true
@@ -416,6 +419,8 @@ Item {
 
             ListView {
               id: messageList
+
+              WheelScroll {}
               Layout.fillWidth: true
               Layout.fillHeight: true
               clip: true

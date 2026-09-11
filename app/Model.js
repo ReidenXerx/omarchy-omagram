@@ -286,10 +286,11 @@ function fitSize(width, height, maxWidth, maxHeight) {
 
 // What downloads by itself when a message comes into view: stickers and voice messages
 // always; photos, GIFs and video messages up to 10 MB. Videos, files and audio wait for you.
+// Only small media downloads by itself: anyone who can message you picks what lands on disk,
+// and a "voice message" or sticker can claim to be any size.
 function autoDownload(kind, size) {
-  if (kind === "sticker" || kind === "voice") return true
-  if (kind === "photo" || kind === "gif" || kind === "videoNote") return (Number(size) || 0) <= AUTO_DOWNLOAD_MAX
-  return false
+  if (kind !== "sticker" && kind !== "voice" && kind !== "photo" && kind !== "gif" && kind !== "videoNote") return false
+  return (Number(size) || 0) <= AUTO_DOWNLOAD_MAX
 }
 
 function progress(file) {

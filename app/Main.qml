@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Hyprland
+import Quickshell.Wayland
 import qs.Commons
 import "Model.js" as Model
 
@@ -304,6 +305,20 @@ Scope {
       }
       onLoaded: if (item) item.forceActiveFocus()
     }
+
+  }
+
+  // A photo opens over the whole screen the window is on, above everything, with the keyboard.
+  PanelWindow {
+    id: photoWindow
+    visible: omagram.viewerMessageId > 0
+    screen: window.screen
+    anchors { top: true; bottom: true; left: true; right: true }
+    color: "transparent"
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "omagram-photo"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: visible ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
     PhotoViewer {
       anchors.fill: parent
