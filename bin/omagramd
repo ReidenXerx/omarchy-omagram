@@ -143,7 +143,7 @@ class Daemon:
     def __init__(self, open_client=None, keyring=None):
         self.open_client = open_client or td.open_client
         self.keyring = keyring or td
-        self.state = model.State(str(td.FILES))
+        self.state = model.State(td.MEDIA_ROOTS)
         self.td = None
         self.auth = {"state": "starting"}
         self.clients = {}
@@ -326,7 +326,7 @@ class Daemon:
                 self.closed.set()
                 return
             # Logged out or the session was terminated elsewhere: start over, signed out.
-            self.state = model.State(str(td.FILES))
+            self.state = model.State(td.MEDIA_ROOTS)
             self.set_auth({"state": "starting"})
             self.td.new_client()
             self.td_send({"@type": "getOption", "name": "version"})

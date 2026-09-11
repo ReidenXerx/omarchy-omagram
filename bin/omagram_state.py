@@ -170,17 +170,20 @@ THUMBNAIL_FORMATS = {"thumbnailFormatJpeg": "jpeg", "thumbnailFormatGif": "gif",
 
 
 def local_path(value, files_root):
-    """A downloaded file's path, only if it is an absolute path inside TDLib's files
-    directory: the UI loads it as a file:// URL and must never be pointed elsewhere."""
-    if not files_root or not isinstance(value, str) or not value.startswith("/") or len(value) > 4096:
+    """A downloaded file's path, only if it is an absolute path inside one of the media
+    directories TDLib downloads into: the UI loads it as a file:// URL and must never be
+    pointed anywhere else. `files_root` is one directory or a tuple of them (TDLib keeps
+    stickers and thumbnails beside its database, everything else in its files directory)."""
+    roots = (files_root,) if isinstance(files_root, str) else tuple(files_root or ())
+    roots = tuple(r.rstrip("/") + "/" for r in roots if isinstance(r, str) and r.startswith("/"))
+    if not roots or not isinstance(value, str) or not value.startswith("/") or len(value) > 4096:
         return ""
     if any(ord(ch) < 32 or ch == "\x7f" for ch in value):
         return ""
-    root = files_root.rstrip("/") + "/"
     parts = value.split("/")
     if ".." in parts or "." in parts or "" in parts[1:]:
         return ""
-    return value if value.startswith(root) else ""
+    return value if value.startswith(roots) else ""
 
 
 def file_view(value, files_root):

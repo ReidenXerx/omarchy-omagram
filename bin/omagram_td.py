@@ -29,6 +29,10 @@ DATA = pathlib.Path(safe.home_dir()) / ".local/share/omagram"
 LIB = DATA / "lib" / "libtdjson.so"
 DATABASE = DATA / "database"
 FILES = DATA / "files"
+# Where TDLib puts downloaded media. Stickers, thumbnails, profile photos and wallpapers
+# live beside its database; everything else under FILES. Only paths under these are ever
+# shown to the UI -- never the database directory itself (db.sqlite, td.binlog).
+MEDIA_ROOTS = (str(FILES),) + tuple(str(DATABASE / name) for name in ("stickers", "thumbnails", "profile_photos", "wallpapers"))
 
 KEYRING_SERVICE = "omagram"
 KEYRING_TIMEOUT = 60        # an unlock prompt from the keyring daemon may be on screen

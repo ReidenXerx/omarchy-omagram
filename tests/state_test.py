@@ -200,6 +200,18 @@ class Media(unittest.TestCase):
         self.assertEqual(model.file_view(tdfile(1, inside, done=True), "")["path"], "")
         self.assertIsNone(model.file_view({"@type": "file", "id": 0}, ROOT_FILES))
 
+    def test_stickers_beside_the_database_are_shown_but_the_database_never_is(self):
+        data = "/home/u/.local/share/omagram"
+        roots = (data + "/files", data + "/database/stickers", data + "/database/thumbnails")
+        for ok in (data + "/database/stickers/1137162165791228153.tgs", data + "/database/thumbnails/5.jpg",
+                   data + "/files/photos/1.jpg"):
+            self.assertEqual(model.local_path(ok, roots), ok)
+        for bad in (data + "/database/td.binlog", data + "/database/db.sqlite", data + "/database/temp/x",
+                    data + "/database/stickers/../td.binlog", data + "/database/stickersx/a.webp",
+                    data + "/database/stickers", "/etc/passwd"):
+            self.assertEqual(model.local_path(bad, roots), "", bad)
+        self.assertEqual(model.local_path(data + "/files/a.jpg", ("relative/root", 5, None)), "")
+
     def test_stickers_voice_video_notes_files(self):
         for fmt, name in (("stickerFormatTgs", "tgs"), ("stickerFormatWebm", "webm"), ("stickerFormatWebp", "webp"), ("x", "unknown")):
             c = model.content({"@type": "messageSticker", "sticker": {"@type": "sticker", "width": 512, "height": 512,
