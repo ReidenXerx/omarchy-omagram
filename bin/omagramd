@@ -60,6 +60,12 @@ TGS_MAX = 1024 * 1024
 LOTTIE_MAX = 16 * 1024 * 1024
 LOTTIE_LIMITS = {"max_depth": 64, "max_items": 2_000_000, "max_string": 1024 * 1024}
 FILE_ID_MAX = 2 ** 31 - 1
+DOCUMENT_MAX = 2 * 1024 ** 3                        # Telegram's file limit without Premium
+PHOTO_MAX = 10 * 1024 ** 2                          # larger images go as documents
+PHOTO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
+CAPTION_MAX = 1024
+STICKERS_MAX = 300
+SET_ID = re.compile(r"-?[0-9]{1,20}")
 
 PHONE = re.compile(r"\+?[0-9][0-9 ()-]{4,30}")
 CODE = re.compile(r"[0-9]{3,10}")
@@ -102,6 +108,31 @@ def lottie_json(path):
         except (safe.UnsafeError, OSError):
             return ""
     return str(target)
+
+
+def local_upload(path):
+    """A file you chose to send: an absolute path to a non-empty regular file you can read,
+    within Telegram's size limit. Omagram's own database directory is never sent.
+    Returns (real path, size)."""
+    if not isinstance(path, str) or not path.startswith("/") or len(path) > 4096 or any(ord(c) < 32 for c in path):
+        raise BadRequest("the file must be given as an absolute path")
+    try:
+        real = os.path.realpath(path)
+        st = os.stat(real)
+    except OSError:
+        raise BadRequest("that file does not exist") from None
+    if not stat.S_ISREG(st.st_mode):
+        raise BadRequest("only regular files can be sent")
+    database = str(td.DATABASE) + "/"
+    if real == str(td.DATABASE) or real.startswith(database):
+        raise BadRequest("Omagram's own database is not sent")
+    if not os.access(real, os.R_OK):
+        raise BadRequest("that file is not readable")
+    if st.st_size == 0:
+        raise BadRequest("that file is empty")
+    if st.st_size > DOCUMENT_MAX:
+        raise BadRequest("Telegram accepts files up to 2 GB")
+    return real, st.st_size
 
 
 def arg_int(args, name, low=None, high=None, default=None):
@@ -564,19 +595,89 @@ class Daemon:
                       "message_ids": arg_ids(args, "messageIds"),
                       "source": {"@type": "messageSourceChatHistory"}, "force_read": True}, client, rid)
 
+    def reply_to(self, args):
+        if args.get("replyToMessageId") is None:
+            return None
+        return {"@type": "inputMessageReplyToMessage", "message_id": arg_int(args, "replyToMessageId", 1),
+                "quote": None, "checklist_task_id": 0, "poll_option_id": ""}
+
+    def send_content(self, client, rid, chat_id, content, args):
+        self.td_send({"@type": "sendMessage", "chat_id": chat_id, "topic_id": None, "reply_to": self.reply_to(args),
+                      "options": None, "reply_markup": None, "input_message_content": content},
+                     client, rid, self.state.message)
+
     def cmd_message_send(self, client, rid, args):
         chat_id = arg_int(args, "chatId")
         text = arg_str(args, "text", TEXT_MAX)
-        reply = None
-        if args.get("replyToMessageId") is not None:
-            reply = {"@type": "inputMessageReplyToMessage", "message_id": arg_int(args, "replyToMessageId", 1),
-                     "quote": None, "checklist_task_id": 0, "poll_option_id": ""}
-        self.td_send({"@type": "sendMessage", "chat_id": chat_id, "topic_id": None, "reply_to": reply,
-                      "options": None, "reply_markup": None,
-                      "input_message_content": {"@type": "inputMessageText",
-                                                "text": {"@type": "formattedText", "text": text, "entities": []},
-                                                "link_preview_options": None, "clear_draft": True}},
-                     client, rid, self.state.message)
+        self.send_content(client, rid, chat_id, {"@type": "inputMessageText",
+                                                 "text": {"@type": "formattedText", "text": text, "entities": []},
+                                                 "link_preview_options": None, "clear_draft": True}, args)
+
+    def cmd_message_send_file(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        path, size = local_upload(args.get("path"))
+        caption = args.get("caption", "")
+        if not isinstance(caption, str) or len(caption) > CAPTION_MAX:
+            raise BadRequest(f"a caption is text of at most {CAPTION_MAX} characters")
+        as_photo = args.get("asPhoto", True) is True and path.lower().endswith(PHOTO_EXTENSIONS) and size <= PHOTO_MAX
+        text = {"@type": "formattedText", "text": caption, "entities": []}
+        upload = {"@type": "inputFileLocal", "path": path}
+        if as_photo:
+            content = {"@type": "inputMessagePhoto", "caption": text, "show_caption_above_media": False,
+                       "self_destruct_type": None, "has_spoiler": False,
+                       "photo": {"@type": "inputPhoto", "photo": upload, "thumbnail": None, "video": None,
+                                 "added_sticker_file_ids": [], "width": 0, "height": 0}}
+        else:
+            content = {"@type": "inputMessageDocument", "caption": text,
+                       "document": {"@type": "inputDocument", "document": upload, "thumbnail": None,
+                                    "disable_content_type_detection": False}}
+        self.send_content(client, rid, chat_id, content, args)
+
+    def cmd_message_send_sticker(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        emoji = args.get("emoji", "")
+        if not isinstance(emoji, str) or len(emoji) > 16:
+            raise BadRequest("emoji is a short text")
+        content = {"@type": "inputMessageSticker", "emoji": emoji,
+                   "sticker": {"@type": "inputSticker", "thumbnail": None,
+                               "sticker": {"@type": "inputFileId", "id": arg_int(args, "fileId", 1, FILE_ID_MAX)},
+                               "width": arg_int(args, "width", 0, 10000, 0), "height": arg_int(args, "height", 0, 10000, 0)}}
+        self.send_content(client, rid, chat_id, content, args)
+
+    def sticker_views(self, stickers):
+        views = []
+        for raw in model._list(stickers, STICKERS_MAX):
+            view = model.media_for("sticker", {"sticker": raw}, self.state.files_root)
+            if view is not None:
+                views.append(view)
+        return views
+
+    def cmd_stickers_recent(self, client, rid, args):
+        self.td_send({"@type": "getRecentStickers", "is_attached": False}, client, rid,
+                     lambda e: {"stickers": self.sticker_views(e.get("stickers"))})
+
+    def cmd_stickers_sets(self, client, rid, args):
+        def sets(event):
+            out = []
+            for raw in model._list(event.get("sets"), 200):
+                info = model._obj(raw, "stickerSetInfo")
+                if not info:
+                    continue
+                covers = self.sticker_views(info.get("covers"))
+                # Set ids are int64: sent as text so JavaScript does not round them.
+                out.append({"id": str(model._int(info.get("id"))), "title": model._str(info.get("title"), 128),
+                            "size": max(0, model._int(info.get("size"))), "cover": covers[0] if covers else None})
+            return {"sets": out}
+        self.td_send({"@type": "getInstalledStickerSets", "sticker_type": {"@type": "stickerTypeRegular"}}, client, rid, sets)
+
+    def cmd_stickers_set(self, client, rid, args):
+        set_id = args.get("setId")
+        if not isinstance(set_id, str) or not SET_ID.fullmatch(set_id):
+            raise BadRequest("setId is a sticker set id, as text")
+
+        def stickers(event):
+            return {"id": set_id, "title": model._str(event.get("title"), 128), "stickers": self.sticker_views(event.get("stickers"))}
+        self.td_send({"@type": "getStickerSet", "set_id": int(set_id)}, client, rid, stickers)
 
     def cmd_message_edit(self, client, rid, args):
         self.td_send({"@type": "editMessageText", "chat_id": arg_int(args, "chatId"),
@@ -631,6 +732,11 @@ COMMANDS = {
     "message.edit": ("cmd_message_edit", True),
     "message.delete": ("cmd_message_delete", True),
     "file.download": ("cmd_file_download", True),
+    "message.sendFile": ("cmd_message_send_file", True),
+    "message.sendSticker": ("cmd_message_send_sticker", True),
+    "stickers.recent": ("cmd_stickers_recent", True),
+    "stickers.sets": ("cmd_stickers_sets", True),
+    "stickers.set": ("cmd_stickers_set", True),
     "sticker.lottie": ("cmd_sticker_lottie", True),
 }
 

@@ -138,8 +138,32 @@ Scope {
     }
   }
 
+  function request(cmd, args, callback) {
+    service.request(cmd, args, callback)
+  }
+
+  function sendFile(chatId, path, asPhoto, replyToId, callback) {
+    var args = { chatId: chatId, path: path, asPhoto: asPhoto !== false }
+    if (replyToId) args.replyToMessageId = replyToId
+    service.request("message.sendFile", args, callback || function () {})
+  }
+
+  function sendSticker(chatId, sticker, replyToId, callback) {
+    var args = { chatId: chatId, fileId: sticker.file.id, width: sticker.width || 0, height: sticker.height || 0,
+                 emoji: sticker.emoji || "" }
+    if (replyToId) args.replyToMessageId = replyToId
+    service.request("message.sendSticker", args, callback || function () {})
+  }
+
+  property real viewerMessageId: 0
+
+  function openPhoto(message) {
+    if (message && message.id) omagram.viewerMessageId = message.id
+  }
+
   function openChatById(chatId, force) {
     if (!chatId || (chatId === omagram.openChatId && !force)) return
+    omagram.viewerMessageId = 0
     if (omagram.openChatId && omagram.openChatId !== chatId) service.request("chat.close", { chatId: omagram.openChatId })
     omagram.openChatId = chatId
     service.request("chat.open", { chatId: chatId })
@@ -185,6 +209,7 @@ Scope {
     onVisibleChanged: if (!visible) Qt.quit()
 
     Loader {
+      id: screen
       anchors.fill: parent
       focus: true
       sourceComponent: {
@@ -195,6 +220,17 @@ Scope {
         return statusView
       }
       onLoaded: if (item) item.forceActiveFocus()
+    }
+
+    PhotoViewer {
+      anchors.fill: parent
+      app: omagram
+      messages: omagram.openChat ? omagram.messagesFor(omagram.openChatId) : []
+      messageId: omagram.viewerMessageId
+      onClosed: {
+        omagram.viewerMessageId = 0
+        if (screen.item && screen.item.focusMessages) screen.item.focusMessages()
+      }
     }
   }
 
@@ -253,6 +289,7 @@ Scope {
       id: mainScope
 
       function focusComposer() { chatView.focusComposer() }
+      function focusMessages() { chatView.focusMessages() }
 
       Shortcut { sequences: ["Ctrl+K", "Ctrl+F"]; onActivated: chatList.focusSearch() }
       Shortcut { sequence: "Alt+Up"; onActivated: chatList.step(-1) }

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Dialogs
 import qs.Commons
 import "Model.js" as Model
 
@@ -7,6 +8,8 @@ import "Model.js" as Model
 //
 // Composer: Enter sends, Shift+Enter adds a line, Esc cancels a reply or edit (or moves to
 // the messages), ↑ in an empty composer edits your last message, Tab moves to the messages.
+// Anywhere in the chat: Ctrl+O attaches photos or files, Ctrl+Shift+O sends files uncompressed,
+// Ctrl+S opens stickers; files dropped on the chat are sent.
 // Messages: ↑/↓ or j/k select, Enter or o downloads or opens the selected media, Space plays or
 // pauses it, r replies, e edits yours, y copies, d or Delete asks to delete (press again to
 // confirm), Esc or i returns to the composer, Tab returns to the chat list.
@@ -25,6 +28,7 @@ FocusScope {
   property real confirmDeleteId: 0
   property string notice: ""
   property bool stickToBottom: true
+  property bool stickersOpen: false
 
   readonly property var replyTo: root.replyToId ? Model.findMessage(root.messages, root.replyToId) : null
   readonly property var editing: root.editingId ? Model.findMessage(root.messages, root.editingId) : null
@@ -49,7 +53,86 @@ FocusScope {
     root.confirmDeleteId = 0
     root.notice = ""
     root.stickToBottom = true
+    root.stickersOpen = false
     composer.text = ""
+  }
+
+  function attach(asPhoto) {
+    if (!root.chat) return
+    attachDialog.asPhoto = asPhoto
+    attachDialog.open()
+  }
+
+  function urlToPath(url) {
+    var s = String(url)
+    return s.indexOf("file://") === 0 ? decodeURIComponent(s.slice(7)) : ""
+  }
+
+  function sendPaths(paths, asPhoto) {
+    if (!root.chat) return
+    // Ten at a time at most: a stray drop of a whole folder should not become a flood.
+    for (var i = 0; i < paths.length && i < 10; i++) {
+      app.sendFile(root.chat.id, paths[i], asPhoto, i === 0 ? root.replyToId : 0, function (answer) {
+        if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
+      })
+    }
+    if (paths.length > 10) root.flash("Sent the first 10 files")
+    root.replyToId = 0
+    root.stickToBottom = true
+  }
+
+  function toggleStickers() {
+    if (!root.chat) return
+    root.stickersOpen = !root.stickersOpen
+    if (root.stickersOpen) Qt.callLater(function () { stickerPicker.open() })
+    else root.focusComposer()
+  }
+
+  Shortcut { sequence: "Ctrl+O"; enabled: !!root.chat; onActivated: root.attach(true) }
+  Shortcut { sequence: "Ctrl+Shift+O"; enabled: !!root.chat; onActivated: root.attach(false) }
+  Shortcut { sequence: "Ctrl+S"; enabled: !!root.chat; onActivated: root.toggleStickers() }
+
+  FileDialog {
+    id: attachDialog
+    property bool asPhoto: true
+    title: asPhoto ? "Send photos or files" : "Send as files"
+    fileMode: FileDialog.OpenFiles
+    onAccepted: {
+      var paths = []
+      for (var i = 0; i < selectedFiles.length; i++) {
+        var path = root.urlToPath(selectedFiles[i])
+        if (path) paths.push(path)
+      }
+      root.sendPaths(paths, asPhoto)
+      root.focusComposer()
+    }
+    onRejected: root.focusComposer()
+  }
+
+  DropArea {
+    anchors.fill: parent
+    enabled: !!root.chat
+    onDropped: function (drop) {
+      if (!drop.hasUrls) return
+      root.sendPaths(drop.urls.map(root.urlToPath).filter(function (p) { return p !== "" }), true)
+      drop.accept()
+    }
+
+    Rectangle {
+      anchors.fill: parent
+      visible: parent.containsDrag
+      color: Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.12)
+      border.width: Math.max(1, Style.space(2))
+      border.color: app.accent
+      z: 10
+      Text {
+        anchors.centerIn: parent
+        text: "Drop to send"
+        color: app.foreground
+        font.family: app.fontFamily
+        font.pixelSize: Style.font.title
+      }
+    }
   }
 
   onChatChanged: {
@@ -396,6 +479,29 @@ FocusScope {
           if (root.replyTo) return "Replying to " + (root.replyTo.outgoing ? "yourself" : (root.replyTo.senderName || "message")) + ": " + Model.previewOf(root.replyTo) + "   Esc to cancel"
           return ""
         }
+      }
+    }
+
+    // ------------------------------------------------ stickers
+    StickerPicker {
+      id: stickerPicker
+      Layout.fillWidth: true
+      Layout.preferredHeight: root.stickersOpen ? Style.space(320) : 0
+      visible: root.stickersOpen
+      app: root.app
+      onPicked: function (sticker) {
+        if (!root.chat) return
+        app.sendSticker(root.chat.id, sticker, root.replyToId, function (answer) {
+          if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
+        })
+        root.replyToId = 0
+        root.stickersOpen = false
+        root.stickToBottom = true
+        root.focusComposer()
+      }
+      onClosed: {
+        root.stickersOpen = false
+        root.focusComposer()
       }
     }
 

@@ -17,6 +17,11 @@ Item {
   property var app
   property var message
   property real maxWidth: 360
+  // The sticker picker shows stickers small and still (animated ones as their thumbnail)
+  // and handles clicks itself.
+  property real stickerSize: Style.space(180)
+  property bool still: false
+  property bool interactive: true
 
   readonly property var content: message ? message.content : null
   readonly property string kind: content ? content.kind : ""
@@ -29,12 +34,14 @@ Item {
   readonly property bool ready: url !== ""
   readonly property bool downloading: !!file && file.active
   readonly property real fraction: Model.progress(file)
+  readonly property var thumbFile: info.thumb && info.thumb.file ? app.fileState(info.thumb.file) : null
+  readonly property string thumbUrl: thumbFile ? Model.fileUrl(thumbFile.path) : ""
 
   readonly property var box: {
     if (!media) return { width: 0, height: 0 }
     var wide = Math.min(maxWidth, Style.space(360))
     if (kind === "photo") return Model.fitSize(media.width, media.height, wide, Style.space(360))
-    if (kind === "sticker") return Model.fitSize(media.width || 512, media.height || 512, Style.space(180), Style.space(180))
+    if (kind === "sticker") return Model.fitSize(media.width || 512, media.height || 512, stickerSize, stickerSize)
     if (kind === "gif" || kind === "video") return Model.fitSize(media.width, media.height, wide, Style.space(320))
     if (kind === "videoNote") return { width: Style.space(200), height: Style.space(200) }
     return { width: Math.min(maxWidth, Style.space(300)), height: Style.space(48) }
@@ -51,6 +58,7 @@ Item {
   function activate() {
     if (!media) return
     if (!ready) { download(32); return }
+    if (kind === "photo") { app.openPhoto(message); return }
     togglePlay()
   }
 
@@ -59,7 +67,12 @@ Item {
   }
 
   Component.onCompleted: {
-    if (media && Model.autoDownload(kind, file ? file.size : 0)) download(kind === "sticker" ? 20 : 12)
+    if (!media) return
+    if (still && kind === "sticker" && info.format !== "webp") {
+      if (thumbFile && !thumbUrl && !thumbFile.active) app.download(thumbFile.id, 8)
+      return
+    }
+    if (Model.autoDownload(kind, file ? file.size : 0)) download(kind === "sticker" ? 20 : 12)
   }
 
   Loader {
@@ -72,7 +85,7 @@ Item {
 
   MouseArea {
     anchors.fill: parent
-    enabled: view.kind !== "voice" && view.kind !== "file" && view.kind !== "audio"
+    enabled: view.interactive && view.kind !== "voice" && view.kind !== "file" && view.kind !== "audio"
     cursorShape: Qt.PointingHandCursor
     onClicked: view.activate()
   }
@@ -148,8 +161,10 @@ Item {
       readonly property string format: view.info.format
 
       function fetch() {
-        if (format === "tgs" && view.ready && lottie === "" && view.file && view.app)
-          view.app.lottiePath(view.file.id, function (path) { sticker.lottie = path })
+        if (format === "tgs" && !view.still && view.ready && lottie === "" && view.file && view.app)
+          // The answer is asynchronous: by the time it comes the message may have scrolled
+          // away and this piece been destroyed.
+          view.app.lottiePath(view.file.id, function (path) { if (sticker) sticker.lottie = path })
       }
       Component.onCompleted: fetch()
       Connections {
@@ -159,8 +174,8 @@ Item {
 
       Text {
         anchors.centerIn: parent
-        visible: !(format === "webp" && still.status === Image.Ready) && !(format === "tgs" && sticker.lottie !== "")
-                 && !(format === "webm" && view.ready)
+        visible: !(format === "webp" && still.status === Image.Ready) && !(format === "tgs" && sticker.lottie !== "" && !view.still)
+                 && !(format === "webm" && view.ready && !view.still) && !(view.still && stillThumb.status === Image.Ready)
         text: view.info.emoji || "🙂"
         font.pixelSize: Math.round(parent.height * 0.45)
         opacity: 0.35
@@ -175,9 +190,17 @@ Item {
         sourceSize.width: 512
         sourceSize.height: 512
       }
+      Image {
+        id: stillThumb
+        anchors.fill: parent
+        visible: view.still && format !== "webp"
+        source: visible ? view.thumbUrl : ""
+        asynchronous: true
+        fillMode: Image.PreserveAspectFit
+      }
       Loader {
         anchors.fill: parent
-        active: format === "tgs" && sticker.lottie !== ""
+        active: format === "tgs" && sticker.lottie !== "" && !view.still
         sourceComponent: LottieAnimation {
           source: Model.fileUrl(sticker.lottie)
           autoPlay: true
@@ -186,7 +209,7 @@ Item {
       }
       Loader {
         anchors.fill: parent
-        active: format === "webm" && view.ready
+        active: format === "webm" && view.ready && !view.still
         sourceComponent: Video {
           source: view.url
           autoPlay: true

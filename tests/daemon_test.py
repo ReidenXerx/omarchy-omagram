@@ -401,6 +401,98 @@ class MediaCommands(Harness):
         self.assertEqual((event["file"]["id"], event["file"]["path"]), (77, str(self.files / "stickers" / "x.webp")))
 
 
+class Sending(Harness):
+    def setUp(self):
+        super().setUp()
+        self.conn = self.connect()
+        self.sign_in(self.conn)
+        self.uploads = self.root / "uploads"
+        self.uploads.mkdir(mode=0o700)
+
+    def file(self, name, size=1000):
+        path = self.uploads / name
+        with path.open("wb") as f:
+            f.truncate(size)
+        return path
+
+    def sent(self, rid, **args):
+        self.send(self.conn, {"id": rid, "cmd": "message.sendFile", "args": args})
+        query = self.last_query("sendMessage")
+        self.fake.sent.clear()
+        return query
+
+    def test_images_go_as_photos_everything_else_as_documents(self):
+        photo = self.file("cat.JPG", 200_000)
+        q = self.sent(1, chatId=42, path=str(photo), caption="look", replyToMessageId=9)
+        content = q["input_message_content"]
+        self.assertEqual((content["@type"], content["photo"]["photo"], content["caption"]["text"], q["reply_to"]["message_id"]),
+                         ("inputMessagePhoto", {"@type": "inputFileLocal", "path": str(photo)}, "look", 9))
+        big = self.file("huge.png", self.d.PHOTO_MAX + 1)
+        self.assertEqual(self.sent(2, chatId=42, path=str(big))["input_message_content"]["@type"], "inputMessageDocument")
+        pdf = self.file("report.pdf")
+        self.assertEqual(self.sent(3, chatId=42, path=str(pdf))["input_message_content"]["document"]["document"]["path"], str(pdf))
+        self.assertEqual(self.sent(4, chatId=42, path=str(photo), asPhoto=False)["input_message_content"]["@type"], "inputMessageDocument")
+        link = self.uploads / "link.jpg"
+        link.symlink_to(photo)
+        self.assertEqual(self.sent(5, chatId=42, path=str(link))["input_message_content"]["photo"]["photo"]["path"], str(photo))
+
+    def test_what_cannot_be_sent_is_refused_before_tdlib_sees_it(self):
+        empty = self.file("empty.txt", 0)
+        too_big = self.file("disk.img", self.d.DOCUMENT_MAX + 1)
+        database = self.root / "database"
+        database.mkdir(mode=0o700)
+        (database / "td.binlog").write_bytes(b"x")
+        cases = {
+            "relative": "uploads/cat.jpg", "missing": str(self.uploads / "nope.jpg"), "directory": str(self.uploads),
+            "empty": str(empty), "too big": str(too_big), "control characters": str(self.uploads) + "/a\nb",
+            "database": str(database / "td.binlog"), "not text": 5,
+        }
+        with mock.patch.object(self.d.td, "DATABASE", database):
+            for rid, (name, path) in enumerate(cases.items(), start=10):
+                answer = self.request(self.conn, rid, "message.sendFile", chatId=42, path=path)
+                self.assertFalse(answer["ok"], name)
+        self.assertFalse(self.request(self.conn, 30, "message.sendFile", chatId=42, path=str(self.file("a.jpg")),
+                                      caption="x" * 1025)["ok"])
+        self.assertNotIn("sendMessage", self.fake.sent_types())
+
+    def test_stickers_are_sent_by_file_id(self):
+        self.send(self.conn, {"id": 40, "cmd": "message.sendSticker", "args": {"chatId": 42, "fileId": 77, "width": 512, "height": 512, "emoji": "😂"}})
+        content = self.last_query("sendMessage")["input_message_content"]
+        self.assertEqual((content["@type"], content["sticker"]["sticker"], content["sticker"]["width"], content["emoji"]),
+                         ("inputMessageSticker", {"@type": "inputFileId", "id": 77}, 512, "😂"))
+        for args in ({"chatId": 42, "fileId": 0}, {"chatId": 42, "fileId": 5, "emoji": "x" * 40}, {"chatId": 42, "fileId": 5, "width": -1}):
+            self.assertFalse(self.request(self.conn, 41, "message.sendSticker", **args)["ok"], args)
+
+    def sticker(self, fid):
+        return {"@type": "sticker", "id": "1", "set_id": "2", "width": 512, "height": 512, "emoji": "🙂",
+                "format": {"@type": "stickerFormatWebp"},
+                "sticker": {"@type": "file", "id": fid, "size": 100, "local": {"@type": "localFile", "path": "", "is_downloading_completed": False}}}
+
+    def test_recent_stickers_sets_and_a_set(self):
+        self.send(self.conn, {"id": 50, "cmd": "stickers.recent"})
+        q = self.last_query("getRecentStickers")
+        self.td_event({"@type": "stickers", "@extra": q["@extra"], "@client_id": 1, "stickers": [self.sticker(5), "junk", self.sticker(6)]})
+        recent = self.read(self.conn, lambda v: v.get("id") == 50)["result"]["stickers"]
+        self.assertEqual([s["file"]["id"] for s in recent], [5, 6])
+
+        self.send(self.conn, {"id": 51, "cmd": "stickers.sets"})
+        q = self.last_query("getInstalledStickerSets")
+        self.assertEqual(q["sticker_type"], {"@type": "stickerTypeRegular"})
+        self.td_event({"@type": "stickerSets", "@extra": q["@extra"], "@client_id": 1, "sets": [
+            {"@type": "stickerSetInfo", "id": "9223372036854775807", "title": "Pandas", "size": 30, "covers": [self.sticker(7)]}]})
+        sets = self.read(self.conn, lambda v: v.get("id") == 51)["result"]["sets"]
+        self.assertEqual((sets[0]["id"], sets[0]["title"], sets[0]["cover"]["file"]["id"]), ("9223372036854775807", "Pandas", 7))
+
+        self.send(self.conn, {"id": 52, "cmd": "stickers.set", "args": {"setId": "9223372036854775807"}})
+        q = self.last_query("getStickerSet")
+        self.assertEqual(q["set_id"], 9223372036854775807)
+        self.td_event({"@type": "stickerSet", "@extra": q["@extra"], "@client_id": 1, "title": "Pandas", "stickers": [self.sticker(8)]})
+        one = self.read(self.conn, lambda v: v.get("id") == 52)["result"]
+        self.assertEqual((one["title"], [s["file"]["id"] for s in one["stickers"]]), ("Pandas", [8]))
+        for bad in (123, "12a", ""):
+            self.assertFalse(self.request(self.conn, 53, "stickers.set", setId=bad)["ok"], bad)
+
+
 class Startup(unittest.TestCase):
     def test_missing_library_is_reported_not_fatal(self):
         root = pathlib.Path(tempfile.mkdtemp(prefix="omagram-test-", dir=safe.runtime_dir()))
