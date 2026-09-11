@@ -19,6 +19,7 @@ Login codes, passwords and the API credentials are handed straight to TDLib or t
 they are never echoed back, logged or written anywhere.
 """
 import fcntl
+import hashlib
 import json
 import os
 import pathlib
@@ -32,6 +33,7 @@ import struct
 import sys
 import threading
 import time
+import zlib
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -52,6 +54,13 @@ TEXT_MAX = 4096
 IDS_MAX = 100
 CLOSE_TIMEOUT = 5.0
 
+LOTTIE = pathlib.Path(safe.home_dir()) / ".cache/omagram/lottie"
+# Telegram caps animated stickers at 64 KB compressed; a megabyte is far past any real one.
+TGS_MAX = 1024 * 1024
+LOTTIE_MAX = 16 * 1024 * 1024
+LOTTIE_LIMITS = {"max_depth": 64, "max_items": 2_000_000, "max_string": 1024 * 1024}
+FILE_ID_MAX = 2 ** 31 - 1
+
 PHONE = re.compile(r"\+?[0-9][0-9 ()-]{4,30}")
 CODE = re.compile(r"[0-9]{3,10}")
 
@@ -60,6 +69,39 @@ LOG = print
 
 class BadRequest(Exception):
     pass
+
+
+def lottie_json(path):
+    """The Lottie animation inside a TGS sticker (gzip-compressed JSON), written once to a
+    private cache named by the sticker's hash. Returns that path, or "" for anything that is
+    not a sane TGS. Inflation stops at LOTTIE_MAX, so a compression bomb costs nothing, and
+    the JSON's shape is bounded before the UI's Lottie parser ever sees it."""
+    try:
+        blob = safe.read_file(path, TGS_MAX)
+    except (safe.UnsafeError, OSError):
+        return ""
+    if not blob or blob[:2] != b"\x1f\x8b":
+        return ""
+    inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        data = inflater.decompress(blob, LOTTIE_MAX + 1)
+    except zlib.error:
+        return ""
+    if len(data) > LOTTIE_MAX or inflater.unconsumed_tail:
+        return ""
+    try:
+        doc = safe.loads(data, **LOTTIE_LIMITS)
+    except (ValueError, UnicodeDecodeError, safe.UnsafeError):
+        return ""
+    if not isinstance(doc, dict):
+        return ""
+    target = LOTTIE / (hashlib.sha256(blob).hexdigest() + ".json")
+    if not os.path.isfile(target):
+        try:
+            safe.write_file(target, data, mode=0o600)
+        except (safe.UnsafeError, OSError):
+            return ""
+    return str(target)
 
 
 def arg_int(args, name, low=None, high=None, default=None):
@@ -101,7 +143,7 @@ class Daemon:
     def __init__(self, open_client=None, keyring=None):
         self.open_client = open_client or td.open_client
         self.keyring = keyring or td
-        self.state = model.State()
+        self.state = model.State(str(td.FILES))
         self.td = None
         self.auth = {"state": "starting"}
         self.clients = {}
@@ -284,7 +326,7 @@ class Daemon:
                 self.closed.set()
                 return
             # Logged out or the session was terminated elsewhere: start over, signed out.
-            self.state = model.State()
+            self.state = model.State(str(td.FILES))
             self.set_auth({"state": "starting"})
             self.td.new_client()
             self.td_send({"@type": "getOption", "name": "version"})
@@ -552,6 +594,17 @@ class Daemon:
         self.td_send({"@type": "deleteMessages", "chat_id": arg_int(args, "chatId"),
                       "message_ids": arg_ids(args, "messageIds"), "revoke": revoke}, client, rid)
 
+    def cmd_file_download(self, client, rid, args):
+        query = {"@type": "downloadFile", "file_id": arg_int(args, "fileId", 1, FILE_ID_MAX),
+                 "priority": arg_int(args, "priority", 1, 32, 16), "offset": 0, "limit": 0, "synchronous": False}
+        self.td_send(query, client, rid, lambda f: model.file_view(f, self.state.files_root) or {})
+
+    def cmd_sticker_lottie(self, client, rid, args):
+        def convert(f):
+            view = model.file_view(f, self.state.files_root)
+            return {"path": lottie_json(view["path"]) if view and view["path"] else ""}
+        self.td_send({"@type": "getFile", "file_id": arg_int(args, "fileId", 1, FILE_ID_MAX)}, client, rid, convert)
+
     def drain_wake(self):
         try:
             while os.read(self.wake_r, 4096):
@@ -577,6 +630,8 @@ COMMANDS = {
     "message.send": ("cmd_message_send", True),
     "message.edit": ("cmd_message_edit", True),
     "message.delete": ("cmd_message_delete", True),
+    "file.download": ("cmd_file_download", True),
+    "sticker.lottie": ("cmd_sticker_lottie", True),
 }
 
 

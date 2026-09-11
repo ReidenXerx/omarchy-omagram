@@ -130,7 +130,7 @@ def formatted(value):
     return text, entities
 
 
-def content(value):
+def content(value, files_root=""):
     c = _obj(value)
     kind_name = c.get("@type") if isinstance(c.get("@type"), str) else ""
     if kind_name == "messageText":
@@ -150,7 +150,178 @@ def content(value):
         out["text"] = _str(c.get("emoji"), 16)
     elif kind in ("service", "unsupported"):
         out["type"] = _str(kind_name, 64)
+    media = media_for(kind, c, files_root)
+    if media is not None:
+        out["media"] = media
     return out
+
+
+# ---------------------------------------------------------------- media
+
+MINI_MAX = 16 * 1024          # base64 length of a minithumbnail (a tiny JPEG)
+WAVEFORM_MAX = 256            # base64 length of a voice waveform
+WAVEFORM_BARS = 48
+PHOTO_SIDE_MAX = 1280
+DURATION_MAX = 7 * 24 * 3600
+STICKER_FORMATS = {"stickerFormatWebp": "webp", "stickerFormatTgs": "tgs", "stickerFormatWebm": "webm"}
+THUMBNAIL_FORMATS = {"thumbnailFormatJpeg": "jpeg", "thumbnailFormatGif": "gif", "thumbnailFormatMpeg4": "mp4",
+                     "thumbnailFormatPng": "png", "thumbnailFormatTgs": "tgs", "thumbnailFormatWebm": "webm",
+                     "thumbnailFormatWebp": "webp"}
+
+
+def local_path(value, files_root):
+    """A downloaded file's path, only if it is an absolute path inside TDLib's files
+    directory: the UI loads it as a file:// URL and must never be pointed elsewhere."""
+    if not files_root or not isinstance(value, str) or not value.startswith("/") or len(value) > 4096:
+        return ""
+    if any(ord(ch) < 32 or ch == "\x7f" for ch in value):
+        return ""
+    root = files_root.rstrip("/") + "/"
+    parts = value.split("/")
+    if ".." in parts or "." in parts or "" in parts[1:]:
+        return ""
+    return value if value.startswith(root) else ""
+
+
+def file_view(value, files_root):
+    f = _obj(value, "file")
+    fid = _int(f.get("id"))
+    if fid <= 0:
+        return None
+    local = _obj(f.get("local"))
+    completed = local.get("is_downloading_completed") is True
+    return {
+        "id": fid,
+        "size": max(0, _int(f.get("size")), _int(f.get("expected_size"))),
+        "downloaded": max(0, _int(local.get("downloaded_size"))),
+        "active": local.get("is_downloading_active") is True,
+        "path": local_path(local.get("path"), files_root) if completed else "",
+    }
+
+
+def minithumbnail(value):
+    m = _obj(value, "minithumbnail")
+    data = m.get("data")
+    if not isinstance(data, str) or not 0 < len(data) <= MINI_MAX:
+        return None
+    return {"width": max(0, _int(m.get("width"))), "height": max(0, _int(m.get("height"))), "data": data}
+
+
+def thumbnail(value, files_root):
+    t = _obj(value, "thumbnail")
+    view = file_view(t.get("file"), files_root) if t else None
+    if view is None:
+        return None
+    return {"format": THUMBNAIL_FORMATS.get(_obj(t.get("format")).get("@type"), "unknown"),
+            "width": max(0, _int(t.get("width"))), "height": max(0, _int(t.get("height"))), "file": view}
+
+
+def waveform(value, bars=WAVEFORM_BARS):
+    """A voice waveform as up to `bars` values 0-31. Telegram packs 5 bits per sample,
+    least significant first; buckets keep their loudest sample."""
+    import base64
+    import binascii
+    if not isinstance(value, str) or not 0 < len(value) <= WAVEFORM_MAX:
+        return []
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return []
+    count = len(raw) * 8 // 5
+    packed = int.from_bytes(raw, "little")
+    samples = [(packed >> (i * 5)) & 31 for i in range(count)]
+    if len(samples) <= bars:
+        return samples
+    step = len(samples) / bars
+    return [max(samples[int(i * step):max(int(i * step) + 1, int((i + 1) * step))]) for i in range(bars)]
+
+
+def _dims(obj):
+    return max(0, min(_int(obj.get("width")), 100000)), max(0, min(_int(obj.get("height")), 100000))
+
+
+def _duration(obj):
+    return max(0, min(_int(obj.get("duration")), DURATION_MAX))
+
+
+def best_photo_size(sizes):
+    usable = []
+    for raw in _list(sizes, 16):
+        size = _obj(raw, "photoSize")
+        w, h = _dims(size)
+        if size and w and h and _obj(size.get("photo"), "file"):
+            usable.append((w, h, size))
+    if not usable:
+        return None
+    fitting = [u for u in usable if max(u[0], u[1]) <= PHOTO_SIDE_MAX]
+    return max(fitting or usable, key=lambda u: u[0] * u[1] if fitting else -(u[0] * u[1]))
+
+
+def media_for(kind, c, files_root):
+    if kind == "photo":
+        photo = _obj(c.get("photo"))
+        best = best_photo_size(photo.get("sizes"))
+        if best is None:
+            return None
+        w, h, size = best
+        return {"file": file_view(size.get("photo"), files_root), "width": w, "height": h,
+                "mini": minithumbnail(photo.get("minithumbnail"))}
+    if kind == "sticker":
+        s = _obj(c.get("sticker"), "sticker")
+        view = file_view(s.get("sticker"), files_root)
+        if view is None:
+            return None
+        w, h = _dims(s)
+        return {"file": view, "format": STICKER_FORMATS.get(_obj(s.get("format")).get("@type"), "unknown"),
+                "width": w, "height": h, "emoji": _str(s.get("emoji"), 16),
+                "thumb": thumbnail(s.get("thumbnail"), files_root)}
+    if kind == "gif":
+        a = _obj(c.get("animation"), "animation")
+        view = file_view(a.get("animation"), files_root)
+        if view is None:
+            return None
+        w, h = _dims(a)
+        return {"file": view, "width": w, "height": h, "duration": _duration(a), "mime": _str(a.get("mime_type"), 128),
+                "thumb": thumbnail(a.get("thumbnail"), files_root), "mini": minithumbnail(a.get("minithumbnail"))}
+    if kind == "voice":
+        v = _obj(c.get("voice_note"), "voiceNote")
+        view = file_view(v.get("voice"), files_root)
+        if view is None:
+            return None
+        return {"file": view, "duration": _duration(v), "waveform": waveform(v.get("waveform")),
+                "mime": _str(v.get("mime_type"), 128), "listened": c.get("is_listened") is True}
+    if kind == "videoNote":
+        v = _obj(c.get("video_note"), "videoNote")
+        view = file_view(v.get("video"), files_root)
+        if view is None:
+            return None
+        return {"file": view, "duration": _duration(v), "length": max(0, min(_int(v.get("length")), 4096)),
+                "thumb": thumbnail(v.get("thumbnail"), files_root), "mini": minithumbnail(v.get("minithumbnail")),
+                "viewed": c.get("is_viewed") is True}
+    if kind == "video":
+        v = _obj(c.get("video"), "video")
+        view = file_view(v.get("video"), files_root)
+        if view is None:
+            return None
+        w, h = _dims(v)
+        return {"file": view, "width": w, "height": h, "duration": _duration(v), "fileName": _str(v.get("file_name"), TITLE_MAX),
+                "thumb": thumbnail(v.get("thumbnail"), files_root), "mini": minithumbnail(v.get("minithumbnail"))}
+    if kind == "file":
+        d = _obj(c.get("document"), "document")
+        view = file_view(d.get("document"), files_root)
+        if view is None:
+            return None
+        return {"file": view, "fileName": _str(d.get("file_name"), TITLE_MAX), "mime": _str(d.get("mime_type"), 128),
+                "thumb": thumbnail(d.get("thumbnail"), files_root)}
+    if kind == "audio":
+        a = _obj(c.get("audio"), "audio")
+        view = file_view(a.get("audio"), files_root)
+        if view is None:
+            return None
+        return {"file": view, "duration": _duration(a), "title": _str(a.get("title"), TITLE_MAX),
+                "performer": _str(a.get("performer"), TITLE_MAX), "fileName": _str(a.get("file_name"), TITLE_MAX),
+                "mime": _str(a.get("mime_type"), 128)}
+    return None
 
 
 def preview_text(summary):
@@ -199,11 +370,17 @@ def auth_view(state):
 
 # ---------------------------------------------------------------- the account
 
+FILE_MARKS_MAX = 4096
+
+
 class State:
-    def __init__(self):
+    def __init__(self, files_root=""):
         self.chats = {}
         self.users = {}
         self.me_id = 0
+        # TDLib's files directory: only paths inside it are ever handed to the UI.
+        self.files_root = files_root
+        self.file_marks = {}
 
     # -------------------------------------------------- names
 
@@ -243,7 +420,7 @@ class State:
             "senderName": name,
             "sending": {"messageSendingStatePending": "pending", "messageSendingStateFailed": "failed"}.get(sending),
             "replyTo": None,
-            "content": content(m.get("content")),
+            "content": content(m.get("content"), self.files_root),
         }
         reply = _obj(m.get("reply_to"), "messageReplyToMessage")
         if reply:
@@ -415,7 +592,7 @@ class State:
 
     def _on_updateMessageContent(self, u):
         return [{"event": "messageContent", "chatId": _int(u.get("chat_id")), "messageId": _int(u.get("message_id")),
-                 "content": content(u.get("new_content"))}]
+                 "content": content(u.get("new_content"), self.files_root)}]
 
     def _on_updateMessageEdited(self, u):
         return [{"event": "messageEdited", "chatId": _int(u.get("chat_id")), "messageId": _int(u.get("message_id")),
@@ -432,6 +609,22 @@ class State:
         if not message:
             return []
         return [{"event": "messageSent", "oldMessageId": _int(u.get("old_message_id")), "message": message}]
+
+    def _on_updateFile(self, u):
+        view = file_view(u.get("file"), self.files_root)
+        if view is None:
+            return []
+        # Download progress arrives many times a second. A file is announced when it starts
+        # or stops, when it completes, and when it has moved on by a twentieth of its size.
+        last = self.file_marks.get(view["id"])
+        step = max(64 * 1024, view["size"] // 20)
+        if (last is not None and not view["path"] and view["active"] == last["active"]
+                and view["downloaded"] - last["downloaded"] < step):
+            return []
+        if len(self.file_marks) >= FILE_MARKS_MAX:
+            self.file_marks.clear()
+        self.file_marks[view["id"]] = view
+        return [{"event": "file", "file": view}]
 
     def _on_updateMessageSendFailed(self, u):
         message = self.message(u.get("message"))

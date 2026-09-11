@@ -87,7 +87,9 @@ class FakeKeyring:
         return {"@type": "setTdlibParameters", "api_id": api_id, "api_hash": api_hash, "database_encryption_key": key}
 
 
-class Service(unittest.TestCase):
+class Harness(unittest.TestCase):
+    """A running service on a sandboxed socket, and helpers; no tests of its own."""
+
     HASH = "0123456789abcdef0123456789abcdef"
 
     def setUp(self):
@@ -107,9 +109,20 @@ class Service(unittest.TestCase):
         self.assertTrue(self.daemon.acquire())
         self.thread = threading.Thread(target=self.daemon.run, daemon=True)
         self.thread.start()
-        self.wait(lambda: self.d.SOCKET.exists())
+        self.wait(self.accepting)
         self.addCleanup(self.stop)
         self.conns = []
+
+    def accepting(self):
+        # The socket file exists a moment before listen(); only a real connection proves it.
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            probe.connect(str(self.d.SOCKET))
+            return True
+        except OSError:
+            return False
+        finally:
+            probe.close()
 
     def stop(self):
         self.daemon.stop()
@@ -137,6 +150,10 @@ class Service(unittest.TestCase):
         sock.settimeout(5)
         conn = self.Conn(sock)
         self.conns.append(conn)
+        # connect() returns once the kernel queues the connection, which can be before the
+        # service has accepted it; an event broadcast in between would reach nobody. A
+        # hello round trip proves the service knows this client.
+        self.request(conn, 999999, "hello")
         return conn
 
     def send(self, conn, value):
@@ -173,6 +190,8 @@ class Service(unittest.TestCase):
         self.td_event(auth_update("authorizationStateReady"))
         self.read(conn, lambda v: v.get("event") == "auth" and v["auth"]["state"] == "ready")
 
+
+class Service(Harness):
     # ---------------------------------------------------------------- login
 
     def test_no_credentials_asks_for_them_and_credentials_start_tdlib(self):
@@ -307,6 +326,79 @@ class Service(unittest.TestCase):
     def test_only_one_instance(self):
         other = self.d.Daemon(open_client=lambda: FakeTd(), keyring=FakeKeyring())
         self.assertFalse(other.acquire())
+
+
+class MediaCommands(Harness):
+    def setUp(self):
+        super().setUp()
+        self.files = self.root / "files"
+        (self.files / "stickers").mkdir(parents=True, mode=0o700)
+        self.daemon.state.files_root = str(self.files)
+        patch = mock.patch.object(self.d, "LOTTIE", self.root / "lottie")
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.conn = self.connect()
+        self.sign_in(self.conn)
+
+    def file_event(self, extra, fid, path, done=True):
+        return {"@type": "file", "id": fid, "size": 10, "expected_size": 10, "@extra": extra, "@client_id": 1,
+                "local": {"@type": "localFile", "path": str(path), "is_downloading_completed": done,
+                          "is_downloading_active": not done, "downloaded_size": 10 if done else 0}}
+
+    def lottie(self, rid, path, done=True):
+        self.send(self.conn, {"id": rid, "cmd": "sticker.lottie", "args": {"fileId": 9}})
+        query = self.last_query("getFile")
+        self.fake.sent.clear()
+        self.td_event(self.file_event(query["@extra"], 9, path, done))
+        return self.read(self.conn, lambda v: v.get("id") == rid)
+
+    def test_download_request_and_answer(self):
+        self.send(self.conn, {"id": 40, "cmd": "file.download", "args": {"fileId": 5}})
+        query = self.last_query("downloadFile")
+        self.assertEqual((query["file_id"], query["priority"], query["synchronous"]), (5, 16, False))
+        self.td_event(self.file_event(query["@extra"], 5, "", done=False))
+        answer = self.read(self.conn, lambda v: v.get("id") == 40)
+        self.assertEqual((answer["result"]["id"], answer["result"]["path"], answer["result"]["active"]), (5, "", True))
+        for args in ({"fileId": 0}, {"fileId": "5"}, {"fileId": 5, "priority": 99}):
+            self.assertFalse(self.request(self.conn, 41, "file.download", **args)["ok"], args)
+
+    def test_tgs_sticker_becomes_cached_lottie_json(self):
+        import gzip
+        animation = b'{"v":"5.5.2","fr":60,"layers":[]}'
+        tgs = self.files / "stickers" / "a.tgs"
+        tgs.write_bytes(gzip.compress(animation))
+        path = self.lottie(50, tgs)["result"]["path"]
+        self.assertTrue(path.startswith(str(self.root / "lottie")) and path.endswith(".json"))
+        self.assertEqual(pathlib.Path(path).read_bytes(), animation)
+        self.assertEqual(oct(os.stat(path).st_mode & 0o777), "0o600")
+        self.assertEqual(self.lottie(51, tgs)["result"]["path"], path)   # cached by content
+
+    def test_hostile_or_foreign_stickers_are_refused(self):
+        import gzip
+        cases = {
+            "bomb": gzip.compress(b"{" + b" " * (self.d.LOTTIE_MAX + 10) + b"}"),
+            "not gzip": b'{"v":"5.5.2"}',
+            "not json": gzip.compress(b"\x00\x01binary"),
+            "json array": gzip.compress(b"[1, 2, 3]"),
+            "oversized": b"\x1f\x8b" + os.urandom(self.d.TGS_MAX + 10),
+        }
+        for rid, (name, blob) in enumerate(cases.items(), start=60):
+            target = self.files / "stickers" / (name.replace(" ", "-") + ".tgs")
+            target.write_bytes(blob)
+            self.assertEqual(self.lottie(rid, target)["result"]["path"], "", name)
+        outside = self.root / "elsewhere.tgs"
+        outside.write_bytes(gzip.compress(b'{"v":"5.5.2"}'))
+        self.assertEqual(self.lottie(70, outside)["result"]["path"], "")
+        self.assertEqual(self.lottie(71, self.files / "stickers" / "a.tgs", done=False)["result"]["path"], "")
+        self.assertFalse((self.root / "lottie").exists() and any((self.root / "lottie").iterdir()))
+
+    def test_file_progress_reaches_clients(self):
+        self.td_event({"@type": "updateFile", "@client_id": 1, "file": {
+            "@type": "file", "id": 77, "size": 10, "expected_size": 10,
+            "local": {"@type": "localFile", "path": str(self.files / "stickers" / "x.webp"),
+                      "is_downloading_completed": True, "downloaded_size": 10}}})
+        event = self.read(self.conn, lambda v: v.get("event") == "file")
+        self.assertEqual((event["file"]["id"], event["file"]["path"]), (77, str(self.files / "stickers" / "x.webp")))
 
 
 class Startup(unittest.TestCase):

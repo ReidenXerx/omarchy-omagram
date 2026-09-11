@@ -160,5 +160,84 @@ class Messages(unittest.TestCase):
         self.assertEqual((bad[0]["event"], bad[0]["error"]), ("messageFailed", "CHAT_WRITE_FORBIDDEN"))
 
 
+ROOT_FILES = "/home/u/.local/share/omagram/files"
+
+
+def tdfile(fid, path="", done=False, size=1000, downloaded=0, active=False):
+    return {"@type": "file", "id": fid, "size": size, "expected_size": size,
+            "local": {"@type": "localFile", "path": path, "is_downloading_completed": done,
+                      "is_downloading_active": active, "downloaded_size": downloaded},
+            "remote": {"@type": "remoteFile", "id": "r", "unique_id": "u"}}
+
+
+def pack_waveform(samples):
+    import base64
+    packed = 0
+    for i, s in enumerate(samples):
+        packed |= (s & 31) << (i * 5)
+    return base64.b64encode(packed.to_bytes((len(samples) * 5 + 7) // 8, "little")).decode()
+
+
+class Media(unittest.TestCase):
+    def test_photo_uses_the_largest_size_that_fits(self):
+        sizes = [{"@type": "photoSize", "type": t, "width": w, "height": w, "photo": tdfile(i + 1)}
+                 for i, (t, w) in enumerate((("s", 90), ("m", 320), ("x", 800), ("y", 1280), ("w", 2560)))]
+        c = model.content({"@type": "messagePhoto", "photo": {"sizes": sizes, "minithumbnail":
+                           {"@type": "minithumbnail", "width": 40, "height": 40, "data": "AAAA"}},
+                           "caption": {"text": "hi"}}, ROOT_FILES)
+        self.assertEqual((c["media"]["width"], c["media"]["file"]["id"], c["media"]["mini"]["data"]), (1280, 4, "AAAA"))
+        huge = [{"@type": "photoSize", "width": w, "height": w, "photo": tdfile(w)} for w in (4000, 2560)]
+        self.assertEqual(model.best_photo_size(huge)[0], 2560)
+        self.assertIsNone(model.best_photo_size([{"@type": "photoSize", "width": 0, "height": 5, "photo": tdfile(1)}, "x"]))
+
+    def test_paths_are_exposed_only_inside_the_files_directory_and_only_when_complete(self):
+        inside = ROOT_FILES + "/photos/1.jpg"
+        self.assertEqual(model.file_view(tdfile(1, inside, done=True), ROOT_FILES)["path"], inside)
+        self.assertEqual(model.file_view(tdfile(1, inside, done=False), ROOT_FILES)["path"], "")
+        for bad in ("/etc/passwd", ROOT_FILES + "/../../../.ssh/id_ed25519", ROOT_FILES + "x/a.jpg",
+                    "photos/1.jpg", ROOT_FILES + "/a\nb.jpg", ROOT_FILES + "//a.jpg", 5):
+            self.assertEqual(model.file_view(tdfile(1, bad, done=True), ROOT_FILES)["path"], "", bad)
+        self.assertEqual(model.file_view(tdfile(1, inside, done=True), "")["path"], "")
+        self.assertIsNone(model.file_view({"@type": "file", "id": 0}, ROOT_FILES))
+
+    def test_stickers_voice_video_notes_files(self):
+        for fmt, name in (("stickerFormatTgs", "tgs"), ("stickerFormatWebm", "webm"), ("stickerFormatWebp", "webp"), ("x", "unknown")):
+            c = model.content({"@type": "messageSticker", "sticker": {"@type": "sticker", "width": 512, "height": 512,
+                               "emoji": "😂", "format": {"@type": fmt}, "sticker": tdfile(3)}}, ROOT_FILES)
+            self.assertEqual((c["media"]["format"], c["media"]["emoji"], c["emoji"]), (name, "😂", "😂"))
+        samples = [i % 32 for i in range(40)]
+        c = model.content({"@type": "messageVoiceNote", "is_listened": True, "caption": {"text": ""},
+                           "voice_note": {"@type": "voiceNote", "duration": 7, "waveform": pack_waveform(samples),
+                                          "mime_type": "audio/ogg", "voice": tdfile(9)}}, ROOT_FILES)
+        self.assertEqual((c["media"]["duration"], c["media"]["waveform"], c["media"]["listened"]), (7, samples, True))
+        c = model.content({"@type": "messageVideoNote", "video_note": {"@type": "videoNote", "duration": 12, "length": 384,
+                           "video": tdfile(10)}}, ROOT_FILES)
+        self.assertEqual((c["kind"], c["media"]["length"]), ("videoNote", 384))
+        c = model.content({"@type": "messageDocument", "caption": {"text": ""}, "document": {
+            "@type": "document", "file_name": "report.pdf", "mime_type": "application/pdf", "document": tdfile(11, size=5000)}}, ROOT_FILES)
+        self.assertEqual((c["media"]["fileName"], c["media"]["file"]["size"]), ("report.pdf", 5000))
+        self.assertNotIn("media", model.content({"@type": "messagePhoto", "photo": {"sizes": []}}, ROOT_FILES))
+
+    def test_waveform_is_bucketed_and_bounded(self):
+        long = pack_waveform([31 if i % 10 == 0 else 1 for i in range(100)])
+        bars = model.waveform(long)
+        self.assertEqual(len(bars), model.WAVEFORM_BARS)
+        self.assertTrue(all(0 <= b <= 31 for b in bars))
+        for bad in ("!!!", "A" * 1000, 5, ""):
+            self.assertEqual(model.waveform(bad), [], bad)
+        self.assertIsNone(model.minithumbnail({"@type": "minithumbnail", "data": "A" * (model.MINI_MAX + 1)}))
+
+    def test_file_progress_is_throttled(self):
+        s = model.State(ROOT_FILES)
+        size = 10 * 1024 * 1024
+        first = s.apply({"@type": "updateFile", "file": tdfile(5, size=size, downloaded=0, active=True)})
+        self.assertEqual(first[0]["file"]["id"], 5)
+        self.assertEqual(s.apply({"@type": "updateFile", "file": tdfile(5, size=size, downloaded=100_000, active=True)}), [])
+        self.assertEqual(len(s.apply({"@type": "updateFile", "file": tdfile(5, size=size, downloaded=size // 10, active=True)})), 1)
+        done = s.apply({"@type": "updateFile", "file": tdfile(5, ROOT_FILES + "/videos/5.mp4", done=True, size=size, downloaded=size)})
+        self.assertEqual(done[0]["file"]["path"], ROOT_FILES + "/videos/5.mp4")
+        self.assertEqual(s.apply({"@type": "updateFile", "file": "junk"}), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
