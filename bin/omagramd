@@ -706,8 +706,15 @@ class Daemon:
         archived = args.get("archived")
         if not isinstance(archived, bool):
             raise BadRequest("archived must be true or false")
-        self.td_send({"@type": "addChatToList", "chat_id": arg_int(args, "chatId"),
-                      "chat_list": {"@type": "chatListArchive" if archived else "chatListMain"}}, client, rid)
+        target = {"@type": "chatListArchive" if archived else "chatListMain"}
+
+        def moved(event):
+            # TDLib reports a chat's place in a list only once that list is loaded: until the
+            # archive is, a chat moved there has no position anywhere and would vanish.
+            self.td_send({"@type": "loadChats", "chat_list": target, "limit": 100})
+            return {}
+        self.td_send({"@type": "addChatToList", "chat_id": arg_int(args, "chatId"), "chat_list": target},
+                     client, rid, moved)
 
     def cmd_ui_focus(self, client, rid, args):
         self.notifier.focus(arg_int(args, "chatId", None, None, 0))

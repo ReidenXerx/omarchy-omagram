@@ -579,6 +579,9 @@ class ListsAndSearch(Harness):
         self.assertEqual(query["chat_list"], {"@type": "chatListFolder", "chat_folder_id": 3})
         query, _ = self.call(52, "chat.archive", "addChatToList", {"@type": "ok"}, chatId=42, archived=True)
         self.assertEqual(query["chat_list"], {"@type": "chatListArchive"})
+        # the archive is loaded next, or the moved chat would have no position to be shown at
+        self.wait(lambda: any(q.get("@type") == "loadChats" and q.get("chat_list") == {"@type": "chatListArchive"}
+                              for q in self.fake.sent))
         query, _ = self.call(53, "chat.archive", "addChatToList", {"@type": "ok"}, chatId=42, archived=False)
         self.assertEqual(query["chat_list"], {"@type": "chatListMain"})
         self.assertFalse(self.request(self.conn, 54, "chat.pin", chatId=42, pinned="yes")["ok"])
