@@ -128,6 +128,44 @@ test("initials and input checks", () => {
   assert.strictEqual(M.validCode("12a45"), false)
 })
 
+test("media URLs never let a file name change the target", () => {
+  const box2 = {}
+  vm.runInNewContext(source + "\nthis.M = { fileUrl, miniUrl, formatSize, formatDuration, fitSize, autoDownload, progress, AUTO_DOWNLOAD_MAX }", box2)
+  const X = box2.M
+  assert.strictEqual(X.fileUrl("/home/u/.local/share/omagram/files/photos/a b#1.jpg"),
+                     "file:///home/u/.local/share/omagram/files/photos/a%20b%231.jpg")
+  for (const bad of ["relative/a.jpg", "", null, 5, "/a\0b"]) assert.strictEqual(X.fileUrl(bad), "", String(bad))
+  assert.strictEqual(X.miniUrl({ data: "AAAA/+==" }), "data:image/jpeg;base64,AAAA/+==")
+  assert.strictEqual(X.miniUrl({ data: "not base64!" }), "")
+  assert.strictEqual(X.miniUrl(null), "")
+})
+
+test("sizes, durations, fitting, auto-download, progress", () => {
+  const box2 = {}
+  vm.runInNewContext(source + "\nthis.M = { formatSize, formatDuration, fitSize, autoDownload, progress, AUTO_DOWNLOAD_MAX }", box2)
+  const X = box2.M
+  assert.strictEqual(X.formatSize(512), "512 B")
+  assert.strictEqual(X.formatSize(1536), "1.5 KB")
+  assert.strictEqual(X.formatSize(5 * 1048576), "5.0 MB")
+  assert.strictEqual(X.formatSize(50 * 1048576), "50 MB")
+  assert.strictEqual(X.formatSize(-3), "0 B")
+  assert.strictEqual(X.formatDuration(7), "0:07")
+  assert.strictEqual(X.formatDuration(125), "2:05")
+  assert.strictEqual(X.formatDuration(3725), "1:02:05")
+  eq(X.fitSize(1280, 720, 360, 360), { width: 360, height: 203 })
+  eq(X.fitSize(512, 512, 180, 180), { width: 180, height: 180 })
+  eq(X.fitSize(100, 50, 360, 360), { width: 100, height: 50 })
+  eq(X.fitSize(0, 0, 360, 360), { width: 360, height: 270 })
+  assert.strictEqual(X.autoDownload("sticker", 999999999), true)
+  assert.strictEqual(X.autoDownload("photo", X.AUTO_DOWNLOAD_MAX), true)
+  assert.strictEqual(X.autoDownload("photo", X.AUTO_DOWNLOAD_MAX + 1), false)
+  assert.strictEqual(X.autoDownload("video", 10), false)
+  assert.strictEqual(X.autoDownload("file", 10), false)
+  assert.strictEqual(X.progress({ size: 200, downloaded: 50 }), 0.25)
+  assert.strictEqual(X.progress({ size: 0, downloaded: 50 }), 0)
+  assert.strictEqual(X.progress({ size: 10, downloaded: 99 }), 1)
+})
+
 for (const f of failures) console.log("FAIL " + f)
 console.log(passed + " passed, " + failures.length + " failed")
 process.exit(failures.length ? 1 : 0)

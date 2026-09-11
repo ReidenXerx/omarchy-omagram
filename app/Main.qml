@@ -37,6 +37,39 @@ Scope {
   property var noOlder: ({})
   property bool loadingOlder: false
   property real nowMs: Date.now()
+  property var files: ({})
+  property int filesRevision: 0
+  property var lottieCache: ({})
+
+  // A file's latest known state: from a download answer or a progress event if there has
+  // been one, otherwise as its message described it.
+  function fileState(file) {
+    omagram.filesRevision
+    if (!file) return null
+    return omagram.files[file.id] || file
+  }
+
+  function setFile(view) {
+    if (!view || !view.id) return
+    omagram.files[view.id] = view
+    omagram.filesRevision++
+  }
+
+  function download(fileId, priority) {
+    service.request("file.download", { fileId: fileId, priority: priority || 16 }, function (answer) {
+      if (answer.ok) omagram.setFile(answer.result)
+    })
+  }
+
+  // Animated stickers need their Lottie JSON, which the service unpacks once per sticker.
+  function lottiePath(fileId, callback) {
+    if (omagram.lottieCache[fileId]) { callback(omagram.lottieCache[fileId]); return }
+    service.request("sticker.lottie", { fileId: fileId }, function (answer) {
+      var path = answer.ok && answer.result && answer.result.path ? answer.result.path : ""
+      if (path) omagram.lottieCache[fileId] = path
+      callback(path)
+    })
+  }
 
   function messagesFor(chatId) {
     omagram.messagesRevision
@@ -81,6 +114,8 @@ Scope {
         omagram.messages = ({})
         omagram.openChatId = 0
       }
+    } else if (name === "file") {
+      omagram.setFile(e.file)
     } else if (name === "me") {
       omagram.meId = e.meId || 0
     } else if (name === "chat") {

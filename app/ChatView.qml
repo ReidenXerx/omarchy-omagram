@@ -7,8 +7,9 @@ import "Model.js" as Model
 //
 // Composer: Enter sends, Shift+Enter adds a line, Esc cancels a reply or edit (or moves to
 // the messages), ↑ in an empty composer edits your last message, Tab moves to the messages.
-// Messages: ↑/↓ or j/k select, r replies, e edits yours, y copies, d or Delete asks to delete
-// (press again to confirm), Esc or i returns to the composer, Tab returns to the chat list.
+// Messages: ↑/↓ or j/k select, Enter or o downloads or opens the selected media, Space plays or
+// pauses it, r replies, e edits yours, y copies, d or Delete asks to delete (press again to
+// confirm), Esc or i returns to the composer, Tab returns to the chat list.
 FocusScope {
   id: root
 
@@ -211,6 +212,14 @@ FocusScope {
         else if (key === Qt.Key_E) { root.startEdit(m); event.accepted = true }
         else if (key === Qt.Key_Y) { root.copy(m); event.accepted = true }
         else if (key === Qt.Key_D || key === Qt.Key_Delete) { root.askDelete(m); event.accepted = true }
+        else if (key === Qt.Key_Return || key === Qt.Key_Enter || key === Qt.Key_O || key === Qt.Key_Space) {
+          var item = messageList.itemAtIndex(root.cursor)
+          if (item && item.mediaItem && item.mediaItem.media) {
+            if (key === Qt.Key_Space) item.mediaItem.togglePlay()
+            else item.mediaItem.activate()
+          }
+          event.accepted = true
+        }
         else if (key === Qt.Key_Escape || key === Qt.Key_I) { root.cursor = -1; root.focusComposer(); event.accepted = true }
         else if (key === Qt.Key_Tab) { root.toList(); event.accepted = true }
         else if (key === Qt.Key_End) { root.cursor = root.messages.length - 1; root.stickToBottom = true; positionViewAtEnd(); event.accepted = true }
@@ -228,6 +237,8 @@ FocusScope {
         readonly property var quoted: modelData.replyTo ? Model.findMessage(root.messages, modelData.replyTo.messageId) : null
         readonly property bool isCursor: index === root.cursor && messageList.activeFocus
         readonly property string label: Model.contentLabel(modelData.content)
+        readonly property bool bare: modelData.content.media && (modelData.content.kind === "sticker" || modelData.content.kind === "videoNote")
+        property alias mediaItem: mediaView
 
         width: messageList.width
         height: (newDay ? day.height + Style.space(12) : 0) + (runStart ? Style.space(6) : 0) + bubble.height
@@ -251,13 +262,16 @@ FocusScope {
           x: row.modelData.outgoing ? row.width - width - Style.space(18) : Style.space(18)
           // Only what is shown counts: a hidden sender name or quote still has an implicit width.
           width: Math.min(maxWidth, Math.max(body.visible ? body.implicitWidth : 0, meta.implicitWidth,
+                                            mediaView.visible ? mediaView.implicitWidth : 0,
                                             name.visible ? name.implicitWidth : 0,
                                             kindLabel.visible ? kindLabel.implicitWidth : 0,
                                             quote.visible ? quote.implicitWidth : 0) + Style.space(24))
           height: content.implicitHeight + Style.space(16)
           radius: Style.cornerRadius * 1.5
-          color: row.modelData.outgoing ? Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.2)
-                                        : Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.06)
+          // Stickers and round video messages float without a bubble, as in Telegram.
+          color: row.bare ? "transparent"
+               : (row.modelData.outgoing ? Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.2)
+                                         : Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.06))
           border.width: row.isCursor ? Math.max(1, Style.space(1.5)) : (row.modelData.id === root.confirmDeleteId ? 1 : 0)
           border.color: row.modelData.id === root.confirmDeleteId ? app.urgent : app.accent
 
@@ -305,9 +319,16 @@ FocusScope {
               }
             }
 
+            MediaView {
+              id: mediaView
+              app: root.app
+              message: row.modelData
+              maxWidth: bubble.maxWidth - Style.space(24)
+            }
+
             Text {
               id: kindLabel
-              visible: row.label !== ""
+              visible: row.label !== "" && !row.modelData.content.media
               text: row.label
               textFormat: Text.PlainText
               color: app.muted

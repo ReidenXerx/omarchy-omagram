@@ -202,6 +202,59 @@ function dayLabel(seconds, nowMs) {
   return d.getFullYear() === new Date(nowMs).getFullYear() ? date : date + " " + d.getFullYear()
 }
 
+// ---------------------------------------------------------------- media
+
+var AUTO_DOWNLOAD_MAX = 10 * 1024 * 1024
+
+// A file:// URL for a downloaded file, each path segment encoded so a "#" or a space in a
+// file name cannot change what the URL points at.
+function fileUrl(path) {
+  if (typeof path !== "string" || path.charAt(0) !== "/" || path.indexOf("\0") >= 0) return ""
+  return "file://" + path.split("/").map(encodeURIComponent).join("/")
+}
+
+function miniUrl(mini) {
+  return isObject(mini) && typeof mini.data === "string" && /^[A-Za-z0-9+\/]+={0,2}$/.test(mini.data)
+    ? "data:image/jpeg;base64," + mini.data : ""
+}
+
+function formatSize(bytes) {
+  var n = Math.max(0, Math.floor(Number(bytes) || 0))
+  if (n < 1024) return n + " B"
+  if (n < 1048576) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + " KB"
+  if (n < 1073741824) return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + " MB"
+  return (n / 1073741824).toFixed(1) + " GB"
+}
+
+function formatDuration(seconds) {
+  var s = Math.max(0, Math.floor(Number(seconds) || 0))
+  var h = Math.floor(s / 3600)
+  var m = Math.floor(s % 3600 / 60)
+  return (h ? h + ":" + pad(m) : String(m)) + ":" + pad(s % 60)
+}
+
+// Fit media into a box without distorting it; an unknown size gets the box width at 4:3.
+function fitSize(width, height, maxWidth, maxHeight) {
+  var w = Number(width) || 0
+  var h = Number(height) || 0
+  if (w <= 0 || h <= 0) return { width: Math.round(maxWidth), height: Math.round(maxWidth * 3 / 4) }
+  var scale = Math.min(1, maxWidth / w, maxHeight / h)
+  return { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)) }
+}
+
+// What downloads by itself when a message comes into view: stickers and voice messages
+// always; photos, GIFs and video messages up to 10 MB. Videos, files and audio wait for you.
+function autoDownload(kind, size) {
+  if (kind === "sticker" || kind === "voice") return true
+  if (kind === "photo" || kind === "gif" || kind === "videoNote") return (Number(size) || 0) <= AUTO_DOWNLOAD_MAX
+  return false
+}
+
+function progress(file) {
+  if (!isObject(file) || !(file.size > 0)) return 0
+  return Math.max(0, Math.min(1, (Number(file.downloaded) || 0) / file.size))
+}
+
 // ---------------------------------------------------------------- faces and input
 
 function initials(title) {
