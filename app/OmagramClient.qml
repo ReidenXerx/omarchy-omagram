@@ -18,6 +18,9 @@ Item {
   property real lastStartAttempt: 0
 
   signal hello(var result)
+
+  // Omagram's own window: notification clicks that open a chat are handed to it.
+  property bool window: false
   signal serviceEvent(string name, var message)
 
   function request(cmd, args, callback) {
@@ -71,7 +74,7 @@ Item {
     onConnectionStateChanged: {
       if (connected) {
         retry.interval = 500
-        client.request("hello", {}, function (answer) { if (answer.ok) client.hello(answer.result) })
+        client.request("hello", { window: client.window }, function (answer) { if (answer.ok) client.hello(answer.result) })
       } else {
         client.failPending()
         retry.restart()

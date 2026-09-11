@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
+import Quickshell.Hyprland
 import qs.Commons
 import "Model.js" as Model
 
@@ -37,6 +38,23 @@ Scope {
   property var noOlder: ({})
   property bool loadingOlder: false
   property real nowMs: Date.now()
+
+  // Whether you are looking at Omagram: the focused window's app id is ours. The service keeps
+  // the chat you are reading out of desktop notifications, and new messages count as read only
+  // while this is true.
+  readonly property bool windowFocused: !!(Hyprland.activeToplevel && Hyprland.activeToplevel.wayland
+                                          && Hyprland.activeToplevel.wayland.appId === "omagram")
+  readonly property real focusedChatId: omagram.windowFocused ? omagram.openChatId : 0
+  onFocusedChatIdChanged: if (omagram.auth.state === "ready") service.request("ui.focus", { chatId: omagram.focusedChatId })
+  onWindowFocusedChanged: if (omagram.windowFocused) omagram.markOpenChatRead()
+
+  // A notification's Open or Reply, or `omagram --chat <id>`.
+  function openFromService(target) {
+    if (!target || !target.chatId) return
+    omagram.openChatById(target.chatId, false)
+    if (screen.item && screen.item.focusComposer) Qt.callLater(function () { screen.item.focusComposer() })
+  }
+
   property var files: ({})
   property int filesRevision: 0
   property var lottieCache: ({})
@@ -93,12 +111,17 @@ Scope {
   OmagramClient {
     id: service
     binDir: omagram.binDir
+    window: true
 
     onHello: function (result) {
       omagram.auth = result.auth || { state: "starting" }
       omagram.meId = result.meId || 0
       omagram.chats = Model.sortChats(result.chats || [])
       if (omagram.auth.state === "ready" && omagram.openChatId) omagram.openChatById(omagram.openChatId, true)
+      if (omagram.auth.state === "ready") {
+        service.request("ui.focus", { chatId: omagram.focusedChatId })
+        omagram.openFromService(result.open)
+      }
     }
 
     onServiceEvent: function (name, message) { omagram.onEvent(name, message) }
@@ -114,6 +137,8 @@ Scope {
         omagram.messages = ({})
         omagram.openChatId = 0
       }
+    } else if (name === "open") {
+      omagram.openFromService(e)
     } else if (name === "file") {
       omagram.setFile(e.file)
     } else if (name === "me") {
@@ -124,7 +149,7 @@ Scope {
       var m = e.message
       if (omagram.messages[m.chatId]) {
         omagram.setMessages(m.chatId, Model.mergeMessages(omagram.messages[m.chatId], [m]))
-        if (m.chatId === omagram.openChatId && !m.outgoing && window.visible) omagram.markRead(m.chatId, [m.id])
+        if (m.chatId === omagram.openChatId && !m.outgoing && omagram.windowFocused) omagram.markRead(m.chatId, [m.id])
       }
     } else if (name === "messageSent" || name === "messageFailed") {
       var sent = e.message
@@ -183,11 +208,15 @@ Scope {
       if (fromMessageId && merged.length === before) omagram.noOlder[chatId] = true
       // TDLib answers the first page from its local cache, which may be short.
       if (!fromMessageId && merged.length > 0 && merged.length < 20) omagram.loadHistory(chatId, Model.oldestId(merged))
-      if (chatId === omagram.openChatId) {
-        var chat = omagram.openChat
-        if (chat && chat.unread > 0) omagram.markRead(chatId, Model.incomingIds(merged, 100))
-      }
+      if (chatId === omagram.openChatId) omagram.markOpenChatRead()
     })
+  }
+
+  // Only while you can see it: a chat opened from a notification is read once the window has focus.
+  function markOpenChatRead() {
+    var chat = omagram.openChat
+    if (chat && chat.unread > 0 && omagram.windowFocused)
+      omagram.markRead(chat.id, Model.incomingIds(omagram.messages[chat.id] || [], 100))
   }
 
   function markRead(chatId, ids) {

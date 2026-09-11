@@ -2,6 +2,7 @@
 """Open Omagram's window, or focus it if it is already open.
 
   omagram             open or focus the window (starting the service if needed)
+  omagram --chat <id> the same, opened at that chat
   omagram --service   only make sure the background service is running
 
 The window is its own Quickshell process with the app id "omagram", so Hyprland treats it
@@ -18,6 +19,7 @@ that links them in:
 """
 import json
 import os
+import re
 import pathlib
 import socket
 import stat
@@ -133,13 +135,33 @@ def focus_existing():
     return False
 
 
+def request_open(chat_id):
+    """Ask the service to open a chat: a running window hears it at once, a window started
+    next picks it up when it connects."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
+    sock.settimeout(2)
+    try:
+        sock.connect(str(SOCKET))
+        sock.sendall(json.dumps({"id": 1, "cmd": "ui.open", "args": {"chatId": chat_id}}).encode() + b"\n")
+        sock.recv(4096)
+    except OSError:
+        pass
+    finally:
+        sock.close()
+
+
 def main(argv):
     if argv[1:] == ["--service"]:
         return 0 if start_service() else 1
-    if argv[1:]:
+    chat_id = None
+    if len(argv) == 3 and argv[1] == "--chat" and re.fullmatch(r"-?[0-9]{1,20}", argv[2]):
+        chat_id = int(argv[2])
+    elif argv[1:]:
         print(__doc__.strip(), file=sys.stderr)
         return 2
     start_service()   # the window shows the service's state, including "not running"
+    if chat_id is not None:
+        request_open(chat_id)
     if focus_existing():
         return 0
     prepare_root()

@@ -104,7 +104,8 @@ class Harness(unittest.TestCase):
             self.addCleanup(patch.stop)
         self.fake = FakeTd()
         self.keyring = FakeKeyring()
-        self.daemon = self.d.Daemon(open_client=lambda: self.fake, keyring=self.keyring)
+        self.daemon = self.d.Daemon(open_client=lambda: self.fake, keyring=self.keyring,
+                                    notifier_factory=lambda on_action: self.d.notify.Notifier(FakeNotifierTransport, on_action))
         self.fake.daemon = self.daemon
         self.assertTrue(self.daemon.acquire())
         self.thread = threading.Thread(target=self.daemon.run, daemon=True)
@@ -491,6 +492,130 @@ class Sending(Harness):
         self.assertEqual((one["title"], [s["file"]["id"] for s in one["stickers"]]), ("Pandas", [8]))
         for bad in (123, "12a", ""):
             self.assertFalse(self.request(self.conn, 53, "stickers.set", setId=bad)["ok"], bad)
+
+
+class FakeNotifierTransport:
+    """The bus, faked. Clicks are queued and delivered from pump(), on the service's own
+    thread, the way Gio delivers real signals."""
+
+    def __init__(self, on_action, on_closed):
+        self.on_action, self.on_closed = on_action, on_closed
+        self.shown, self.closed, self.clicks, self.next_id = [], [], [], 0
+
+    def notify(self, replaces, title, body, actions, hints):
+        self.shown.append((title, body))
+        self.next_id += 1
+        return replaces or self.next_id
+
+    def close(self, nid):
+        self.closed.append(nid)
+
+    def pump(self):
+        while self.clicks:
+            self.on_action(*self.clicks.pop(0))
+
+
+class Notifications(Harness):
+    def setUp(self):
+        super().setUp()
+        self.bus = self.daemon.notifier.transport
+        self.launched = []
+        self.daemon.launch_window = lambda: self.launched.append(True)
+        self.conn = self.connect()
+        self.sign_in(self.conn)
+        self.td_event({"@type": "updateNewChat", "@client_id": 1, "chat": {
+            "@type": "chat", "id": 42, "title": "Friends", "type": {"@type": "chatTypeBasicGroup"},
+            "positions": [{"@type": "chatPosition", "list": {"@type": "chatListMain"}, "order": "7"}]}})
+        self.td_event({"@type": "updateUser", "@client_id": 1, "user": {"@type": "user", "id": 7, "first_name": "Ann"}})
+        self.settle()
+
+    def group(self, added=(), total=1, removed=()):
+        return {"@type": "updateNotificationGroup", "@client_id": 1, "notification_group_id": 3, "chat_id": 42,
+                "total_count": total, "added_notifications": list(added), "removed_notification_ids": list(removed)}
+
+    def note(self, nid, text, silent=False, preview=True):
+        return {"@type": "notification", "id": nid, "date": 1, "is_silent": silent, "type": {
+            "@type": "notificationTypeNewMessage", "show_preview": preview, "message": {
+                "@type": "message", "id": nid * 10, "chat_id": 42, "date": 1, "is_outgoing": False,
+                "sender_id": {"@type": "messageSenderUser", "user_id": 7},
+                "content": {"@type": "messageText", "text": {"text": text, "entities": []}}}}}
+
+    def settle(self):
+        # The service answers sockets before it drains TDLib's queue, so a request round trip
+        # proves nothing about events; a marker event sent through the same queue does.
+        self.marks = getattr(self, "marks", 0) + 1
+        marker = f"settle-{self.marks}"
+        self.td_event({"@type": "updateUser", "@client_id": 1, "user": {"@type": "user", "id": 900 + self.marks,
+                                                                         "first_name": marker}})
+        self.read(self.conn, lambda v: v.get("event") == "user" and marker in json.dumps(v))
+
+    def click(self, action):
+        self.bus.clicks.append((self.daemon.notifier.by_chat[42], action))
+        self.daemon.wake()
+
+    def window(self):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(str(self.d.SOCKET))
+        sock.settimeout(5)
+        conn = self.Conn(sock)
+        self.conns.append(conn)
+        return conn, self.request(conn, 1, "hello", window=True)["result"]["open"]
+
+    def test_sign_in_turns_on_tdlib_notifications(self):
+        query = self.last_query("setOption")
+        self.assertEqual(query["name"], "notification_group_count_max")
+        self.assertGreater(query["value"]["value"], 0)
+
+    def test_new_messages_notify_and_reads_withdraw(self):
+        self.td_event(self.group([self.note(1, "hi <b>there</b>")], total=2))
+        self.settle()
+        self.assertEqual(self.bus.shown, [("Friends (2)", "Ann: hi &lt;b&gt;there&lt;/b&gt;")])
+        self.td_event(self.group([self.note(2, "quiet", silent=True)]))
+        self.td_event(self.group([self.note(3, "secret", preview=False)]))
+        self.settle()
+        self.assertEqual(self.bus.shown[1:], [("Friends", "New message")])
+        self.td_event(self.group(total=0, removed=[1, 3]))
+        self.settle()
+        self.assertEqual(self.bus.closed, [1])
+
+    def test_the_chat_being_read_stays_quiet(self):
+        self.assertTrue(self.request(self.conn, 60, "ui.focus", chatId=42)["ok"])
+        self.td_event(self.group([self.note(1, "hi")]))
+        self.settle()
+        self.assertEqual(self.bus.shown, [])
+        self.request(self.conn, 61, "ui.focus", chatId=0)
+        self.td_event(self.group([self.note(2, "hi")]))
+        self.settle()
+        self.assertEqual(len(self.bus.shown), 1)
+
+    def test_a_click_starts_the_window_which_opens_the_chat(self):
+        self.td_event(self.group([self.note(1, "hi")]))
+        self.settle()
+        self.click("reply")
+        self.wait(lambda: self.launched)
+        self.settle()
+        _, target = self.window()
+        self.assertEqual(target, {"chatId": 42, "reply": True})
+        self.assertIsNone(self.window()[1])   # handed over once
+
+    def test_an_open_window_hears_it_at_once(self):
+        window, target = self.window()
+        self.assertIsNone(target)
+        self.td_event(self.group([self.note(1, "hi")]))
+        self.settle()
+        self.click("default")
+        event = self.read(window, lambda v: v.get("event") == "open")
+        self.assertEqual((event["chatId"], event["reply"]), (42, False))
+        self.assertIsNone(self.window()[1])
+
+    def test_ui_open_waits_only_for_a_window_and_not_forever(self):
+        self.assertTrue(self.request(self.conn, 70, "ui.open", chatId=42)["ok"])
+        self.assertIsNone(self.request(self.conn, 71, "hello")["result"]["open"])   # the bar is no window
+        self.request(self.conn, 72, "ui.open", chatId=42)
+        with mock.patch.object(self.d, "OPEN_TTL", 0.0):
+            self.assertIsNone(self.window()[1])
+        self.request(self.conn, 73, "ui.open", chatId=42)
+        self.assertFalse(self.request(self.conn, 74, "ui.open", chatId="42")["ok"])
 
 
 class Startup(unittest.TestCase):
