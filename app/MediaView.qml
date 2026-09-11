@@ -21,6 +21,9 @@ Item {
   readonly property var content: message ? message.content : null
   readonly property string kind: content ? content.kind : ""
   readonly property var media: content && content.media ? content.media : null
+  // Never null: pieces keep evaluating for a moment while a message leaves the list,
+  // after its media is gone.
+  readonly property var info: media || ({})
   readonly property var file: media ? app.fileState(media.file) : null
   readonly property string url: file ? Model.fileUrl(file.path) : ""
   readonly property bool ready: url !== ""
@@ -78,7 +81,7 @@ Item {
 
   component Placeholder: Image {
     anchors.fill: parent
-    source: Model.miniUrl(view.media ? view.media.mini : null)
+    source: Model.miniUrl(view.media ? view.info.mini : null)
     fillMode: Image.PreserveAspectCrop
     smooth: true
   }
@@ -142,10 +145,10 @@ Item {
     Item {
       id: sticker
       property string lottie: ""
-      readonly property string format: view.media.format
+      readonly property string format: view.info.format
 
       function fetch() {
-        if (format === "tgs" && view.ready && lottie === "")
+        if (format === "tgs" && view.ready && lottie === "" && view.file && view.app)
           view.app.lottiePath(view.file.id, function (path) { sticker.lottie = path })
       }
       Component.onCompleted: fetch()
@@ -158,7 +161,7 @@ Item {
         anchors.centerIn: parent
         visible: !(format === "webp" && still.status === Image.Ready) && !(format === "tgs" && sticker.lottie !== "")
                  && !(format === "webm" && view.ready)
-        text: view.media.emoji || "🙂"
+        text: view.info.emoji || "🙂"
         font.pixelSize: Math.round(parent.height * 0.45)
         opacity: 0.35
       }
@@ -269,7 +272,7 @@ Item {
         Text {
           id: videoTime
           anchors.centerIn: parent
-          text: view.downloading ? Math.round(view.fraction * 100) + "%" : Model.formatDuration(view.media.duration)
+          text: view.downloading ? Math.round(view.fraction * 100) + "%" : Model.formatDuration(view.info.duration)
           color: "white"
           font.pixelSize: Style.font.caption
         }
@@ -343,7 +346,7 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: Style.space(10)
-        text: Model.formatDuration(view.media.duration) + (note.sound ? "" : "  󰖁")
+        text: Model.formatDuration(view.info.duration) + (note.sound ? "" : "  󰖁")
         color: "white"
         style: Text.Outline
         styleColor: Qt.rgba(0, 0, 0, 0.6)
@@ -401,7 +404,7 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         height: Style.space(28)
         spacing: Style.space(2)
-        readonly property var samples: view.media.waveform && view.media.waveform.length ? view.media.waveform : [4, 8, 12, 8, 4, 8, 12, 8]
+        readonly property var samples: view.info.waveform && view.info.waveform.length ? view.info.waveform : [4, 8, 12, 8, 4, 8, 12, 8]
         readonly property real barWidth: Math.max(1, (width - spacing * (samples.length - 1)) / samples.length)
 
         Repeater {
@@ -424,7 +427,7 @@ Item {
         id: voiceTime
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        text: voice.playing || voice.played > 0 ? Model.formatDuration(audio.position / 1000) : Model.formatDuration(view.media.duration)
+        text: voice.playing || voice.played > 0 ? Model.formatDuration(audio.position / 1000) : Model.formatDuration(view.info.duration)
         color: view.app.muted
         font.family: view.app.fontFamily
         font.pixelSize: Style.font.caption
@@ -483,8 +486,8 @@ Item {
           width: parent.width
           elide: Text.ElideMiddle
           textFormat: Text.PlainText
-          text: fileItem.isAudio && view.media.title ? (view.media.performer ? view.media.performer + " — " : "") + view.media.title
-                                                     : (view.media.fileName || "File")
+          text: fileItem.isAudio && view.info.title ? (view.info.performer ? view.info.performer + " — " : "") + view.info.title
+                                                     : (view.info.fileName || "File")
           color: view.app.foreground
           font.family: view.app.fontFamily
           font.pixelSize: Style.font.bodySmall

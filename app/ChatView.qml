@@ -237,7 +237,7 @@ FocusScope {
         readonly property var quoted: modelData.replyTo ? Model.findMessage(root.messages, modelData.replyTo.messageId) : null
         readonly property bool isCursor: index === root.cursor && messageList.activeFocus
         readonly property string label: Model.contentLabel(modelData.content)
-        readonly property bool bare: modelData.content.media && (modelData.content.kind === "sticker" || modelData.content.kind === "videoNote")
+        readonly property bool bare: !!modelData.content.media && (modelData.content.kind === "sticker" || modelData.content.kind === "videoNote")
         property alias mediaItem: mediaView
 
         width: messageList.width
