@@ -30,6 +30,7 @@ import signal
 import socket
 import stat
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -140,6 +141,8 @@ NOTIFICATION_GROUPS = 10
 QUERY_MAX = 256
 OFFSET_MAX = 512
 INT32_MAX = 2 ** 31 - 1
+INT64_MAX = 2 ** 63 - 1
+HELPER_TIMEOUT = 10.0   # seconds a short helper (omarchy-shell) may run before it is killed
 PLUGIN_ID = "reidenxerx.omagram"
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
@@ -149,6 +152,8 @@ def arg_int(args, name, low=None, high=None, default=None):
     value = args.get(name, default)
     if isinstance(value, bool) or not isinstance(value, int):
         raise BadRequest(f"{name} must be an integer")
+    if not -INT64_MAX <= value <= INT64_MAX:   # JSON integers are unbounded; TDLib's are not
+        raise BadRequest(f"{name} is out of range")
     if (low is not None and value < low) or (high is not None and value > high):
         raise BadRequest(f"{name} is out of range")
     return value
@@ -203,6 +208,7 @@ class Daemon:
         self.notifier_factory = notifier_factory or (lambda on_action: notify.Notifier(notify.GioTransport, on_action))
         self.notifier = notify.Notifier(None, None)
         self.pending_open = None   # (monotonic time, {"chatId", "reply"}) for the next window
+        self.focus_client = None   # the client whose focused chat keeps notifications quiet
         self.children = {}   # detached helpers still running: pid -> what to do if they fail
         self.state = model.State(td.MEDIA_ROOTS)
         self.td = None
@@ -456,7 +462,8 @@ class Daemon:
         def fallback():
             self.open_chat(chat_id, True)
             self.launch_window()
-        self.spawn([OMARCHY_SHELL, "shell", "summon", PLUGIN_ID, json.dumps({"chatId": chat_id})], fallback)
+        self.spawn([OMARCHY_SHELL, "shell", "summon", PLUGIN_ID, json.dumps({"chatId": chat_id})], fallback,
+                   timeout=HELPER_TIMEOUT)
 
     def open_chat(self, chat_id, reply):
         """Tell the window to open a chat, or keep the request for the window that starts next."""
@@ -470,31 +477,35 @@ class Daemon:
         """`omagram`, in its own session with no terminal: it focuses the open window or starts one."""
         self.spawn(["/usr/bin/python3", str(pathlib.Path(__file__).resolve().parent / "omagram")])
 
-    def spawn(self, argv, fallback=None):
-        """A detached helper: its own session, no terminal, no loader or Claude variables. An
-        argv list, never a shell. `fallback` runs if it cannot start or does not succeed."""
+    def spawn(self, argv, fallback=None, timeout=None):
+        """A detached helper: its own session, no terminal, no inherited descriptors (TDLib's
+        sockets and database stay here), no loader or Claude variables; an argv list, never a
+        shell. `fallback` runs if it cannot start, fails, or outlives `timeout` seconds."""
         env = {k: v for k, v in os.environ.items() if not k.startswith(("LD_", "PYTHON", "CLAUDE"))}
         env["PATH"] = safe.SAFE_PATH
         try:
-            pid = os.posix_spawn(argv[0], argv, env, setsid=True,
-                                 file_actions=[(os.POSIX_SPAWN_OPEN, 0, os.devnull, os.O_RDWR, 0),
-                                               (os.POSIX_SPAWN_DUP2, 0, 1), (os.POSIX_SPAWN_DUP2, 0, 2)])
+            proc = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
         except OSError:
             if fallback:
                 fallback()
             return
-        self.children[pid] = fallback
+        self.children[proc.pid] = (proc, fallback, time.monotonic() + timeout if timeout else None)
 
     def reap_children(self):
-        for pid, fallback in list(self.children.items()):
-            try:
-                done, status = os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                done, status = pid, 0
-            if not done:
+        now = time.monotonic()
+        for pid, (proc, fallback, deadline) in list(self.children.items()):
+            status = proc.poll()
+            if status is None and deadline is not None and now > deadline:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                status = proc.wait()
+            if status is None:
                 continue
             del self.children[pid]
-            if fallback and not (os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0):
+            if fallback and status != 0:
                 fallback()
 
     def on_me(self, user):
@@ -531,6 +542,9 @@ class Daemon:
         self.sel.register(conn, selectors.EVENT_READ, client)
 
     def drop(self, client):
+        if client is self.focus_client:   # a window that closed is not reading its chat any more
+            self.focus_client = None
+            self.notifier.focus(0)
         fd = client.sock.fileno()
         if fd in self.clients:
             del self.clients[fd]
@@ -613,7 +627,9 @@ class Daemon:
     def handle_line(self, client, line):
         try:
             request = safe.loads(line, **REQUEST_LIMITS)
-        except (ValueError, UnicodeDecodeError, safe.UnsafeError):
+            # Lone surrogates parse as JSON but are not text; TDLib's encoder would choke on them.
+            json.dumps(request, ensure_ascii=False).encode("utf-8")
+        except (ValueError, UnicodeError, RecursionError, safe.UnsafeError):
             self.respond_error(client, None, "not a JSON request")
             return
         if not isinstance(request, dict):
@@ -637,6 +653,8 @@ class Daemon:
             getattr(self, name)(client, rid, args)
         except BadRequest as e:
             self.respond_error(client, rid, str(e))
+        except Exception:   # one bad request must never take the service, and the session, down
+            self.respond_error(client, rid, "the request failed")
 
     def cmd_hello(self, client, rid, args):
         target = None
@@ -717,7 +735,9 @@ class Daemon:
                      client, rid, moved)
 
     def cmd_ui_focus(self, client, rid, args):
-        self.notifier.focus(arg_int(args, "chatId", None, None, 0))
+        chat_id = arg_int(args, "chatId", None, None, 0)
+        self.focus_client = client if chat_id else None
+        self.notifier.focus(chat_id)
         self.respond(client, rid, {})
 
     def cmd_ui_open(self, client, rid, args):

@@ -570,6 +570,17 @@ class ListsAndSearch(Harness):
         self.assertFalse(self.request(self.conn, 42, "messages.search", query="a", offset=5)["ok"])
         self.assertFalse(self.request(self.conn, 43, "messages.search", query="a", chatId="42")["ok"])
 
+    def test_hostile_lines_get_an_error_and_the_service_lives(self):
+        self.send(self.conn, b"[" * 60000)
+        self.assertFalse(self.read(self.conn, lambda v: v.get("id") is None)["ok"])
+        self.send(self.conn, b'{"id": 60, "cmd": "chats.search", "args": {"query": "\\ud800"}}')
+        self.assertFalse(self.read(self.conn, lambda v: v.get("id") in (60, None))["ok"])
+        with mock.patch.object(self.d.Daemon, "cmd_chat_list", side_effect=RuntimeError("boom")):
+            self.assertFalse(self.request(self.conn, 61, "chats.list")["ok"])
+        self.assertTrue(self.request(self.conn, 62, "chats.list")["ok"])
+        self.assertFalse(self.request(self.conn, 63, "chat.pin", chatId=10 ** 30, pinned=True)["ok"])
+        self.assertTrue(self.thread.is_alive())
+
     def test_pin_and_archive(self):
         query, reply = self.call(50, "chat.pin", "toggleChatIsPinned", {"@type": "ok"}, chatId=42, pinned=True)
         self.assertEqual((query["chat_list"], query["chat_id"], query["is_pinned"], reply["ok"]),
@@ -614,7 +625,7 @@ class Notifications(Harness):
         super().setUp()
         self.bus = self.daemon.notifier.transport
         self.spawned = []
-        self.daemon.spawn = lambda argv, fallback=None: self.spawned.append((argv, fallback))
+        self.daemon.spawn = lambda argv, fallback=None, timeout=None: self.spawned.append((argv, fallback))
         self.conn = self.connect()
         self.sign_in(self.conn)
         self.td_event({"@type": "updateNewChat", "@client_id": 1, "chat": {
@@ -711,13 +722,24 @@ class Notifications(Harness):
 
     def test_a_helper_that_fails_or_cannot_start_falls_back(self):
         del self.daemon.spawn   # the real one
-        failed, missing, succeeded = [], [], []
+        failed, missing, succeeded, hung = [], [], [], []
         self.daemon.spawn(["/usr/bin/false"], lambda: failed.append(True))
         self.daemon.spawn(["/nonexistent/omarchy-shell"], lambda: missing.append(True))
         self.daemon.spawn(["/usr/bin/true"], lambda: succeeded.append(True))
-        self.wait(lambda: failed)
+        self.daemon.spawn(["/usr/bin/sleep", "30"], lambda: hung.append(True), timeout=0.3)
+        self.wait(lambda: failed and hung)
         self.wait(lambda: not self.daemon.children)
-        self.assertEqual((failed, missing, succeeded), ([True], [True], []))
+        self.assertEqual((failed, missing, succeeded, hung), ([True], [True], [], [True]))
+
+    def test_a_closed_window_no_longer_hides_its_chat(self):
+        window, _ = self.window()
+        self.assertTrue(self.request(window, 80, "ui.focus", chatId=42)["ok"])
+        self.conns.remove(window)
+        window.sock.close()
+        self.wait(lambda: self.daemon.focus_client is None)
+        self.td_event(self.group([self.note(1, "hi")]))
+        self.settle()
+        self.assertEqual(len(self.bus.shown), 1)
 
     def test_an_open_window_hears_it_at_once(self):
         window, target = self.window()
