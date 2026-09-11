@@ -226,7 +226,9 @@ class Daemon:
             return
         extra = self.next_extra
         self.next_extra += 1
-        if client is not None:
+        # A request with no client but a transform is the service's own: its answer is
+        # handed to the transform instead of a socket.
+        if client is not None or transform is not None:
             self.pending[extra] = (client, rid, transform)
         query = dict(query)
         query["@extra"] = extra
@@ -246,6 +248,13 @@ class Daemon:
         extra = event.get("@extra")
         if isinstance(extra, int) and extra in self.pending:
             client, rid, transform = self.pending.pop(extra)
+            if client is None:
+                if event.get("@type") != "error":
+                    try:
+                        transform(event)
+                    except Exception:   # a malformed answer must not take the service down
+                        pass
+                return
             if client.sock.fileno() in self.clients:
                 if event.get("@type") == "error":
                     self.respond_error(client, rid, model._str(event.get("message"), 200), model._int(event.get("code")))
@@ -269,7 +278,7 @@ class Daemon:
         elif kind == "authorizationStateReady":
             self.set_auth({"state": "ready"})
             self.td_send({"@type": "loadChats", "chat_list": {"@type": "chatListMain"}, "limit": 100})
-            self.td_send({"@type": "getMe"})
+            self.td_send({"@type": "getMe"}, transform=self.on_me)
         elif kind == "authorizationStateClosed":
             if self.stopping:
                 self.closed.set()
@@ -294,6 +303,14 @@ class Daemon:
             self.set_auth({"state": "error", "reason": str(e)[:200]})
             return
         self.td_send(query)
+
+    def on_me(self, user):
+        uid = model._int(user.get("id"))
+        if not uid:
+            return
+        self.state.me_id = uid
+        self.state.apply({"@type": "updateUser", "user": user})
+        self.broadcast({"event": "me", "meId": uid})
 
     def set_auth(self, auth):
         self.auth = auth

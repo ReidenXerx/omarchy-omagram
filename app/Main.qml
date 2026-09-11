@@ -81,6 +81,8 @@ Scope {
         omagram.messages = ({})
         omagram.openChatId = 0
       }
+    } else if (name === "me") {
+      omagram.meId = e.meId || 0
     } else if (name === "chat") {
       omagram.chats = Model.upsertChat(omagram.chats, e.chat, "main")
     } else if (name === "message") {

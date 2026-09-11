@@ -234,7 +234,11 @@ class Service(unittest.TestCase):
         self.request(b, 1, "hello")
         self.sign_in(a)
         self.last_query("loadChats")
-        self.last_query("getMe")
+        me = self.last_query("getMe")
+        # The service's own request: its answer is kept, not sent to a socket as a response.
+        self.td_event({"@type": "user", "id": 777, "first_name": "Me", "@extra": me["@extra"], "@client_id": 1})
+        self.assertEqual(self.read(a, lambda v: v.get("event") == "me")["meId"], 777)
+        self.assertEqual(self.request(b, 5, "hello")["result"]["meId"], 777)
         self.td_event({"@type": "updateNewChat", "@client_id": 1, "chat": {
             "@type": "chat", "id": 42, "title": "Friends", "type": {"@type": "chatTypeBasicGroup"},
             "positions": [{"@type": "chatPosition", "list": {"@type": "chatListMain"}, "order": "7"}]}})
