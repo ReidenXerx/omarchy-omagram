@@ -42,7 +42,7 @@ FocusScope {
 
   Rectangle {
     anchors.fill: parent
-    color: Qt.rgba(0, 0, 0, 0.92)
+    color: Qt.rgba(0, 0, 0, 0.97)   // over the whole screen now: whatever is behind should not show through
   }
 
   MouseArea {
