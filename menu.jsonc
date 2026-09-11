@@ -1,0 +1,17 @@
+  "trigger.omagram": {
+    "icon": "󰍪",
+    "label": "Omagram",
+    "aliases": ["messages", "chat", "messenger", "telegram", "unofficial telegram"]
+  },
+  "trigger.omagram.open": {
+    "icon": "󰏌",
+    "label": "Open Omagram",
+    "aliases": ["open messages", "open chat"],
+    "action": "/usr/bin/python3 @PLUGIN_BIN@/omagram"
+  },
+  "trigger.omagram.reply": {
+    "icon": "󰑚",
+    "label": "Quick reply",
+    "aliases": ["reply", "find chat", "switch chat"],
+    "action": "omarchy-shell shell toggle reidenxerx.omagram '{}'"
+  },
