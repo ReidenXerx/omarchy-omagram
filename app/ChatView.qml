@@ -249,7 +249,10 @@ FocusScope {
           readonly property real maxWidth: Math.min(row.width * 0.72, Style.space(640))
           y: row.height - height
           x: row.modelData.outgoing ? row.width - width - Style.space(18) : Style.space(18)
-          width: Math.min(maxWidth, Math.max(body.implicitWidth, meta.implicitWidth, name.implicitWidth,
+          // Only what is shown counts: a hidden sender name or quote still has an implicit width.
+          width: Math.min(maxWidth, Math.max(body.visible ? body.implicitWidth : 0, meta.implicitWidth,
+                                            name.visible ? name.implicitWidth : 0,
+                                            kindLabel.visible ? kindLabel.implicitWidth : 0,
                                             quote.visible ? quote.implicitWidth : 0) + Style.space(24))
           height: content.implicitHeight + Style.space(16)
           radius: Style.cornerRadius * 1.5
@@ -303,6 +306,7 @@ FocusScope {
             }
 
             Text {
+              id: kindLabel
               visible: row.label !== ""
               text: row.label
               textFormat: Text.PlainText
@@ -377,7 +381,8 @@ FocusScope {
     // ------------------------------------------------ composer
     Rectangle {
       Layout.fillWidth: true
-      Layout.preferredHeight: Math.min(Style.space(180), composer.implicitHeight + Style.space(28))
+      // 20 of outer margin and 16 of inner padding around the text, plus room for the caret.
+      Layout.preferredHeight: Math.min(Style.space(180), composer.implicitHeight + Style.space(40))
       color: "transparent"
 
       Rectangle { width: parent.width; height: 1; color: app.border; opacity: 0.35 }
