@@ -1,0 +1,194 @@
+# Omagram
+
+**An unofficial Telegram client for [Omarchy](https://omarchy.org).** Omagram is not made,
+endorsed or supported by Telegram. It is built on TDLib, Telegram's own client library, and
+you sign in with an API id of your own.
+
+A keyboard-driven window in your Omarchy theme, a bar badge with a quick panel, a quick-reply
+overlay on a key, and desktop notifications you can answer without leaving what you are doing.
+
+![service](https://img.shields.io/badge/omarchy-service-blue) ![bar widget](https://img.shields.io/badge/omarchy-bar--widget-blue) ![overlay](https://img.shields.io/badge/omarchy-overlay-blue)
+
+> **Before you use it:** Telegram places accounts that sign in from unofficial clients
+> "under observation" and may limit accounts that misuse the API. Omagram uses the API as an
+> ordinary client does, but the risk is yours to take.
+
+## What it does
+
+- **Chats** — your chat list with folders as tabs, pinned and muted chats, unread counts and
+  the archive. Pin (`p`) and archive (`a`) from the keyboard.
+- **Messages** — send, reply, edit and delete, with read state kept in sync with your other
+  devices. Text is shown as plain text: bold, italics and links are not rendered yet.
+- **Media** — photos (with a full-size viewer), videos, GIFs, files, round video notes and
+  voice messages with a waveform. Send photos and files with `Ctrl+O` or by dropping them on
+  the chat.
+- **Stickers** — static, animated (TGS) and video (WebM) stickers, and a sticker picker with
+  your recent stickers and installed sets.
+- **Search** — chats in every list, and messages in all chats or in the open one.
+- **Notifications** — one per chat, replaced as messages arrive and withdrawn when you read
+  them anywhere. **Open** opens the chat; **Reply** opens the quick-reply overlay on it.
+  Telegram's own mute settings and Omarchy's Do Not Disturb apply.
+- **In the bar** — a message icon with a dot while unmuted chats have unread messages. Left
+  click opens a panel of recent chats where you can reply inline; right click opens the window.
+- **Quick reply** — an overlay to find a chat by typing, read its latest messages and answer.
+
+Not supported yet: secret chats, calls, signing in by QR code, creating groups or channels,
+reactions, and rendering formatting or clickable links. Polls, contacts, locations and service
+messages show as a short label.
+
+## Requirements
+
+Omarchy with Hyprland 0.56 or newer, and these packages (most are already on a stock install):
+
+```bash
+sudo pacman -S --needed qt6-multimedia qt6-multimedia-ffmpeg qt6-lottie libsecret python-gobject
+```
+
+TDLib is not packaged for Arch, so Omagram builds the exact version it was tested with (1.8.67)
+into your home directory. That needs, once:
+
+```bash
+sudo pacman -S --needed git cmake gperf clang openssl zlib
+```
+
+## Install
+
+```bash
+omarchy plugin add https://github.com/ReidenXerx/omagram.git --enable
+~/.config/omarchy/plugins/reidenxerx.omagram/bin/omagram-build-tdlib
+```
+
+The build takes about ten minutes and roughly 2 GB of memory per parallel job (it picks the
+job count from your memory). Nothing is installed system-wide and nothing needs root:
+the library ends up in `~/.local/share/omagram/lib/`. `omagram-build-tdlib --check` tells you
+whether a usable library is installed.
+
+Optionally add Omagram to the Omarchy menu (Trigger → Omagram):
+
+```bash
+~/.config/omarchy/plugins/reidenxerx.omagram/bin/omagram-menu-install
+```
+
+## Sign in
+
+1. Create your own API id at [my.telegram.org](https://my.telegram.org) → *API development
+   tools*. Telegram requires every client to use its own id; Omagram does not ship one.
+2. Open Omagram — from the menu, by right-clicking the bar icon, or with
+   `/usr/bin/python3 ~/.config/omarchy/plugins/reidenxerx.omagram/bin/omagram`.
+3. Enter the API id and hash, then your phone number, the code Telegram sends you, and your
+   two-step verification password if you have one.
+
+The API id and hash go straight into your keyring; they are never written to a file.
+
+## Keys
+
+**Window**
+
+| key | action |
+|---|---|
+| `Ctrl+K` / `Ctrl+F` | search chats and messages |
+| `Ctrl+Shift+F` | search in the open chat |
+| `Alt+↑` / `Alt+↓` | previous / next chat |
+| `Ctrl+PgUp` / `Ctrl+PgDn`, `Ctrl+[` / `Ctrl+]` | previous / next folder tab |
+| `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | chat list / messages / composer |
+
+**Chat list**
+
+| key | action |
+|---|---|
+| `↑` `↓` or `j` `k`, `g` / `G` | move, first / last |
+| `Enter`, `l` or `→` | open the chat (or the message found) |
+| `/` | search |
+| `[` / `]` | previous / next tab |
+| `p` | pin or unpin |
+| `a` | archive or unarchive |
+| `Tab` | go to the open chat |
+
+**Messages**
+
+| key | action |
+|---|---|
+| `↑` `↓` or `j` `k` | select a message |
+| `Enter` or `o` | download or open its media |
+| `Space` | play or pause |
+| `r` / `e` / `y` | reply / edit yours / copy |
+| `d` or `Delete` | delete (press again to confirm) |
+| `Esc` or `i` | back to the composer |
+
+**Composer**
+
+| key | action |
+|---|---|
+| `Enter` / `Shift+Enter` | send / new line |
+| `↑` in an empty composer | edit your last message |
+| `Esc` | cancel a reply or edit |
+| `Ctrl+O` / `Ctrl+Shift+O` | attach photos / send files uncompressed |
+| `Ctrl+S` | stickers (arrows or `hjkl`, `Tab` switches sets, `Enter` sends) |
+
+**From anywhere** — bind these to keys you like:
+
+```bash
+omarchy-shell shell toggle reidenxerx.omagram '{}'   # quick reply: find a chat and answer
+omarchy-shell reidenxerx.omagram.panel toggle        # the bar panel
+```
+
+In the quick-reply overlay: type to search, `↑` `↓` or `Ctrl+J` `Ctrl+K` to choose, `Enter`
+to reply and `Enter` again to send, `Ctrl+O` to open the chat in the window, `Esc` to go back.
+
+## How it is put together
+
+- **`bin/omagramd`** — the service. It holds the Telegram session through TDLib and serves
+  the window, the bar and the overlay over a Unix socket. Omarchy's shell keeps it running;
+  the window starts it too if needed, and only one instance ever runs.
+- **`bin/omagram`** — opens or focuses the window, a separate Quickshell process with its own
+  Hyprland class `omagram`, so it tiles and takes window rules like any application.
+  `omagram --chat <id>` opens it at a chat.
+- **`shell/`** — the parts that live inside Omarchy's shell: the service entry, the bar widget
+  and its panel, and the quick-reply overlay.
+
+## Privacy and security
+
+- **Your data stays on your machine**, in `~/.local/share/omagram` (TDLib's database, encrypted
+  with a key kept in your keyring, and downloaded files) and `~/.cache/omagram` (the TDLib
+  build and unpacked animated stickers). Omagram sends nothing anywhere except to Telegram.
+- **Secrets are never in files, command lines or logs.** The API id, hash and database key
+  move through `secret-tool` on stdin and stdout. TDLib's own log is off, because at higher
+  verbosity it records message text.
+- **Only you can talk to the service.** Its socket is `0600` in your runtime directory, and it
+  checks every connection's user id.
+- **Telegram content is shown as text.** Names, messages and previews are always rendered as
+  plain text, and notification bodies are escaped, because Omarchy's notifications render
+  markup and links.
+- **Bounded and checked.** Every request is validated field by field; network strings, lists
+  and animated stickers are size-capped; files you send must be regular, readable files of at
+  most 2 GB outside Omagram's own database; helpers run by absolute path as argument lists,
+  never through a shell.
+- **The library is only loaded if it is safe to.** `libtdjson.so` is used only if it is a
+  regular file you own that nobody else can write, in directories you own.
+
+`bin/plugin_safety.py` is a shared safety library vendored unchanged into each of these plugins.
+
+```bash
+python3 tests/state_test.py     # TDLib objects → what the UI sees, hostile values
+python3 tests/daemon_test.py    # the service on a sandboxed socket with a fake TDLib
+python3 tests/notify_test.py    # notifications with a fake bus
+node tests/model-test.js        # the window's list and message logic
+```
+
+## Remove
+
+```bash
+bin/omagram-menu-install remove                 # if you added the menu entries
+omarchy plugin remove reidenxerx.omagram
+rm -rf ~/.local/share/omagram ~/.cache/omagram  # the session, downloads and the TDLib build
+secret-tool clear service omagram               # the API id, hash and database key
+```
+
+Removing the data does not end the session on Telegram's side: to do that, terminate it from
+Settings → Devices in another Telegram app.
+
+## License
+
+MIT. TDLib is © Aliaksei Levin and Arseny Smirnov, under the Boost Software License 1.0;
+Omagram downloads and builds it on your machine and does not redistribute it. Omagram is an
+independent project and is not affiliated with Telegram.
