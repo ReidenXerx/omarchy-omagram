@@ -286,7 +286,8 @@ class State:
             "unread": chat["unread"],
             "mentions": chat["mentions"],
             "muted": chat["muteFor"] > 0,
-            "order": main.get("order", 0),
+            # int64 order, as text: a JavaScript number would round it and shuffle the list.
+            "order": str(main.get("order", 0)),
             "pinned": main.get("pinned", False),
             "archived": "archive" in chat["positions"],
             "lists": sorted(chat["positions"]),

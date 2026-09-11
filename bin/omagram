@@ -1,0 +1,156 @@
+#!/usr/bin/python3
+"""Open Omagram's window, or focus it if it is already open.
+
+  omagram             open or focus the window (starting the service if needed)
+  omagram --service   only make sure the background service is running
+
+The window is its own Quickshell process with the app id "omagram", so Hyprland treats it
+like any application window: it tiles, sits on a workspace and matches window rules. It
+reuses Omarchy's theme modules (qs.Commons, qs.Ui) through a private runtime directory
+that links them in:
+
+  $XDG_RUNTIME_DIR/omagram/app/
+    shell.qml  (generated, fixed text)
+    App     -> <plugin>/app
+    bin     -> <plugin>/bin
+    Commons -> <Omarchy>/shell/Commons
+    Ui      -> <Omarchy>/shell/Ui
+"""
+import json
+import os
+import pathlib
+import socket
+import stat
+import sys
+import time
+
+sys.dont_write_bytecode = True
+BIN = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(BIN))
+import plugin_safety as safe  # noqa: E402
+
+PLUGIN = BIN.parent
+RUN = pathlib.Path(safe.runtime_dir()) / "omagram"
+SOCKET = RUN / "omagram.sock"
+APP_ROOT = RUN / "app"
+APP_ID = "omagram"
+OMARCHY_DEFAULT = "/usr/share/omarchy"
+SERVICE_WAIT = 10.0
+SHELL_QML = 'import Quickshell\nimport "App" as App\n\nShellRoot {\n  App.Main {}\n}\n'
+
+
+def service_running():
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
+    sock.settimeout(0.5)
+    try:
+        sock.connect(str(SOCKET))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def child_env(extra=None):
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("LD_", "PYTHON", "CLAUDE"))}
+    env["PATH"] = safe.SAFE_PATH
+    env.update(extra or {})
+    return env
+
+
+def start_service():
+    """Start omagramd fully detached: its own session, no terminal, not our child."""
+    if service_running():
+        return True
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.setsid()
+            if os.fork() > 0:
+                os._exit(0)
+            devnull = os.open(os.devnull, os.O_RDWR)
+            for fd in (0, 1, 2):
+                os.dup2(devnull, fd)
+            os.execve("/usr/bin/python3", ["/usr/bin/python3", str(BIN / "omagramd")], child_env())
+        finally:
+            os._exit(127)
+    os.waitpid(pid, 0)
+    deadline = time.monotonic() + SERVICE_WAIT
+    while time.monotonic() < deadline:
+        if service_running():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def omarchy_shell():
+    """Omarchy's shell modules, only from a root-owned installation."""
+    shell = pathlib.Path(os.environ.get("OMARCHY_PATH") or OMARCHY_DEFAULT) / "shell"
+    for name in ("Commons", "Ui"):
+        st = os.stat(shell / name)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
+            raise safe.UnsafeError(f"{shell / name} is not a root-owned Omarchy directory")
+    return shell
+
+
+def link(name, target):
+    path = APP_ROOT / name
+    try:
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode) and os.readlink(path) == str(target):
+            return
+        if not stat.S_ISLNK(st.st_mode):
+            raise safe.UnsafeError(f"{path} exists and is not a link")
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    os.symlink(str(target), str(path))
+
+
+def prepare_root():
+    shell = omarchy_shell()
+    safe.ensure_dir(APP_ROOT, 0o700)
+    link("App", PLUGIN / "app")
+    link("bin", BIN)
+    link("Commons", shell / "Commons")
+    link("Ui", shell / "Ui")
+    safe.write_file(APP_ROOT / "shell.qml", SHELL_QML, mode=0o600)
+
+
+def focus_existing():
+    try:
+        r = safe.run(["hyprctl", "-j", "clients"], timeout=4, max_output=4 * 1024 * 1024)
+        clients = safe.loads(r.stdout, max_depth=8, max_items=200000, max_string=1 << 16) if r.ok else []
+    except (OSError, ValueError, safe.UnsafeError):
+        return False
+    for client in clients if isinstance(clients, list) else []:
+        if isinstance(client, dict) and client.get("class") == APP_ID and isinstance(client.get("address"), str):
+            address = client["address"]
+            if len(address) <= 18 and address.startswith("0x") and all(c in "0123456789abcdefABCDEF" for c in address[2:]):
+                safe.run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{address}" }})'],
+                         timeout=4, max_output=4096)
+                return True
+    return False
+
+
+def main(argv):
+    if argv[1:] == ["--service"]:
+        return 0 if start_service() else 1
+    if argv[1:]:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    start_service()   # the window shows the service's state, including "not running"
+    if focus_existing():
+        return 0
+    prepare_root()
+    quickshell = str(safe.tool("quickshell"))
+    os.execve(quickshell, ["quickshell", "--no-duplicate", "--path", str(APP_ROOT)],
+              child_env({"QS_APP_ID": APP_ID}))
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except (safe.UnsafeError, OSError) as e:
+        print(f"omagram: {e}", file=sys.stderr)
+        sys.exit(1)
