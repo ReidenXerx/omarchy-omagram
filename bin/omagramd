@@ -137,6 +137,9 @@ def local_upload(path):
 
 
 NOTIFICATION_GROUPS = 10
+QUERY_MAX = 256
+OFFSET_MAX = 512
+INT32_MAX = 2 ** 31 - 1
 PLUGIN_ID = "reidenxerx.omagram"
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
@@ -149,6 +152,21 @@ def arg_int(args, name, low=None, high=None, default=None):
     if (low is not None and value < low) or (high is not None and value > high):
         raise BadRequest(f"{name} is out of range")
     return value
+
+
+def arg_list(args, name="list"):
+    """A chat list by its UI key -- main, archive or folder:<id> -- and as TDLib's ChatList."""
+    key = args.get(name, "main")
+    if not isinstance(key, str) or not re.fullmatch(r"main|archive|folder:[1-9][0-9]{0,9}", key):
+        raise BadRequest(f"{name} is main, archive or folder:<id>")
+    if key == "main":
+        return key, {"@type": "chatListMain"}
+    if key == "archive":
+        return key, {"@type": "chatListArchive"}
+    folder = int(key.split(":")[1])
+    if folder > INT32_MAX:
+        raise BadRequest(f"{name} is main, archive or folder:<id>")
+    return key, {"@type": "chatListFolder", "chat_folder_id": folder}
 
 
 def arg_str(args, name, max_len, min_len=1):
@@ -627,8 +645,69 @@ class Daemon:
             if self.pending_open and time.monotonic() - self.pending_open[0] < OPEN_TTL:
                 target = self.pending_open[1]
             self.pending_open = None
-        self.respond(client, rid, {"version": VERSION, "auth": self.auth, "meId": self.state.me_id,
-                                   "chats": self.state.chat_list("main", 100), "open": target})
+        answer = {"version": VERSION, "auth": self.auth, "meId": self.state.me_id,
+                  "chats": self.state.chat_list("main", 100), "open": target,
+                  "folders": self.state.folders, "mainPosition": self.state.main_position}
+        if client.window:
+            answer["allChats"] = self.state.all_chats()   # the window's tabs need every list
+        self.respond(client, rid, answer)
+
+    def found_messages(self, event):
+        found = (self.state.message(m) for m in model._list(event.get("messages"), 100))
+        return [m for m in found if m]
+
+    def cmd_chats_search(self, client, rid, args):
+        query = arg_str(args, "query", QUERY_MAX)
+        limit = arg_int(args, "limit", 1, 100, 30)
+        server = args.get("server") is True
+
+        def found(event):
+            ids = [model._int(i) for i in model._list(event.get("chat_ids"), 100)]
+            views = (self.state.chat_view(i) for i in ids if i)
+            return {"query": query, "server": server, "chats": [v for v in views if v]}
+        self.td_send({"@type": "searchChatsOnServer" if server else "searchChats", "query": query,
+                      "type_filter": None, "limit": limit}, client, rid, found)
+
+    def cmd_messages_search(self, client, rid, args):
+        query = arg_str(args, "query", QUERY_MAX)
+        limit = arg_int(args, "limit", 1, 100, 30)
+        if args.get("chatId") is not None:
+            chat_id = arg_int(args, "chatId")
+            request = {"@type": "searchChatMessages", "chat_id": chat_id, "topic_id": None, "query": query,
+                       "sender_id": None, "from_message_id": arg_int(args, "fromMessageId", 0, None, 0),
+                       "offset": 0, "limit": limit, "filter": None}
+
+            def found(event):
+                return {"query": query, "chatId": chat_id, "messages": self.found_messages(event),
+                        "total": model._int(event.get("total_count")),
+                        "nextFromMessageId": model._int(event.get("next_from_message_id"))}
+        else:
+            offset = args.get("offset", "")
+            if not isinstance(offset, str) or len(offset) > OFFSET_MAX:
+                raise BadRequest("offset is the text a previous search returned")
+            request = {"@type": "searchMessages", "chat_list": None, "query": query, "offset": offset,
+                       "limit": limit, "filter": None, "chat_type_filter": None, "min_date": 0, "max_date": 0}
+
+            def found(event):
+                return {"query": query, "chatId": 0, "messages": self.found_messages(event),
+                        "total": model._int(event.get("total_count")),
+                        "nextOffset": model._str(event.get("next_offset"), OFFSET_MAX)}
+        self.td_send(request, client, rid, found)
+
+    def cmd_chat_pin(self, client, rid, args):
+        _, chat_list = arg_list(args)
+        pinned = args.get("pinned")
+        if not isinstance(pinned, bool):
+            raise BadRequest("pinned must be true or false")
+        self.td_send({"@type": "toggleChatIsPinned", "chat_list": chat_list,
+                      "chat_id": arg_int(args, "chatId"), "is_pinned": pinned}, client, rid)
+
+    def cmd_chat_archive(self, client, rid, args):
+        archived = args.get("archived")
+        if not isinstance(archived, bool):
+            raise BadRequest("archived must be true or false")
+        self.td_send({"@type": "addChatToList", "chat_id": arg_int(args, "chatId"),
+                      "chat_list": {"@type": "chatListArchive" if archived else "chatListMain"}}, client, rid)
 
     def cmd_ui_focus(self, client, rid, args):
         self.notifier.focus(arg_int(args, "chatId", None, None, 0))
@@ -676,15 +755,15 @@ class Daemon:
 
     def cmd_chats_load(self, client, rid, args):
         limit = arg_int(args, "limit", 1, 500, 100)
+        key, chat_list = arg_list(args)
 
         def done(event):
-            return {"done": False}
-        self.td_send({"@type": "loadChats", "chat_list": {"@type": "chatListMain"}, "limit": limit}, client, rid, done)
+            return {"list": key, "done": False}
+        # TDLib answers 404 once the whole list is loaded.
+        self.td_send({"@type": "loadChats", "chat_list": chat_list, "limit": limit}, client, rid, done)
 
     def cmd_chat_list(self, client, rid, args):
-        key = args.get("list", "main")
-        if not isinstance(key, str) or not re.fullmatch(r"main|archive|folder:[0-9]{1,10}", key):
-            raise BadRequest("list is main, archive or folder:<id>")
+        key, _ = arg_list(args)
         self.respond(client, rid, {"chats": self.state.chat_list(key, arg_int(args, "limit", 1, 500, 200))})
 
     def cmd_chat_history(self, client, rid, args):
@@ -856,6 +935,10 @@ COMMANDS = {
     "sticker.lottie": ("cmd_sticker_lottie", True),
     "ui.focus": ("cmd_ui_focus", True),
     "ui.open": ("cmd_ui_open", True),
+    "chats.search": ("cmd_chats_search", True),
+    "messages.search": ("cmd_messages_search", True),
+    "chat.pin": ("cmd_chat_pin", True),
+    "chat.archive": ("cmd_chat_archive", True),
 }
 
 

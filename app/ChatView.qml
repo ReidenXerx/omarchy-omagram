@@ -46,6 +46,19 @@ FocusScope {
     messageList.positionViewAtIndex(root.cursor, ListView.Contain)
   }
 
+  // A message found by search: the cursor goes to it if it is loaded.
+  function focusMessage(messageId) {
+    for (var i = 0; i < root.messages.length; i++) {
+      if (root.messages[i].id !== messageId) continue
+      root.cursor = i
+      root.stickToBottom = false
+      messageList.forceActiveFocus()
+      messageList.positionViewAtIndex(i, ListView.Center)
+      return true
+    }
+    return false
+  }
+
   function resetForChat() {
     root.replyToId = 0
     root.editingId = 0

@@ -30,6 +30,35 @@ def text_message(mid, cid, text, sender=7, entities=(), outgoing=False, **extra)
     return m
 
 
+class Lists(unittest.TestCase):
+    def test_folders_come_as_plain_names_in_order(self):
+        s = model.State()
+        out = s.apply({"@type": "updateChatFolders", "main_chat_list_position": 1, "chat_folders": [
+            {"@type": "chatFolderInfo", "id": 3, "name": {"text": {"text": "Work\n  <b>stuff</b>", "entities": []}},
+             "icon": {"name": "Work"}},
+            {"@type": "chatFolderInfo", "id": 0, "name": {"text": {"text": "bad id"}}},
+            {"@type": "chatFolderInfo", "id": 5, "name": "garbage"},
+            "junk"]})
+        self.assertEqual(out, [{"event": "folders", "mainPosition": 1, "folders": [
+            {"id": 3, "name": "Work <b>stuff</b>", "icon": "Work"},
+            {"id": 5, "name": "Folder", "icon": ""}]}])
+        s.apply({"@type": "updateChatFolders", "chat_folders": "nope", "main_chat_list_position": -4})
+        self.assertEqual((s.folders, s.main_position), ([], 0))
+
+    def test_positions_per_list_and_every_chat(self):
+        s = model.State()
+        s.apply({"@type": "updateNewChat", "chat": chat(1, "In main", order="50")})
+        s.apply({"@type": "updateNewChat", "chat": chat(2, "Archived", order="70", lists=("chatListArchive",))})
+        s.apply({"@type": "updateNewChat", "chat": chat(3, "Nowhere", order="0")})
+        s.apply({"@type": "updateChatPosition", "chat_id": 1, "position": {
+            "@type": "chatPosition", "list": {"@type": "chatListFolder", "chat_folder_id": 3},
+            "order": "9223372036854775807", "is_pinned": True}})
+        view = s.chat_view(1)
+        self.assertEqual(view["positions"], {"main": {"order": "50", "pinned": False},
+                                             "folder:3": {"order": "9223372036854775807", "pinned": True}})
+        self.assertEqual([c["id"] for c in s.all_chats()], [1, 2])
+
+
 class Formatting(unittest.TestCase):
     def test_entities_are_kept_only_when_they_fit(self):
         text, entities = model.formatted({"text": "hi 👋 bold link", "entities": [

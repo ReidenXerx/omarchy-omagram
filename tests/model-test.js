@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, sortChats, upsertChat, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode }", box)
 const M = box.M
 const plain = v => JSON.parse(JSON.stringify(v))
 const eq = (a, b, msg) => assert.deepStrictEqual(plain(a), plain(b), msg)
@@ -29,6 +29,27 @@ test("int64 orders compare exactly, beyond double precision", () => {
   assert.strictEqual(M.compareOrder("007", "7"), 0)
   assert.strictEqual(M.compareOrder("junk", "0"), 0)
   eq(M.sortChats([chat(1, "9223372036854775806"), chat(2, "9223372036854775807"), chat(3, "5")]).map(c => c.id), [2, 1, 3])
+})
+
+test("chats per list: order and pin in each list, tabs in Telegram's order", () => {
+  const c1 = { id: 1, positions: { main: { order: "50", pinned: false }, "folder:3": { order: "9", pinned: true } } }
+  const c2 = { id: 2, positions: { archive: { order: "70", pinned: false } } }
+  const c3 = { id: 3, positions: { main: { order: "60", pinned: true } } }
+  const all = [c1, c2, c3]
+  eq(M.chatsIn(all, "main").map(c => c.id), [3, 1])
+  eq(M.chatsIn(all, "archive").map(c => c.id), [2])
+  eq(M.chatsIn(all, "folder:3").map(c => c.id), [1])
+  assert.strictEqual(M.pinnedIn(c1, "folder:3"), true)
+  assert.strictEqual(M.pinnedIn(c1, "main"), false)
+  assert.strictEqual(M.orderIn(c2, "main"), "0")
+  assert.strictEqual(M.orderIn(chat(9, 12), "main"), "12")   // views without positions
+  const known = M.upsertKnown(all, { id: 1, positions: { archive: { order: "80" } } })
+  eq(known.map(c => c.id), [2, 3, 1])
+  eq(M.chatsIn(known, "archive").map(c => c.id), [1, 2])
+  eq(M.chatsIn(known, "main").map(c => c.id), [3])
+  eq(M.listTabs([{ id: 3, name: "Work" }, { id: 5, name: "" }, { id: 0 }], 1).map(t => t.key + "=" + t.title),
+     ["folder:3=Work", "main=All", "folder:5=Folder", "archive=Archive"])
+  eq(M.listTabs(null, 9).map(t => t.key), ["main", "archive"])
 })
 
 test("upsert replaces, reorders and drops chats that left the list", () => {

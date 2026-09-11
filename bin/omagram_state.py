@@ -14,6 +14,7 @@ NAME_MAX = 128
 URL_MAX = 2048
 ENTITIES_MAX = 512
 LIST_MAX = 500
+FOLDERS_MAX = 64
 
 ENTITY_TYPES = {
     "textEntityTypeBold": "bold",
@@ -381,6 +382,8 @@ class State:
         self.chats = {}
         self.users = {}
         self.me_id = 0
+        self.folders = []          # [{"id", "name", "icon"}] in Telegram's order
+        self.main_position = 0     # where "All chats" sits among the folders
         # TDLib's files directory: only paths inside it are ever handed to the UI.
         self.files_root = files_root
         self.file_marks = {}
@@ -471,6 +474,9 @@ class State:
             "pinned": main.get("pinned", False),
             "archived": "archive" in chat["positions"],
             "lists": sorted(chat["positions"]),
+            # Every list the chat is in, with its order there (as text) and whether it is pinned there.
+            "positions": {key: {"order": str(pos["order"]), "pinned": pos["pinned"]}
+                          for key, pos in chat["positions"].items()},
             "lastReadInbox": chat["lastReadInbox"],
             "lastReadOutbox": chat["lastReadOutbox"],
             "lastMessage": chat["lastMessage"],
@@ -480,6 +486,15 @@ class State:
         rows = [(chat["positions"][key]["order"], cid) for cid, chat in self.chats.items() if key in chat["positions"]]
         rows.sort(reverse=True)
         return [self.chat_view(cid) for _, cid in rows[:limit]]
+
+    def all_chats(self, limit=LIST_MAX):
+        """Every known chat that is in some list: the main list in order, then the rest."""
+        rows = sorted((cid for cid, c in self.chats.items() if c["positions"]),
+                      key=lambda cid: (-self.chats[cid]["positions"].get("main", {}).get("order", 0), cid))
+        return [self.chat_view(cid) for cid in rows[:limit]]
+
+    def folders_event(self):
+        return {"event": "folders", "folders": self.folders, "mainPosition": self.main_position}
 
     def _new_chat(self, value):
         c = _obj(value, "chat")
@@ -578,6 +593,20 @@ class State:
             return []
         chat["muteFor"] = max(0, _int(_obj(u.get("notification_settings")).get("mute_for")))
         return self._chat_event(chat["id"])
+
+    def _on_updateChatFolders(self, u):
+        folders = []
+        for info in _list(u.get("chat_folders"), FOLDERS_MAX):
+            f = _obj(info, "chatFolderInfo")
+            fid = _int(f.get("id"))
+            if fid <= 0:
+                continue
+            name, _ = formatted(_obj(f.get("name")).get("text"))
+            folders.append({"id": fid, "name": " ".join(_str(name, NAME_MAX).split()) or "Folder",
+                            "icon": _str(_obj(f.get("icon")).get("name"), 32)})
+        self.folders = folders
+        self.main_position = max(0, _int(u.get("main_chat_list_position")))
+        return [self.folders_event()]
 
     def _on_updateUser(self, u):
         user = _obj(u.get("user"), "user")

@@ -494,6 +494,97 @@ class Sending(Harness):
             self.assertFalse(self.request(self.conn, 53, "stickers.set", setId=bad)["ok"], bad)
 
 
+class ListsAndSearch(Harness):
+    def setUp(self):
+        super().setUp()
+        self.conn = self.connect()
+        self.sign_in(self.conn)
+        self.td_event({"@type": "updateNewChat", "@client_id": 1, "chat": {
+            "@type": "chat", "id": 42, "title": "Friends", "type": {"@type": "chatTypeBasicGroup"},
+            "positions": [{"@type": "chatPosition", "list": {"@type": "chatListMain"}, "order": "7"}]}})
+        self.read(self.conn, lambda v: v.get("event") == "chat")
+
+    def call(self, rid, cmd, kind, result, **args):
+        """Send a command, answer the TDLib query it makes, return (query, reply)."""
+        before = self.fake.sent_types().count(kind)
+        self.send(self.conn, {"id": rid, "cmd": cmd, "args": args})
+        self.wait(lambda: self.fake.sent_types().count(kind) > before)
+        query = [q for q in self.fake.sent if q.get("@type") == kind][-1]
+        self.td_event(dict(result, **{"@extra": query["@extra"], "@client_id": 1}))
+        return query, self.read(self.conn, lambda v: v.get("id") == rid)
+
+    def test_folders_reach_the_ui_and_a_window_hello(self):
+        self.td_event({"@type": "updateChatFolders", "@client_id": 1, "main_chat_list_position": 0, "chat_folders": [
+            {"@type": "chatFolderInfo", "id": 3, "name": {"text": {"text": "Work"}}, "icon": {"name": "Work"}}]})
+        event = self.read(self.conn, lambda v: v.get("event") == "folders")
+        self.assertEqual(event["folders"], [{"id": 3, "name": "Work", "icon": "Work"}])
+        bar = self.request(self.conn, 1, "hello")["result"]
+        self.assertEqual((bar["folders"][0]["id"], "allChats" in bar), (3, False))
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(str(self.d.SOCKET))
+        sock.settimeout(5)
+        window = self.Conn(sock)
+        self.conns.append(window)
+        result = self.request(window, 2, "hello", window=True)["result"]
+        self.assertEqual([c["id"] for c in result["allChats"]], [42])
+
+    def test_lists_load_by_key_and_bad_keys_are_refused(self):
+        query, reply = self.call(10, "chats.load", "loadChats", {"@type": "ok"}, list="folder:3", limit=50)
+        self.assertEqual((query["chat_list"], query["limit"], reply["result"]["list"]),
+                         ({"@type": "chatListFolder", "chat_folder_id": 3}, 50, "folder:3"))
+        query, _ = self.call(11, "chats.load", "loadChats", {"@type": "ok"}, list="archive")
+        self.assertEqual(query["chat_list"], {"@type": "chatListArchive"})
+        for rid, bad in enumerate(("folder:0", "folder:99999999999", "folder:-1", "main;rm", 5), start=12):
+            self.assertFalse(self.request(self.conn, rid, "chats.load", list=bad)["ok"], bad)
+        self.assertEqual(self.request(self.conn, 20, "chats.list", list="main")["result"]["chats"][0]["id"], 42)
+
+    def test_chat_search_local_and_on_the_server(self):
+        query, reply = self.call(30, "chats.search", "searchChats", {"@type": "chats", "total_count": 2,
+                                                                     "chat_ids": [42, 999]}, query="fri")
+        self.assertEqual((query["query"], query["type_filter"], query["limit"]), ("fri", None, 30))
+        self.assertEqual([c["id"] for c in reply["result"]["chats"]], [42])   # unknown ids are skipped
+        query, reply = self.call(31, "chats.search", "searchChatsOnServer", {"@type": "chats", "chat_ids": []},
+                                 query="fri", server=True, limit=5)
+        self.assertEqual((query["limit"], reply["result"]["server"]), (5, True))
+        self.assertFalse(self.request(self.conn, 32, "chats.search", query="")["ok"])
+        self.assertFalse(self.request(self.conn, 33, "chats.search", query="x" * 300)["ok"])
+
+    def test_message_search_everywhere_and_in_one_chat(self):
+        found = {"@type": "message", "id": 500, "chat_id": 42, "date": 1, "is_outgoing": False,
+                 "sender_id": {"@type": "messageSenderChat", "chat_id": 42},
+                 "content": {"@type": "messageText", "text": {"text": "lunch?", "entities": []}}}
+        query, reply = self.call(40, "messages.search", "searchMessages",
+                                 {"@type": "foundMessages", "total_count": 1, "messages": [found, "junk"],
+                                  "next_offset": "abc"}, query="lunch")
+        self.assertEqual({k: query[k] for k in ("chat_list", "offset", "filter", "chat_type_filter", "min_date")},
+                         {"chat_list": None, "offset": "", "filter": None, "chat_type_filter": None, "min_date": 0})
+        result = reply["result"]
+        self.assertEqual(([m["id"] for m in result["messages"]], result["nextOffset"], result["chatId"]),
+                         ([500], "abc", 0))
+        query, reply = self.call(41, "messages.search", "searchChatMessages",
+                                 {"@type": "foundChatMessages", "total_count": 1, "messages": [found],
+                                  "next_from_message_id": 480}, query="lunch", chatId=42, fromMessageId=900, limit=10)
+        self.assertEqual({k: query[k] for k in ("chat_id", "from_message_id", "limit", "sender_id", "topic_id")},
+                         {"chat_id": 42, "from_message_id": 900, "limit": 10, "sender_id": None, "topic_id": None})
+        self.assertEqual(reply["result"]["nextFromMessageId"], 480)
+        self.assertFalse(self.request(self.conn, 42, "messages.search", query="a", offset=5)["ok"])
+        self.assertFalse(self.request(self.conn, 43, "messages.search", query="a", chatId="42")["ok"])
+
+    def test_pin_and_archive(self):
+        query, reply = self.call(50, "chat.pin", "toggleChatIsPinned", {"@type": "ok"}, chatId=42, pinned=True)
+        self.assertEqual((query["chat_list"], query["chat_id"], query["is_pinned"], reply["ok"]),
+                         ({"@type": "chatListMain"}, 42, True, True))
+        query, _ = self.call(51, "chat.pin", "toggleChatIsPinned", {"@type": "ok"}, chatId=42, pinned=False,
+                             list="folder:3")
+        self.assertEqual(query["chat_list"], {"@type": "chatListFolder", "chat_folder_id": 3})
+        query, _ = self.call(52, "chat.archive", "addChatToList", {"@type": "ok"}, chatId=42, archived=True)
+        self.assertEqual(query["chat_list"], {"@type": "chatListArchive"})
+        query, _ = self.call(53, "chat.archive", "addChatToList", {"@type": "ok"}, chatId=42, archived=False)
+        self.assertEqual(query["chat_list"], {"@type": "chatListMain"})
+        self.assertFalse(self.request(self.conn, 54, "chat.pin", chatId=42, pinned="yes")["ok"])
+        self.assertFalse(self.request(self.conn, 55, "chat.archive", chatId=42)["ok"])
+
+
 class FakeNotifierTransport:
     """The bus, faked. Clicks are queued and delivered from pump(), on the service's own
     thread, the way Gio delivers real signals."""

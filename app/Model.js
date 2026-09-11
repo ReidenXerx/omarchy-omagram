@@ -34,9 +34,24 @@ function compareOrder(a, b) {
   return a < b ? -1 : (a > b ? 1 : 0)
 }
 
-function sortChats(chats) {
+// A chat's order in one list, as text; "0" when it is not in that list.
+function orderIn(chat, listKey) {
+  var key = listKey || "main"
+  if (!isObject(chat)) return "0"
+  if (isObject(chat.positions)) return isObject(chat.positions[key]) ? String(chat.positions[key].order) : "0"
+  return key === "main" && Array.isArray(chat.lists) && chat.lists.indexOf("main") >= 0 ? String(chat.order) : "0"
+}
+
+function pinnedIn(chat, listKey) {
+  var key = listKey || "main"
+  if (isObject(chat) && isObject(chat.positions)) return isObject(chat.positions[key]) && chat.positions[key].pinned === true
+  return key === "main" && isObject(chat) && chat.pinned === true
+}
+
+function sortChats(chats, listKey) {
+  var key = listKey || "main"
   var list = Array.isArray(chats) ? chats.filter(function (c) { return isObject(c) && typeof c.id === "number" }) : []
-  return list.sort(function (x, y) { return compareOrder(y.order, x.order) || (x.id - y.id) }).slice(0, CHATS_MAX)
+  return list.sort(function (x, y) { return compareOrder(orderIn(y, key), orderIn(x, key)) || (x.id - y.id) }).slice(0, CHATS_MAX)
 }
 
 // Insert or replace one chat; a chat that has left the list (order 0, archived) drops out.
@@ -44,8 +59,35 @@ function upsertChat(chats, chat, listKey) {
   if (!isObject(chat) || typeof chat.id !== "number") return chats
   var key = listKey || "main"
   var out = chats.filter(function (c) { return c.id !== chat.id })
-  if (Array.isArray(chat.lists) && chat.lists.indexOf(key) >= 0 && compareOrder(chat.order, "0") > 0) out.push(chat)
-  return sortChats(out)
+  if (compareOrder(orderIn(chat, key), "0") > 0) out.push(chat)
+  return sortChats(out, key)
+}
+
+// Every known chat, whatever list it is in; the window picks a tab's chats with chatsIn().
+function upsertKnown(chats, chat) {
+  if (!isObject(chat) || typeof chat.id !== "number") return chats
+  var out = chats.filter(function (c) { return c.id !== chat.id })
+  out.push(chat)
+  return out.length > CHATS_MAX ? out.slice(out.length - CHATS_MAX) : out
+}
+
+function chatsIn(chats, listKey) {
+  var key = listKey || "main"
+  return sortChats((Array.isArray(chats) ? chats : []).filter(function (c) { return compareOrder(orderIn(c, key), "0") > 0 }), key)
+}
+
+// The tabs above the chat list: folders in Telegram's order with "All" where Telegram puts
+// the main list, and the archive last.
+function listTabs(folders, mainPosition) {
+  var list = Array.isArray(folders) ? folders.filter(function (f) { return isObject(f) && typeof f.id === "number" && f.id > 0 }) : []
+  var at = Math.max(0, Math.min(list.length, mainPosition | 0))
+  var tabs = []
+  for (var i = 0; i <= list.length; i++) {
+    if (i === at) tabs.push({ key: "main", title: "All" })
+    if (i < list.length) tabs.push({ key: "folder:" + list[i].id, title: String(list[i].name || "Folder") })
+  }
+  tabs.push({ key: "archive", title: "Archive" })
+  return tabs
 }
 
 function findChat(chats, id) {

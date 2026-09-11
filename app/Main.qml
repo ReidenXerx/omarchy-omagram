@@ -39,6 +39,14 @@ Scope {
   property bool loadingOlder: false
   property real nowMs: Date.now()
 
+  // Every known chat, whatever list it is in; the tabs pick theirs with Model.chatsIn().
+  property var folders: []
+  property int mainPosition: 0
+  property string listKey: "main"
+  property var loadedLists: ({})
+  readonly property var tabs: Model.listTabs(omagram.folders, omagram.mainPosition)
+  readonly property var listChats: Model.chatsIn(omagram.chats, omagram.listKey)
+
   // Whether you are looking at Omagram: the focused window's app id is ours. The service keeps
   // the chat you are reading out of desktop notifications, and new messages count as read only
   // while this is true.
@@ -116,7 +124,10 @@ Scope {
     onHello: function (result) {
       omagram.auth = result.auth || { state: "starting" }
       omagram.meId = result.meId || 0
-      omagram.chats = Model.sortChats(result.chats || [])
+      omagram.chats = result.allChats || result.chats || []
+      omagram.folders = result.folders || []
+      omagram.mainPosition = result.mainPosition || 0
+      omagram.loadedLists = ({})
       if (omagram.auth.state === "ready" && omagram.openChatId) omagram.openChatById(omagram.openChatId, true)
       if (omagram.auth.state === "ready") {
         service.request("ui.focus", { chatId: omagram.focusedChatId })
@@ -136,15 +147,21 @@ Scope {
         omagram.chats = []
         omagram.messages = ({})
         omagram.openChatId = 0
+        omagram.folders = []
+        omagram.listKey = "main"
       }
     } else if (name === "open") {
       omagram.openFromService(e)
+    } else if (name === "folders") {
+      omagram.folders = e.folders || []
+      omagram.mainPosition = e.mainPosition || 0
+      if (!omagram.tabs.some(function (t) { return t.key === omagram.listKey })) omagram.listKey = "main"
     } else if (name === "file") {
       omagram.setFile(e.file)
     } else if (name === "me") {
       omagram.meId = e.meId || 0
     } else if (name === "chat") {
-      omagram.chats = Model.upsertChat(omagram.chats, e.chat, "main")
+      omagram.chats = Model.upsertKnown(omagram.chats, e.chat)
     } else if (name === "message") {
       var m = e.message
       if (omagram.messages[m.chatId]) {
@@ -178,6 +195,43 @@ Scope {
                  emoji: sticker.emoji || "" }
     if (replyToId) args.replyToMessageId = replyToId
     service.request("message.sendSticker", args, callback || function () {})
+  }
+
+  // ---------------------------------------------------------------- lists
+
+  function selectList(key) {
+    if (!key) return
+    omagram.listKey = key
+    if (omagram.loadedLists[key] || omagram.auth.state !== "ready") return
+    omagram.loadedLists[key] = true
+    service.request("chats.load", { list: key, limit: 100 })
+  }
+
+  function togglePin(chatId) {
+    var chat = Model.findChat(omagram.chats, chatId)
+    if (!chat) return
+    var key = Model.orderIn(chat, omagram.listKey) !== "0" ? omagram.listKey : "main"
+    service.request("chat.pin", { chatId: chatId, list: key, pinned: !Model.pinnedIn(chat, key) }, function (answer) {
+      if (!answer.ok && screen.item && screen.item.notify) screen.item.notify(answer.error || "Could not change the pin")
+    })
+  }
+
+  function toggleArchive(chatId) {
+    var chat = Model.findChat(omagram.chats, chatId)
+    if (!chat) return
+    service.request("chat.archive", { chatId: chatId, archived: !chat.archived }, function (answer) {
+      if (!answer.ok && screen.item && screen.item.notify) screen.item.notify(answer.error || "Could not move the chat")
+    })
+  }
+
+  // A message found by search: open its chat, load the messages around it, put the cursor on it.
+  function openChatAt(chatId, messageId) {
+    omagram.openChatById(chatId, false)
+    service.request("chat.history", { chatId: chatId, fromMessageId: messageId, offset: -20, limit: 40 }, function (answer) {
+      if (!answer.ok || chatId !== omagram.openChatId) return
+      omagram.setMessages(chatId, Model.mergeMessages(omagram.messages[chatId] || [], answer.result.messages || []))
+      Qt.callLater(function () { if (screen.item && screen.item.focusMessage) screen.item.focusMessage(messageId) })
+    })
   }
 
   property real viewerMessageId: 0
@@ -319,6 +373,8 @@ Scope {
 
       function focusComposer() { chatView.focusComposer() }
       function focusMessages() { chatView.focusMessages() }
+      function focusMessage(id) { return chatView.focusMessage(id) }
+      function notify(text) { chatView.flash(text) }
 
       Shortcut { sequences: ["Ctrl+K", "Ctrl+F"]; onActivated: chatList.focusSearch() }
       Shortcut { sequence: "Alt+Up"; onActivated: chatList.step(-1) }
@@ -326,6 +382,13 @@ Scope {
       Shortcut { sequence: "Ctrl+1"; onActivated: chatList.focusList() }
       Shortcut { sequence: "Ctrl+2"; onActivated: chatView.focusMessages() }
       Shortcut { sequence: "Ctrl+3"; onActivated: chatView.focusComposer() }
+      Shortcut { sequences: ["Ctrl+PgDown", "Ctrl+]"]; onActivated: chatList.tabStep(1) }
+      Shortcut { sequences: ["Ctrl+PgUp", "Ctrl+["]; onActivated: chatList.tabStep(-1) }
+      Shortcut {
+        sequence: "Ctrl+Shift+F"
+        enabled: !!omagram.openChat
+        onActivated: chatList.searchInChat(omagram.openChatId, omagram.openChat ? omagram.openChat.title : "")
+      }
 
       Component.onCompleted: chatList.focusList()
 
@@ -338,9 +401,16 @@ Scope {
           app: omagram
           Layout.preferredWidth: Math.max(280, Math.min(380, mainScope.width * 0.32))
           Layout.fillHeight: true
-          chats: omagram.chats
+          chats: omagram.listChats
+          allChats: omagram.chats
+          tabs: omagram.tabs
+          listKey: omagram.listKey
           openChatId: omagram.openChatId
           nowMs: omagram.nowMs
+          onListSelected: function (key) { omagram.selectList(key) }
+          onMessageActivated: function (chatId, messageId) { omagram.openChatAt(chatId, messageId) }
+          onPinRequested: function (chatId) { omagram.togglePin(chatId) }
+          onArchiveRequested: function (chatId) { omagram.toggleArchive(chatId) }
           onActivated: function (chatId) {
             omagram.openChatById(chatId, false)
             chatView.focusComposer()
