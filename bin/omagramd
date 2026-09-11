@@ -137,6 +137,8 @@ def local_upload(path):
 
 
 NOTIFICATION_GROUPS = 10
+PLUGIN_ID = "reidenxerx.omagram"
+OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
 
 
@@ -183,7 +185,7 @@ class Daemon:
         self.notifier_factory = notifier_factory or (lambda on_action: notify.Notifier(notify.GioTransport, on_action))
         self.notifier = notify.Notifier(None, None)
         self.pending_open = None   # (monotonic time, {"chatId", "reply"}) for the next window
-        self.children = []
+        self.children = {}   # detached helpers still running: pid -> what to do if they fail
         self.state = model.State(td.MEDIA_ROOTS)
         self.td = None
         self.auth = {"state": "starting"}
@@ -424,8 +426,19 @@ class Daemon:
         self.notifier.show(chat_id, title, body)
 
     def on_notification_action(self, chat_id, action):
-        self.open_chat(chat_id, action == "reply")
-        self.launch_window()
+        if action == "reply":
+            self.summon_quick_reply(chat_id)
+        else:
+            self.open_chat(chat_id, False)
+            self.launch_window()
+
+    def summon_quick_reply(self, chat_id):
+        """Reply opens the quick-reply overlay on that chat. The overlay lives in Omarchy's shell;
+        when that is not there, the window opens on the chat with its composer focused instead."""
+        def fallback():
+            self.open_chat(chat_id, True)
+            self.launch_window()
+        self.spawn([OMARCHY_SHELL, "shell", "summon", PLUGIN_ID, json.dumps({"chatId": chat_id})], fallback)
 
     def open_chat(self, chat_id, reply):
         """Tell the window to open a chat, or keep the request for the window that starts next."""
@@ -437,25 +450,34 @@ class Daemon:
 
     def launch_window(self):
         """`omagram`, in its own session with no terminal: it focuses the open window or starts one."""
+        self.spawn(["/usr/bin/python3", str(pathlib.Path(__file__).resolve().parent / "omagram")])
+
+    def spawn(self, argv, fallback=None):
+        """A detached helper: its own session, no terminal, no loader or Claude variables. An
+        argv list, never a shell. `fallback` runs if it cannot start or does not succeed."""
         env = {k: v for k, v in os.environ.items() if not k.startswith(("LD_", "PYTHON", "CLAUDE"))}
         env["PATH"] = safe.SAFE_PATH
-        launcher = str(pathlib.Path(__file__).resolve().parent / "omagram")
         try:
-            pid = os.posix_spawn("/usr/bin/python3", ["/usr/bin/python3", launcher], env, setsid=True,
+            pid = os.posix_spawn(argv[0], argv, env, setsid=True,
                                  file_actions=[(os.POSIX_SPAWN_OPEN, 0, os.devnull, os.O_RDWR, 0),
                                                (os.POSIX_SPAWN_DUP2, 0, 1), (os.POSIX_SPAWN_DUP2, 0, 2)])
         except OSError:
+            if fallback:
+                fallback()
             return
-        self.children.append(pid)
+        self.children[pid] = fallback
 
     def reap_children(self):
-        for pid in list(self.children):
+        for pid, fallback in list(self.children.items()):
             try:
-                done, _ = os.waitpid(pid, os.WNOHANG)
+                done, status = os.waitpid(pid, os.WNOHANG)
             except ChildProcessError:
-                done = pid
-            if done:
-                self.children.remove(pid)
+                done, status = pid, 0
+            if not done:
+                continue
+            del self.children[pid]
+            if fallback and not (os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0):
+                fallback()
 
     def on_me(self, user):
         uid = model._int(user.get("id"))

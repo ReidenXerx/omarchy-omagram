@@ -519,8 +519,8 @@ class Notifications(Harness):
     def setUp(self):
         super().setUp()
         self.bus = self.daemon.notifier.transport
-        self.launched = []
-        self.daemon.launch_window = lambda: self.launched.append(True)
+        self.spawned = []
+        self.daemon.spawn = lambda argv, fallback=None: self.spawned.append((argv, fallback))
         self.conn = self.connect()
         self.sign_in(self.conn)
         self.td_event({"@type": "updateNewChat", "@client_id": 1, "chat": {
@@ -588,15 +588,42 @@ class Notifications(Harness):
         self.settle()
         self.assertEqual(len(self.bus.shown), 1)
 
-    def test_a_click_starts_the_window_which_opens_the_chat(self):
+    def launched_window(self):
+        return [argv for argv, _ in self.spawned if argv[-1].endswith("/omagram")]
+
+    def test_open_starts_the_window_which_opens_the_chat(self):
+        self.td_event(self.group([self.note(1, "hi")]))
+        self.settle()
+        self.click("default")
+        self.wait(self.launched_window)
+        self.settle()
+        _, target = self.window()
+        self.assertEqual(target, {"chatId": 42, "reply": False})
+        self.assertIsNone(self.window()[1])   # handed over once
+
+    def test_reply_summons_the_quick_reply_overlay(self):
         self.td_event(self.group([self.note(1, "hi")]))
         self.settle()
         self.click("reply")
-        self.wait(lambda: self.launched)
-        self.settle()
+        self.wait(lambda: self.spawned)
+        argv, fallback = self.spawned[0]
+        self.assertEqual(argv, [self.d.OMARCHY_SHELL, "shell", "summon", "reidenxerx.omagram", '{"chatId": 42}'])
+        self.assertIsNone(self.daemon.pending_open)
+        self.assertEqual(self.launched_window(), [])
+        fallback()   # what a failed summon does: the window, composer focused
         _, target = self.window()
         self.assertEqual(target, {"chatId": 42, "reply": True})
-        self.assertIsNone(self.window()[1])   # handed over once
+        self.assertEqual(len(self.launched_window()), 1)
+
+    def test_a_helper_that_fails_or_cannot_start_falls_back(self):
+        del self.daemon.spawn   # the real one
+        failed, missing, succeeded = [], [], []
+        self.daemon.spawn(["/usr/bin/false"], lambda: failed.append(True))
+        self.daemon.spawn(["/nonexistent/omarchy-shell"], lambda: missing.append(True))
+        self.daemon.spawn(["/usr/bin/true"], lambda: succeeded.append(True))
+        self.wait(lambda: failed)
+        self.wait(lambda: not self.daemon.children)
+        self.assertEqual((failed, missing, succeeded), ([True], [True], []))
 
     def test_an_open_window_hears_it_at_once(self):
         window, target = self.window()

@@ -188,7 +188,8 @@ def _valid_key(value):
 def database_exists(directory=None):
     directory = pathlib.Path(directory or DATABASE)
     try:
-        return any(os.scandir(directory))
+        with os.scandir(directory) as entries:
+            return any(entries)
     except FileNotFoundError:
         return False
 
