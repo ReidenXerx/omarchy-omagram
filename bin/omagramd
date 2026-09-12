@@ -234,6 +234,11 @@ CONTACTS_MAX = 5000
 NEW_TITLE_MAX = 128
 NEW_DESCRIPTION_MAX = 255
 NEW_MEMBERS_MAX = 200
+MENTIONS_MAX = 20                   # people suggested after @
+MENTION_QUERY_MAX = 64
+BOT_COMMANDS_MAX = 100
+BOT_COMMAND = re.compile(r"[A-Za-z0-9_]{1,32}")
+MENTION_LINK = re.compile(r"tg://user\?id=([1-9][0-9]{0,18})")
 SESSION_ID = re.compile(r"-?[0-9]{1,19}")
 QR_LINK = re.compile(r"tg://login\?token=[A-Za-z0-9_=-]{1,512}")
 QR_PNG_MAX = 256 * 1024
@@ -242,6 +247,18 @@ TRANSLATE_TO = re.compile(r"[a-z]{2,3}(-[A-Za-z0-9]{2,8})?")
 GIF_BOT = "gif"                          # the inline bot Telegram's own apps search GIFs with
 CUSTOM_EMOJI_MAX = 200
 INT64_ID = re.compile(r"-?[0-9]{1,19}")
+
+
+def mention_links(entities):
+    """A Markdown link to tg://user?id=N, as suggestions put in for someone with no username, is a
+    mention of that person by name."""
+    out = []
+    for e in entities:
+        kind = e.get("type") if isinstance(e, dict) else None
+        url = kind.get("url") if isinstance(kind, dict) and kind.get("@type") == "textEntityTypeTextUrl" else None
+        found = MENTION_LINK.fullmatch(url) if isinstance(url, str) else None
+        out.append(dict(e, type={"@type": "textEntityTypeMentionName", "user_id": int(found.group(1))}) if found else e)
+    return out
 
 
 def arg_int(args, name, low=None, high=None, default=None):
@@ -1269,6 +1286,66 @@ class Daemon:
         else:
             self.respond(client, rid, base)
 
+    def cmd_chat_mentions(self, client, rid, args):
+        """Who can be mentioned in a group, matching what is typed after @ (a name or username)."""
+        chat_id = arg_int(args, "chatId")
+        chat = self.state.chats.get(chat_id)
+        query = args.get("query", "")
+        if not isinstance(query, str) or len(query) > MENTION_QUERY_MAX:
+            raise BadRequest("query is text")
+        if chat is None or not (chat["basicGroupId"] or chat["supergroupId"]):
+            self.respond(client, rid, {"chatId": chat_id, "people": []})
+            return
+
+        def people(event):
+            found = []
+            for member in self.member_views(event):
+                if member["type"] != "user" or member["id"] == self.state.me_id:
+                    continue
+                user = self.state.users.get(member["id"], {})
+                found.append({"userId": member["id"], "name": member["name"], "username": user.get("username", ""),
+                              "bot": member["bot"]})
+            return {"chatId": chat_id, "people": found[:MENTIONS_MAX]}
+        self.td_send({"@type": "searchChatMembers", "chat_id": chat_id, "query": query, "limit": MENTIONS_MAX,
+                      "filter": {"@type": "chatMembersFilterMention", "topic_id": self.topic_of(args)}}, client, rid, people)
+
+    def cmd_chat_commands(self, client, rid, args):
+        """The commands of a chat's bots, for suggestions after /."""
+        chat_id = arg_int(args, "chatId")
+        chat = self.state.chats.get(chat_id)
+        if chat is None:
+            raise BadRequest("unknown chat")
+
+        def listed(bot_id, commands):
+            bot = self.state.users.get(bot_id, {})
+            out = []
+            for raw in model._list(commands, BOT_COMMANDS_MAX):
+                c = model._obj(raw, "botCommand")
+                name = c.get("command")
+                if isinstance(name, str) and BOT_COMMAND.fullmatch(name):
+                    out.append({"command": name, "description": model._str(c.get("description"), model.DESCRIPTION_MAX),
+                                "botId": bot_id, "bot": bot.get("username", "")})
+            return out
+
+        def of_bot(event):
+            return {"chatId": chat_id, "commands": listed(chat["userId"], model._obj(event.get("bot_info"), "botInfo").get("commands"))}
+
+        def of_group(event):
+            out = []
+            for raw in model._list(event.get("bot_commands"), BOT_COMMANDS_MAX):
+                group = model._obj(raw, "botCommands")
+                out.extend(listed(model._int(group.get("bot_user_id")), group.get("commands")))
+            return {"chatId": chat_id, "commands": out[:BOT_COMMANDS_MAX]}
+
+        if chat["userId"] and self.state.users.get(chat["userId"], {}).get("bot") and not chat["secretChatId"]:
+            self.td_send({"@type": "getUserFullInfo", "user_id": chat["userId"]}, client, rid, of_bot)
+        elif chat["basicGroupId"]:
+            self.td_send({"@type": "getBasicGroupFullInfo", "basic_group_id": chat["basicGroupId"]}, client, rid, of_group)
+        elif chat["supergroupId"]:
+            self.td_send({"@type": "getSupergroupFullInfo", "supergroup_id": chat["supergroupId"]}, client, rid, of_group)
+        else:
+            self.respond(client, rid, {"chatId": chat_id, "commands": []})
+
     def member_views(self, event):
         found = (self.state.member_view(m) for m in model._list(event.get("members"), MEMBERS_MAX))
         return [m for m in found if m]
@@ -1886,7 +1963,7 @@ class Daemon:
             parsed = plain
         if len(parsed["text"]) > limit:
             raise BadRequest(f"{what} can be at most {limit} characters")
-        return parsed
+        return dict(parsed, entities=mention_links(parsed["entities"]))
 
     def send_content(self, client, rid, chat_id, content, args):
         self.td_send({"@type": "sendMessage", "chat_id": chat_id, "topic_id": self.topic_of(args), "reply_to": self.reply_to(args),
@@ -2106,6 +2183,8 @@ COMMANDS = {
     "secret.close": ("cmd_secret_close", True),
     "call.decline": ("cmd_call_decline", True),
     "message.markdown": ("cmd_message_markdown", True),
+    "chat.mentions": ("cmd_chat_mentions", True),
+    "chat.commands": ("cmd_chat_commands", True),
     "story.get": ("cmd_story_get", True),
     "story.open": ("cmd_story_open", True),
     "story.close": ("cmd_story_close", True),

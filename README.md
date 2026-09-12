@@ -33,6 +33,7 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   below), links, mentions and hashtags, spoilers, link previews, polls
   you can vote in, places, contacts, albums, service messages ("Ann joined the group"), and
   bots' buttons and keyboards. Web links open in your browser; Telegram links open in Omagram.
+  Typing `@` in a group suggests who to mention, and `/` suggests the commands of the chat's bots.
 - **Media** — photos (with a full-size viewer), videos, GIFs, files, round video notes and
   voice messages with a waveform. Send photos and files with `Ctrl+O`, by dropping them on the
   chat or by pasting a copied image, and record voice messages (`Ctrl+R`) and round video

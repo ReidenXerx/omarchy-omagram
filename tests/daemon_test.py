@@ -622,6 +622,11 @@ class Sending(Harness):
                                                                "content": {"@type": "messagePhoto", "caption": text}},
                          chatId=42, messageId=12)
         self.assertEqual(r["result"]["text"], "hi **there**", "a caption too")
+        link = {"@type": "textEntity", "offset": 0, "length": 3, "type": {"@type": "textEntityTypeTextUrl", "url": "tg://user?id=202"}}
+        web = dict(link, type={"@type": "textEntityTypeTextUrl", "url": "https://tg.example/user?id=202"})
+        self.assertEqual(self.d.mention_links([link, web, "junk"]),
+                         [dict(link, type={"@type": "textEntityTypeMentionName", "user_id": 202}), web, "junk"],
+                         "a Markdown link to tg://user?id= is a mention by name")
 
 
 class ListsAndSearch(Harness):
@@ -1061,6 +1066,43 @@ class ChatsAndAccount(Harness):
         self.assertEqual(q["topic_id"]["forum_topic_id"], 5)
         q, _ = self.call(86, "chat.readMentions", "readAllForumTopicMentions", {"@type": "ok"}, chatId=-10077, topicId=5)
         self.assertEqual(q["forum_topic_id"], 5)
+
+
+    def test_mention_and_command_suggestions(self):
+        def member(uid):
+            return {"@type": "chatMember", "member_id": {"@type": "messageSenderUser", "user_id": uid},
+                    "status": {"@type": "chatMemberStatusMember"}}
+        found = {"@type": "chatMembers", "total_count": 2, "members": [member(500), member(501)]}
+        q, r = self.call(120, "chat.mentions", "searchChatMembers", found, chatId=-10077, query="a", topicId=5)
+        self.assertEqual((q["chat_id"], q["query"], q["limit"], q["filter"]),
+                         (-10077, "a", 20, {"@type": "chatMembersFilterMention",
+                                            "topic_id": {"@type": "messageTopicForum", "forum_topic_id": 5}}))
+        self.assertEqual(r["result"]["people"], [{"userId": 500, "name": "Ann", "username": "ann", "bot": False},
+                                                  {"userId": 501, "name": "Bob", "username": "", "bot": False}])
+        self.assertEqual(self.request(self.conn, 121, "chat.mentions", chatId=500, query="a")["result"]["people"], [],
+                         "no one to mention in a private chat")
+        self.assertFalse(self.request(self.conn, 122, "chat.mentions", chatId=-66, query="x" * 65)["ok"])
+
+        for update in (
+            {"@type": "updateUser", "user": {"@type": "user", "id": 600, "first_name": "Helper", "type": {"@type": "userTypeBot"},
+                                              "usernames": {"@type": "usernames", "active_usernames": ["helpbot"]}}},
+            {"@type": "updateNewChat", "chat": {"@type": "chat", "id": 600, "title": "Helper",
+                                                "type": {"@type": "chatTypePrivate", "user_id": 600}}},
+        ):
+            self.td_event(dict(update, **{"@client_id": 1}))
+        self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == 600)
+        info = {"@type": "userFullInfo", "bot_info": {"@type": "botInfo", "commands": [
+            {"@type": "botCommand", "command": "start", "description": "Start over"},
+            {"@type": "botCommand", "command": "not a command", "description": "dropped"}]}}
+        q, r = self.call(123, "chat.commands", "getUserFullInfo", info, chatId=600)
+        self.assertEqual((q["user_id"], r["result"]["commands"]),
+                         (600, [{"command": "start", "description": "Start over", "botId": 600, "bot": "helpbot"}]))
+        group = {"@type": "basicGroupFullInfo", "bot_commands": [{"@type": "botCommands", "bot_user_id": 600, "commands": [
+            {"@type": "botCommand", "command": "help", "description": "Help"}]}]}
+        q, r = self.call(124, "chat.commands", "getBasicGroupFullInfo", group, chatId=-66)
+        self.assertEqual((q["basic_group_id"], [c["command"] for c in r["result"]["commands"]]), (66, ["help"]))
+        self.assertEqual(self.request(self.conn, 125, "chat.commands", chatId=500)["result"]["commands"], [],
+                         "a person has no commands")
 
 
 class Extras(Harness):

@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -510,6 +510,22 @@ test("formatting markers go around the selection and come off again", () => {
   eq(M.markdownToggle("abc", 2, 1, "__", "__"), { text: "a__b__c", start: 3, end: 4, wrapped: true }, "a selection made backwards")
   eq(M.markdownToggle("link", 0, 4, "[", "]()"), { text: "[link]()", start: 1, end: 5, wrapped: true })
   eq(M.markdownToggle("**x", 2, 3, "**", "**"), { text: "****x**", start: 4, end: 5, wrapped: true }, "a marker on one side only")
+})
+
+test("suggestions complete @someone and a /command at the cursor", () => {
+  eq(M.suggestToken("hi @an", 6), { kind: "mention", query: "an", start: 3, end: 6 })
+  eq(M.suggestToken("@", 1), { kind: "mention", query: "", start: 0, end: 1 })
+  eq(M.suggestToken("hi @an there", 6), { kind: "mention", query: "an", start: 3, end: 6 }, "a space after the cursor")
+  assert.strictEqual(M.suggestToken("hi @anna", 5).kind, "", "the cursor inside the name")
+  assert.strictEqual(M.suggestToken("mail@example", 12).kind, "", "not an address")
+  eq(M.suggestToken("(@bo", 4), { kind: "mention", query: "bo", start: 1, end: 4 })
+  eq(M.suggestToken("/sta", 4), { kind: "command", query: "sta", start: 0, end: 4 })
+  assert.strictEqual(M.suggestToken("hi /sta", 7).kind, "", "a command only starts a message")
+  assert.strictEqual(M.mentionText({ userId: 7, name: "Ann", username: "ann" }), "@ann ")
+  assert.strictEqual(M.mentionText({ userId: 7, name: "Ann [admin]", username: "" }), "[Ann admin](tg://user?id=7) ")
+  assert.strictEqual(M.commandText({ command: "start", bot: "helpbot" }, false), "/start ")
+  assert.strictEqual(M.commandText({ command: "start", bot: "helpbot" }, true), "/start@helpbot ", "in a group, to its bot")
+  eq(M.matchCommands([{ command: "stop" }, { command: "start" }, { command: "help" }, "junk"], "ST").map(c => c.command), ["start", "stop"])
 })
 
 test("forum topics: where their messages are kept, their order and icons", () => {

@@ -147,6 +147,8 @@ FocusScope {
     root.pinnedMessage = null
     root.lastTypingMs = 0
     root.translations = ({})
+    root.botCommands = null
+    root.suggestions = []
     root.scheduledOpen = false
     root.scheduledMessages = []
     // The chat's draft, as Telegram keeps it: you continue where you left off, on any device.
@@ -958,6 +960,7 @@ FocusScope {
   }
 
   function composerEdited() {
+    suggestLater.restart()
     if (root.settingText || !root.chat) return
     draftTimer.restart()
     if (root.editingId) return
@@ -1085,6 +1088,85 @@ FocusScope {
     var hadText = composer.selectionEnd > composer.selectionStart
     var r = root.wrapSelection("[", "]()")
     if (r.wrapped && hadText) composer.cursorPosition = r.end + 2
+  }
+
+  // ---------------------------------------------------------------- suggestions while typing
+
+  // @someone in a group, and the /commands of the chat's bots, completing what is typed at the cursor.
+  property var suggestions: []            // [{ label, detail, insert, command }]
+  property int suggestionCursor: 0
+  property var suggestionToken: ({ kind: "", query: "", start: 0, end: 0 })
+  property var botCommands: null          // the chat's bots' commands, once asked for
+  property int suggestionSerial: 0
+  property string dismissedToken: ""      // closed with Esc: it stays closed until what is typed changes
+
+  Timer { id: suggestLater; interval: 150; onTriggered: root.updateSuggestions() }
+
+  function closeSuggestions() {
+    var t = root.suggestionToken
+    root.dismissedToken = t.kind + ":" + t.start + ":" + t.query
+    root.suggestions = []
+  }
+
+  function updateSuggestions() {
+    var token = Model.suggestToken(composer.text, composer.cursorPosition)
+    root.suggestionToken = token
+    if (!root.chat || !composer.activeFocus || !token.kind || token.kind + ":" + token.start + ":" + token.query === root.dismissedToken) {
+      root.suggestions = []
+      return
+    }
+    var chatId = root.chat.id
+    var group = root.chat.kind === "group"
+    var serial = ++root.suggestionSerial
+    if (token.kind === "command") {
+      if (root.botCommands === null) {
+        root.botCommands = []
+        client.request("chat.commands", { chatId: chatId }, function (answer) {
+          if (!root.chat || root.chat.id !== chatId) return
+          root.botCommands = answer.ok ? (answer.result.commands || []) : []
+          if (root.botCommands.length) root.updateSuggestions()
+        })
+      }
+      root.suggestions = Model.matchCommands(root.botCommands, token.query).map(function (c) {
+        return { label: "/" + c.command, detail: c.description + (group && c.bot ? "  ·  @" + c.bot : ""),
+                 insert: Model.commandText(c, group), command: true }
+      })
+      root.suggestionCursor = 0
+    } else if (token.kind === "mention" && group) {
+      client.request("chat.mentions", root.target({ chatId: chatId, query: token.query }), function (answer) {
+        if (serial !== root.suggestionSerial || !root.chat || root.chat.id !== chatId) return
+        root.suggestions = (answer.ok ? answer.result.people || [] : []).map(function (p) {
+          return { label: p.name, detail: p.username ? "@" + p.username : (p.bot ? "bot" : ""), insert: Model.mentionText(p), command: false }
+        })
+        root.suggestionCursor = 0
+      })
+    } else {
+      root.suggestions = []
+    }
+  }
+
+  // `send`: a bot command goes at once, as picking one does in Telegram's apps.
+  function pickSuggestion(index, send) {
+    var item = root.suggestions[index]
+    var token = root.suggestionToken
+    if (!item) return
+    composer.remove(token.start, token.end)
+    composer.insert(token.start, item.insert)
+    composer.cursorPosition = token.start + item.insert.length
+    root.suggestions = []
+    if (send && item.command) root.send()
+  }
+
+  function suggestionKey(event) {
+    var keys = root.app.shortcuts
+    function is(id) { return Keymap.matchesInText(keys, id, event) }
+    if (is("suggest.next")) root.suggestionCursor = Math.min(root.suggestions.length - 1, root.suggestionCursor + 1)
+    else if (is("suggest.previous")) root.suggestionCursor = Math.max(0, root.suggestionCursor - 1)
+    else if (is("suggest.pick")) root.pickSuggestion(root.suggestionCursor, false)
+    else if (is("suggest.send")) root.pickSuggestion(root.suggestionCursor, true)
+    else if (is("suggest.close")) root.closeSuggestions()
+    else return false
+    return true
   }
 
   // Leaving an edit brings back what you were writing before it.
@@ -1701,6 +1783,77 @@ FocusScope {
       }
     }
 
+    // ------------------------------------------------ suggestions while typing
+    Rectangle {
+      Layout.fillWidth: true
+      Layout.preferredHeight: visible ? suggestionList.height + Style.space(9) : 0
+      visible: root.suggestions.length > 0 && !root.showTopics
+      color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.03)
+
+      Rectangle { width: parent.width; height: 1; color: app.border; opacity: 0.35 }
+
+      ListView {
+        id: suggestionList
+        x: Style.space(10)
+        y: Style.space(5)
+        width: parent.width - Style.space(20)
+        height: Math.min(6, count) * Style.space(34)
+        clip: true
+        interactive: count > 6
+        boundsBehavior: Flickable.StopAtBounds
+        model: root.suggestions
+        currentIndex: root.suggestionCursor
+        onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
+
+        delegate: Rectangle {
+          id: suggestion
+          required property var modelData
+          required property int index
+          width: suggestionList.width
+          height: Style.space(34)
+          radius: Style.cornerRadius
+          color: suggestion.index === root.suggestionCursor ? app.selected
+               : (suggestionArea.containsMouse ? Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.05) : "transparent")
+
+          Text {
+            id: suggestionLabel
+            anchors.left: parent.left
+            anchors.leftMargin: Style.space(10)
+            anchors.verticalCenter: parent.verticalCenter
+            text: suggestion.modelData.label
+            textFormat: Text.PlainText
+            color: app.foreground
+            font.family: app.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: true
+          }
+          Text {
+            anchors.left: suggestionLabel.right
+            anchors.leftMargin: Style.space(12)
+            anchors.right: parent.right
+            anchors.rightMargin: Style.space(10)
+            anchors.verticalCenter: parent.verticalCenter
+            text: suggestion.modelData.detail
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            color: app.muted
+            font.family: app.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          MouseArea {
+            id: suggestionArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              root.pickSuggestion(suggestion.index, false)
+              composer.forceActiveFocus()
+            }
+          }
+        }
+      }
+    }
+
     // ------------------------------------------------ composer
     Rectangle {
       Layout.fillWidth: true
@@ -1751,10 +1904,16 @@ FocusScope {
             }
 
             onTextChanged: root.composerEdited()
+            onCursorPositionChanged: suggestLater.restart()
 
             Keys.onPressed: function (event) {
               var keys = root.app.shortcuts
               function is(id) { return Keymap.matchesInText(keys, id, event) }
+              // Suggestions, while they show, take the keys that move through them.
+              if (root.suggestions.length && root.suggestionKey(event)) {
+                event.accepted = true
+                return
+              }
               // A text box takes Enter before any shortcut can, so a question is answered here.
               if (root.prompt && is("prompt.accept")) root.runPrompt(true)
               else if (root.prompt && is("prompt.cancel")) root.runPrompt(false)

@@ -237,6 +237,45 @@ var NO_MESSAGE = { id: 0, chatId: 0, date: 0, editDate: 0, outgoing: false, pinn
                    sending: null, replyTo: null, forward: null, albumId: "", reactions: [], views: 0, markup: null,
                    topicId: 0, sendAt: 0, content: { kind: "text", text: "", entities: [] } }
 
+// ---------------------------------------------------------------- suggestions while typing
+
+// What is typed at the cursor that a suggestion can complete: @someone, or a bot /command that starts
+// the message. { kind: "mention" | "command" | "", query, start, end }; a suggestion replaces the text
+// from start to end.
+function suggestToken(text, cursor) {
+  var s = String(text || "")
+  var at = Math.max(0, Math.min(Number(cursor) || 0, s.length))
+  var before = s.slice(0, at)
+  var rest = s.slice(at)
+  var command = /^\/([A-Za-z0-9_]{0,32})$/.exec(before)
+  if (command && !/^\S/.test(rest)) return { kind: "command", query: command[1], start: 0, end: at }
+  var mention = /(^|[\s([{])@([^\s@]{0,32})$/.exec(before)
+  if (mention && !/^\S/.test(rest)) return { kind: "mention", query: mention[2], start: at - mention[2].length - 1, end: at }
+  return { kind: "", query: "", start: at, end: at }
+}
+
+// A person put into a message: their @username, or a link to them that Telegram reads as a mention
+// by name.
+function mentionText(person) {
+  if (!isObject(person)) return ""
+  if (person.username) return "@" + person.username + " "
+  var name = String(person.name || "").replace(/[\[\]()\n]/g, "").trim() || "someone"
+  return "[" + name + "](tg://user?id=" + Number(person.userId) + ") "
+}
+
+// A bot command as typed; in a group it names its bot, so the right one answers.
+function commandText(command, inGroup) {
+  if (!isObject(command)) return ""
+  return "/" + command.command + (inGroup && command.bot ? "@" + command.bot : "") + " "
+}
+
+function matchCommands(commands, query) {
+  var q = String(query || "").toLowerCase()
+  return toList(commands).filter(function (c) {
+    return isObject(c) && typeof c.command === "string" && c.command.toLowerCase().indexOf(q) === 0
+  }).sort(function (a, b) { return a.command < b.command ? -1 : (a.command > b.command ? 1 : 0) }).slice(0, 50)
+}
+
 // Telegram Markdown markers put around the text selected in the message box, or taken off again
 // when they are already there: { text, start, end, wrapped } with the selection after the change.
 function markdownToggle(text, start, end, before, after) {

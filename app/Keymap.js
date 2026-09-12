@@ -23,6 +23,7 @@ var SECTIONS = [
   { id: "list", title: "Chat list", scope: "list", app: "window" },
   { id: "messages", title: "Messages", scope: "messages", app: "window" },
   { id: "composer", title: "Message box", scope: "composer", app: "window" },
+  { id: "suggest", title: "Suggestions while typing", scope: "suggest", app: "window" },
   { id: "voice", title: "Recording a voice message", scope: "voice", app: "window" },
   { id: "videoNote", title: "Recording a video message", scope: "videoNote", app: "window" },
   { id: "stickers", title: "Stickers", scope: "stickers", app: "window" },
@@ -112,6 +113,12 @@ var ACTIONS = [
   { id: "composer.cancel", label: "Cancel a reply or edit", keys: ["Esc"] },
   { id: "composer.editLast", label: "Edit your last message (empty box)", keys: ["Up"] },
   { id: "composer.toMessages", label: "Go to the messages", keys: ["Tab"] },
+
+  { id: "suggest.next", label: "Next suggestion", keys: ["Down"] },
+  { id: "suggest.previous", label: "Previous suggestion", keys: ["Up"] },
+  { id: "suggest.pick", label: "Put the suggestion in", keys: ["Tab"] },
+  { id: "suggest.send", label: "Put it in (a bot command is sent at once)", keys: ["Return", "Enter"] },
+  { id: "suggest.close", label: "Close the suggestions", keys: ["Esc"] },
 
   { id: "voice.send", label: "Send the voice message", keys: ["Return", "Enter"] },
   { id: "voice.cancel", label: "Cancel the voice message", keys: ["Esc"] },
