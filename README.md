@@ -161,8 +161,8 @@ to reply and `Enter` again to send, `Ctrl+O` to open the chat in the window, `Es
 ## Privacy and security
 
 - **Your data stays on your machine**, in `~/.local/share/omagram` (TDLib's database, encrypted
-  with a key kept in your keyring, downloaded files, and in `sent/` the voice messages, video
-  messages and photos you send, so your own messages can show them) and `~/.cache/omagram` (the
+  with a key kept in your keyring, downloaded files, and in `sent/` the voice and video messages you
+  send, so your own messages play from them) and `~/.cache/omagram` (the
   TDLib build and unpacked animated stickers). Omagram sends nothing anywhere except to Telegram.
 - **Secrets are never in files, command lines or logs.** The API id, hash and database key
   move through `secret-tool` on stdin and stdout. TDLib's own log is off, because at higher

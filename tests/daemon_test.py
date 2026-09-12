@@ -440,12 +440,8 @@ class Sending(Harness):
         photo = self.file("cat.JPG", 200_000)
         q = self.sent(1, chatId=42, path=str(photo), caption="look", replyToMessageId=9)
         content = q["input_message_content"]
-        self.assertEqual((content["@type"], content["caption"]["text"], q["reply_to"]["message_id"]),
-                         ("inputMessagePhoto", "look", 9))
-        # sent from a private copy, which your own message can show
-        sent = content["photo"]["photo"]["path"]
-        self.assertEqual(os.path.dirname(sent), str(self.d.media.SENT))
-        self.assertEqual(pathlib.Path(sent).read_bytes(), photo.read_bytes())
+        self.assertEqual((content["@type"], content["photo"]["photo"], content["caption"]["text"], q["reply_to"]["message_id"]),
+                         ("inputMessagePhoto", {"@type": "inputFileLocal", "path": str(photo)}, "look", 9))
         big = self.file("huge.png", self.d.PHOTO_MAX + 1)
         self.assertEqual(self.sent(2, chatId=42, path=str(big))["input_message_content"]["@type"], "inputMessageDocument")
         pdf = self.file("report.pdf")
@@ -453,9 +449,7 @@ class Sending(Harness):
         self.assertEqual(self.sent(4, chatId=42, path=str(photo), asPhoto=False)["input_message_content"]["@type"], "inputMessageDocument")
         link = self.uploads / "link.jpg"
         link.symlink_to(photo)
-        via_link = self.sent(5, chatId=42, path=str(link))["input_message_content"]["photo"]["photo"]["path"]
-        self.assertEqual(os.path.dirname(via_link), str(self.d.media.SENT))   # a copy of the photo the link points at
-        self.assertEqual(pathlib.Path(via_link).read_bytes(), photo.read_bytes())
+        self.assertEqual(self.sent(5, chatId=42, path=str(link))["input_message_content"]["photo"]["photo"]["path"], str(photo))
 
     def test_what_cannot_be_sent_is_refused_before_tdlib_sees_it(self):
         empty = self.file("empty.txt", 0)

@@ -85,31 +85,6 @@ class Recordings(unittest.TestCase):
         media.remove(new)   # already gone: no error
         self.assertFalse(new.exists())
 
-    def test_photos_are_copied_privately_before_sending(self):
-        photo = self.root / "Holiday.JPG"
-        photo.write_bytes(b"\xff\xd8 picture")
-        copied = media.copy_for_sending(str(photo))
-        self.assertEqual(os.path.dirname(copied), str(media.SENT))
-        self.assertTrue(copied.endswith(".jpg"))
-        self.assertEqual(pathlib.Path(copied).read_bytes(), b"\xff\xd8 picture")
-        self.assertEqual(os.stat(copied).st_mode & 0o777, 0o600)
-        self.assertEqual(os.stat(media.SENT).st_mode & 0o777, 0o700)
-        document = self.root / "report.pdf"
-        document.write_bytes(b"%PDF")
-        big = self.root / "big.png"
-        big.write_bytes(b"x" * 64)
-        link = self.root / "link.jpg"
-        link.symlink_to(photo)
-        empty = self.root / "empty.png"
-        empty.write_bytes(b"")
-        self.assertIsNone(media.copy_for_sending(str(document)))
-        self.assertIsNone(media.copy_for_sending(str(big), max_bytes=16))
-        self.assertIsNone(media.copy_for_sending(str(link)))
-        self.assertIsNone(media.copy_for_sending(str(empty)))
-        self.assertIsNone(media.copy_for_sending(str(self.root / "missing.jpg")))
-        media.remove(copied)
-        self.assertFalse(os.path.exists(copied))
-
     def test_what_you_send_is_shown_from_where_it_is_kept(self):
         import omagram_state as model
         import omagram_td as td
