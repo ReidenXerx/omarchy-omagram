@@ -16,8 +16,13 @@ overlay on a key, and desktop notifications you can answer without leaving what 
 ## What it does
 
 - **Chats** — your chat list with folders as tabs, pinned, muted and archived chats, unread
-  counts, and drafts that follow you to your other devices. Pin (`p`), archive (`a`) and mute
-  (`m`) from the keyboard, or right-click a chat. Your chat with yourself is Saved Messages.
+  counts (or mark a chat unread), and drafts that follow you to your other devices. Pin (`p`),
+  archive (`a`) and mute (`m`) from the keyboard, or right-click a chat. Start a chat with a
+  contact or anyone's @username, or create a group or a channel (`Ctrl+Shift+N`, or the pencil).
+  Your chat with yourself is Saved Messages.
+- **Chat info** — a panel (`Ctrl+I`) with a person's bio, username and phone, or a group's
+  description and invite link; its members; and everything shared in it: photos and videos,
+  files, links, voice messages, music and GIFs. Leave a group, or clear or delete a chat, from it.
 - **Messages** — send, reply, edit, forward, pin, react and delete (for you or for everyone),
   or select several and act on them at once. Read ticks, "typing…", last seen and the pinned
   message above the chat, with read state kept in sync with your other devices. Right-click a
@@ -30,6 +35,8 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   chat or by pasting a copied image, and record voice messages (`Ctrl+R`) and round video
   messages (`Ctrl+Shift+R`). A file's menu opens it with its app or saves it to Downloads.
 - **Emoji** — Omarchy's emoji picker, from the message box (`Ctrl+;`).
+- **Account** — Settings shows how much Omagram keeps on this computer (and clears the cache),
+  every device signed in to your account (sign any of them out), and signs you out here.
 - **Stickers** — static, animated (TGS) and video (WebM) stickers, and a sticker picker with
   your recent stickers and installed sets.
 - **Search** — chats in every list, and messages in all chats or in the open one.
@@ -40,15 +47,14 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   click opens a panel of recent chats where you can reply inline; right click opens the window.
 - **Quick reply** — an overlay to find a chat by typing, read its latest messages and answer.
 
-Not supported yet: secret chats, calls, stories, signing in by QR code, creating groups or
-channels, forum topics, and a chat's info page.
+Not supported yet: secret chats, calls, stories and forum topics.
 
 ## Requirements
 
 Omarchy with Hyprland 0.56 or newer, and these packages (most are already on a stock install):
 
 ```bash
-sudo pacman -S --needed qt6-multimedia qt6-multimedia-ffmpeg qt6-lottie libsecret python-gobject
+sudo pacman -S --needed qt6-multimedia qt6-multimedia-ffmpeg qt6-lottie libsecret python-gobject qrencode
 ```
 
 TDLib is not packaged for Arch, so Omagram builds the exact version it was tested with (1.8.67)
@@ -83,7 +89,9 @@ Optionally add Omagram to the Omarchy menu (Trigger → Omagram):
 2. Open Omagram — from the menu, by right-clicking the bar icon, or with
    `/usr/bin/python3 ~/.config/omarchy/plugins/reidenxerx.omagram/bin/omagram`.
 3. Enter the API id and hash, then your phone number, the code Telegram sends you, and your
-   two-step verification password if you have one.
+   two-step verification password if you have one. Or choose **Use a QR code instead** and scan
+   it with Telegram on your phone (Settings → Devices → Link Desktop Device); drawing the code
+   needs `qrencode`.
 
 The API id and hash go straight into your keyring; they are never written to a file.
 
@@ -108,6 +116,8 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Ctrl+M` | jump to the next message that mentions you |
 | `Ctrl+Shift+M` | mute or unmute the open chat |
 | `Ctrl+Shift+P` | go to the pinned message |
+| `Ctrl+I` | the chat's info (`Tab` switches its tabs, `Enter` opens, `Esc` closes) |
+| `Ctrl+Shift+N` | start a chat, a group or a channel (`Enter` opens or adds, `Ctrl+Enter` goes on) |
 | `Ctrl+,` | settings |
 
 **Chat list**

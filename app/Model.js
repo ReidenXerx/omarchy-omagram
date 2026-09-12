@@ -678,6 +678,46 @@ function memberDetail(member, nowMs) {
   return [role, member.bot ? "bot" : statusText(member.userStatus, nowMs)].filter(function (part) { return !!part }).join(" · ")
 }
 
+// ---------------------------------------------------------------- starting a chat
+
+function sortContacts(contacts) {
+  return (Array.isArray(contacts) ? contacts.filter(isObject) : []).slice()
+    .sort(function (a, b) { return String(a.name || "").localeCompare(String(b.name || "")) })
+}
+
+// A username typed to find someone, "@name" or "name": 4 to 32 letters, digits and underscores,
+// starting with a letter.
+function usernameQuery(query) {
+  var m = /^@?([A-Za-z][A-Za-z0-9_]{3,31})$/.exec(String(query || "").trim())
+  return m ? m[1] : ""
+}
+
+// The rows of the new chat dialog: starting a group or a channel, finding a @username, and the
+// contacts matching what is typed (with whether each is chosen for a new group).
+function newChatRows(mode, contacts, query, selected) {
+  var q = String(query || "").trim().toLowerCase().replace(/^@/, "")
+  var found = (Array.isArray(contacts) ? contacts : []).filter(function (c) {
+    return isObject(c) && (!q || String(c.name || "").toLowerCase().indexOf(q) >= 0 || String(c.username || "").toLowerCase().indexOf(q) >= 0)
+  })
+  var out = []
+  if (mode === "people") {
+    if (!q) out.push({ kind: "action", id: "group", label: "New group" }, { kind: "action", id: "channel", label: "New channel" })
+    var username = usernameQuery(query)
+    if (username && !found.some(function (c) { return String(c.username || "").toLowerCase() === username.toLowerCase() }))
+      out.push({ kind: "username", username: username, label: "Find @" + username })
+  }
+  found.forEach(function (c) {
+    out.push({ kind: "contact", contact: c, selected: mode === "members" && isObject(selected) && selected[c.userId] === true })
+  })
+  return out
+}
+
+function contactDetail(contact, nowMs) {
+  if (!isObject(contact)) return ""
+  return [contact.username ? "@" + contact.username : "", contact.bot ? "bot" : statusText(contact.status, nowMs)]
+    .filter(function (part) { return !!part }).join(" · ")
+}
+
 // The messages one bubble stands for: every message of an album, or just the one.
 function albumIds(messages, message) {
   if (!isObject(message)) return []

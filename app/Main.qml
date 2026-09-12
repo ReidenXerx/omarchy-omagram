@@ -528,7 +528,7 @@ Scope {
       function openFile(message) { chatView.openFile(message) }
 
       // A menu or the forward dialog has the keyboard: the window's shortcuts wait.
-      readonly property bool modal: chatView.modalOpen || chatList.modalOpen || forwardPicker.visible
+      readonly property bool modal: chatView.modalOpen || chatList.modalOpen || forwardPicker.visible || newChat.visible
 
       Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.search"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.focusSearch() }
       Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.previousChat"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.step(-1) }
@@ -542,6 +542,11 @@ Scope {
         sequences: Keymap.keysFor(omagram.shortcuts, "window.searchInChat")
         enabled: !!omagram.openChat && !omagram.settingsOpen && !mainScope.modal
         onActivated: chatList.searchInChat(omagram.openChatId, omagram.openChat ? omagram.openChat.title : "")
+      }
+      Shortcut {
+        sequences: Keymap.keysFor(omagram.shortcuts, "window.newChat")
+        enabled: !omagram.settingsOpen && !mainScope.modal
+        onActivated: newChat.open()
       }
 
       Component.onCompleted: chatList.focusList()
@@ -566,6 +571,7 @@ Scope {
           onPinRequested: function (chatId) { omagram.togglePin(chatId) }
           onArchiveRequested: function (chatId) { omagram.toggleArchive(chatId) }
           onSettingsRequested: omagram.settingsOpen = true
+          onNewChatRequested: newChat.open()
           onMuteRequested: function (chatId) { omagram.toggleMute(chatId) }
           onReadRequested: function (chatId) { omagram.markChatRead(chatId) }
           onUnreadRequested: function (chatId) { omagram.markChatUnread(chatId) }
@@ -599,7 +605,7 @@ Scope {
           messages: omagram.openChat ? omagram.messagesFor(omagram.openChatId) : []
           nowMs: omagram.nowMs
           onLoadOlder: if (omagram.openChatId) omagram.loadHistory(omagram.openChatId, Model.oldestId(omagram.messagesFor(omagram.openChatId)))
-          blocked: forwardPicker.visible || chatList.modalOpen
+          blocked: forwardPicker.visible || chatList.modalOpen || newChat.visible
           onSearchRequested: function (text) { chatList.searchFor(text) }
           onSearchInChatRequested: chatList.searchInChat(omagram.openChatId, Model.chatTitle(omagram.openChat, omagram.meId))
           onForwardRequested: function (fromChatId, messageIds) { forwardPicker.open(fromChatId, messageIds) }
@@ -619,6 +625,19 @@ Scope {
           chatView.focusMessages()
         }
         onDismissed: chatView.focusMessages()
+      }
+
+      NewChat {
+        id: newChat
+        anchors.fill: parent
+        app: omagram
+        nowMs: omagram.nowMs
+        onOpened: function (chatId, notice) {
+          omagram.openChatById(chatId, false)
+          chatView.focusComposer()
+          if (notice) chatView.flash(notice)
+        }
+        onDismissed: chatList.focusList()
       }
     }
   }

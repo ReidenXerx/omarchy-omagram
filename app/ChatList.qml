@@ -52,6 +52,7 @@ FocusScope {
   signal infoRequested(real chatId)
   signal leaveRequested(real chatId)
   signal clearRequested(real chatId, bool removeFromList)
+  signal newChatRequested()
 
   property var menuChat: null
   readonly property bool modalOpen: chatMenu.visible
@@ -250,7 +251,7 @@ FocusScope {
           id: search
           anchors.fill: parent
           anchors.leftMargin: Style.space(12)
-          anchors.rightMargin: Style.space(40)
+          anchors.rightMargin: Style.space(70)
           verticalAlignment: TextInput.AlignVCenter
           clip: true
           color: app.foreground
@@ -294,8 +295,28 @@ FocusScope {
           }
         }
 
+        // md-pencil-outline (U+F0CB6): start a chat, a group or a channel
+        Text {
+          anchors.right: gear.left
+          anchors.rightMargin: Style.space(14)
+          anchors.verticalCenter: parent.verticalCenter
+          text: String.fromCodePoint(0xF0CB6)
+          color: newArea.containsMouse ? app.accent : app.muted
+          font.family: app.glyphFamily
+          font.pixelSize: Style.font.body
+          MouseArea {
+            id: newArea
+            anchors.fill: parent
+            anchors.margins: -Style.space(6)
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.newChatRequested()
+          }
+        }
+
         // md-cog (U+F0493): settings, including every shortcut
         Text {
+          id: gear
           anchors.right: parent.right
           anchors.rightMargin: Style.space(12)
           anchors.verticalCenter: parent.verticalCenter

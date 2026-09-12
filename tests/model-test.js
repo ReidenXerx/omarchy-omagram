@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail }", box)
 const M = box.M
 const plain = v => JSON.parse(JSON.stringify(v))
 const eq = (a, b, msg) => assert.deepStrictEqual(plain(a), plain(b), msg)
@@ -326,6 +326,20 @@ test("shared files, links, voice and members as rows", () => {
   assert.strictEqual(M.memberDetail({ status: "owner", userStatus: { state: "online" } }, now), "owner · online")
   assert.strictEqual(M.memberDetail({ status: "member", bot: true }, now), "bot")
   assert.strictEqual(M.memberDetail(null, now), "")
+})
+
+test("starting a chat: contacts, usernames, and people for a new group", () => {
+  const contacts = M.sortContacts([{ userId: 2, name: "Zoe", username: "zoe_k" }, { userId: 1, name: "Ann", username: "" }, "junk"])
+  eq(contacts.map(c => c.name), ["Ann", "Zoe"])
+  eq(M.newChatRows("people", contacts, "", {}).map(r => r.kind + ":" + (r.id || r.contact.name)),
+     ["action:group", "action:channel", "contact:Ann", "contact:Zoe"])
+  eq(M.newChatRows("people", contacts, "@durov", {}).map(r => r.kind), ["username"])
+  eq(M.newChatRows("people", contacts, "zoe_k", {}).map(r => r.kind), ["contact"], "a contact with that username is shown, not looked up")
+  eq(M.newChatRows("people", contacts, "an", {}).map(r => r.kind), ["contact"], "too short to be a username")
+  eq(M.newChatRows("members", contacts, "", { 2: true }).map(r => [r.contact.name, r.selected]), [["Ann", false], ["Zoe", true]])
+  for (const bad of ["@ab", "1abc", "has space", "x".repeat(40), "@name!"]) assert.strictEqual(M.usernameQuery(bad), "", bad)
+  assert.strictEqual(M.usernameQuery(" @Some_bot "), "Some_bot")
+  assert.strictEqual(M.contactDetail({ username: "ann", status: { state: "online" } }, Date.now()), "@ann · online")
 })
 
 test("devices and storage in words", () => {
