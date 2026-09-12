@@ -105,6 +105,16 @@ class Harness(unittest.TestCase):
         patch = mock.patch.object(self.d.media, "REC", self.root / "rec")
         patch.start()
         self.addCleanup(patch.stop)
+        for name, value in (("CONFIG", self.root / "config"), ("SETTINGS", self.root / "config" / "settings.json")):
+            patch = mock.patch.object(self.d.prefs, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+        def no_hyprctl(args):
+            raise AssertionError("tests never run the real hyprctl")
+        patch = mock.patch.object(self.d.prefs, "hyprctl", no_hyprctl)
+        patch.start()
+        self.addCleanup(patch.stop)
         self.fake = FakeTd()
         self.keyring = FakeKeyring()
         self.daemon = self.d.Daemon(open_client=lambda: self.fake, keyring=self.keyring,
@@ -678,6 +688,55 @@ class Recording(Harness):
         keep.write_bytes(b"x")
         self.assertTrue(self.request(self.conn, 20, "videonote.discard", path=str(keep))["ok"])
         self.assertFalse(keep.exists())
+
+
+class Settings(Harness):
+    def setUp(self):
+        super().setUp()
+        self.applied = []
+
+        def apply(desired):
+            self.applied.append(dict(desired))
+            return {a: ("active" if a in desired else "off") for a in self.d.prefs.GLOBALS}
+        patch = mock.patch.object(self.d.prefs, "apply", apply)
+        patch.start()
+        self.addCleanup(patch.stop)
+        patch = mock.patch.dict(os.environ, {"HYPRLAND_INSTANCE_SIGNATURE": "test"})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.conn = self.connect()
+
+    def test_settings_come_with_hello_and_are_saved_and_shared(self):
+        hello = self.request(self.conn, 1, "hello")["result"]
+        self.assertEqual(hello["settings"], {"shortcuts": {}, "globalShortcuts": {}})
+        self.assertEqual(hello["globalStatus"]["global.quickReply"], "off")
+        other = self.connect()
+        answer = self.request(self.conn, 2, "settings.set", settings={"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}})
+        self.assertTrue(answer["ok"], answer)
+        event = self.read(other, lambda v: v.get("event") == "settings")
+        self.assertEqual(event["settings"]["shortcuts"], {"window.voice": ["Ctrl+Alt+V"]})
+        saved = json.loads(self.d.prefs.SETTINGS.read_text())
+        self.assertEqual(saved["shortcuts"], {"window.voice": ["Ctrl+Alt+V"]})
+        self.assertEqual(self.applied, [], "no global shortcut changed, nothing registered")
+        self.assertFalse(self.request(self.conn, 3, "settings.set", settings={"shortcuts": {"Bad Id": ["A"]}})["ok"])
+        self.assertFalse(self.request(self.conn, 4, "settings.set", settings="junk")["ok"])
+        self.assertEqual(json.loads(self.d.prefs.SETTINGS.read_text())["shortcuts"], {"window.voice": ["Ctrl+Alt+V"]})
+
+    def test_global_shortcuts_are_registered_and_registered_again(self):
+        answer = self.request(self.conn, 5, "settings.set",
+                              settings={"globalShortcuts": {"global.quickReply": "super+alt+m"}})
+        self.assertEqual(answer["result"]["globalStatus"]["global.quickReply"], "active")
+        self.assertEqual(self.applied, [{"global.quickReply": "SUPER + ALT + M"}])
+        self.assertTrue(self.request(self.conn, 6, "shortcuts.apply")["ok"])
+        self.assertEqual(len(self.applied), 2)
+        self.request(self.conn, 7, "settings.set", settings={"globalShortcuts": {"global.quickReply": "SUPER + ALT + M"}})
+        self.assertEqual(len(self.applied), 2, "unchanged: not registered again")
+
+    def test_without_hyprland_nothing_is_registered(self):
+        with mock.patch.dict(os.environ, {"HYPRLAND_INSTANCE_SIGNATURE": ""}):
+            answer = self.request(self.conn, 8, "settings.set", settings={"globalShortcuts": {"global.panel": "SUPER + P"}})
+        self.assertEqual(answer["result"]["globalStatus"]["global.panel"], "unavailable")
+        self.assertEqual(self.applied, [])
 
 
 class FakeNotifierTransport:

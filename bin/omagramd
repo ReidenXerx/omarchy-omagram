@@ -43,6 +43,7 @@ import omagram_state as model  # noqa: E402
 import omagram_td as td  # noqa: E402
 import omagram_notify as notify  # noqa: E402
 import omagram_media as media  # noqa: E402
+import omagram_settings as prefs  # noqa: E402
 
 VERSION = "0.1.0"
 RUN = pathlib.Path(safe.runtime_dir()) / "omagram"
@@ -52,7 +53,7 @@ LOCK = RUN / "omagram.lock"
 LINE_MAX = 64 * 1024
 OUTBOX_MAX = 16 * 1024 * 1024
 CLIENTS_MAX = 16
-REQUEST_LIMITS = {"max_depth": 6, "max_items": 1024, "max_string": 16 * 1024}
+REQUEST_LIMITS = {"max_depth": 8, "max_items": 1024, "max_string": 16 * 1024}
 TEXT_MAX = 4096
 IDS_MAX = 100
 CLOSE_TIMEOUT = 5.0
@@ -214,6 +215,8 @@ class Daemon:
         self.recording = None      # the voice message being recorded: proc, path, chatId, started
         self.tasks = queue.Queue() # finished background work, run on the loop: (done, result, error)
         self.jobs = 0
+        self.prefs = prefs.load()   # your shortcuts, as stored in ~/.config/omagram/settings.json
+        self.global_status = {action: "off" for action in prefs.GLOBALS}
         self.children = {}   # detached helpers still running: pid -> what to do if they fail
         self.state = model.State(td.MEDIA_ROOTS)
         self.td = None
@@ -302,6 +305,8 @@ class Daemon:
             media.clean_stale()
         except (safe.UnsafeError, OSError):
             pass
+        if self.prefs["globalShortcuts"]:
+            self.apply_globals()
         self.listen()
         self.start_td()
         while not self.stopping:
@@ -710,7 +715,8 @@ class Daemon:
             self.pending_open = None
         answer = {"version": VERSION, "auth": self.auth, "meId": self.state.me_id,
                   "chats": self.state.chat_list("main", 100), "open": target,
-                  "folders": self.state.folders, "mainPosition": self.state.main_position}
+                  "folders": self.state.folders, "mainPosition": self.state.main_position,
+                  "settings": self.prefs, "globalStatus": self.global_status}
         if client.window:
             answer["allChats"] = self.state.all_chats()   # the window's tabs need every list
         self.respond(client, rid, answer)
@@ -881,6 +887,44 @@ class Daemon:
         except (safe.UnsafeError, OSError):
             raise BadRequest("that is not a recording of Omagram's")
         self.respond(client, rid, {})
+
+    # ---------------------------------------------------------------- settings
+
+    def apply_globals(self):
+        """Register the global shortcuts you chose with Hyprland (and remove old ones of ours)."""
+        desired = self.prefs["globalShortcuts"]
+        if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+            self.global_status = {a: ("unavailable" if a in desired else "off") for a in prefs.GLOBALS}
+            return
+        try:
+            self.global_status = prefs.apply(desired)
+        except (safe.UnsafeError, OSError, ValueError):
+            self.global_status = {a: ("failed" if a in desired else "off") for a in prefs.GLOBALS}
+
+    def settings_view(self):
+        return {"settings": self.prefs, "globalStatus": self.global_status}
+
+    def cmd_settings_set(self, client, rid, args):
+        try:
+            new = prefs.check(args.get("settings"))
+        except ValueError as e:
+            raise BadRequest(str(e))
+        try:
+            prefs.save(new)
+        except (safe.UnsafeError, OSError):
+            raise BadRequest("the settings could not be saved")
+        changed = new["globalShortcuts"] != self.prefs["globalShortcuts"]
+        self.prefs = new
+        if changed:
+            self.apply_globals()
+        self.respond(client, rid, self.settings_view())
+        self.broadcast(dict({"event": "settings"}, **self.settings_view()))
+
+    def cmd_shortcuts_apply(self, client, rid, args):
+        """After Hyprland reloads its config (which drops runtime bindings), register them again."""
+        self.apply_globals()
+        self.respond(client, rid, self.settings_view())
+        self.broadcast(dict({"event": "settings"}, **self.settings_view()))
 
     def cmd_ui_focus(self, client, rid, args):
         chat_id = arg_int(args, "chatId", None, None, 0)
@@ -1114,6 +1158,8 @@ COMMANDS = {
     "messages.search": ("cmd_messages_search", True),
     "chat.pin": ("cmd_chat_pin", True),
     "chat.archive": ("cmd_chat_archive", True),
+    "settings.set": ("cmd_settings_set", False),
+    "shortcuts.apply": ("cmd_shortcuts_apply", False),
     "voice.start": ("cmd_voice_start", True),
     "voice.stop": ("cmd_voice_stop", True),
     "videonote.send": ("cmd_videonote_send", True),
