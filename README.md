@@ -21,7 +21,7 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   devices. Text is shown as plain text: bold, italics and links are not rendered yet.
 - **Media** — photos (with a full-size viewer), videos, GIFs, files, round video notes and
   voice messages with a waveform. Send photos and files with `Ctrl+O` or by dropping them on
-  the chat.
+  the chat, and record voice messages (`Ctrl+R`) and round video messages (`Ctrl+Shift+R`).
 - **Stickers** — static, animated (TGS) and video (WebM) stickers, and a sticker picker with
   your recent stickers and installed sets.
 - **Search** — chats in every list, and messages in all chats or in the open one.
@@ -82,6 +82,12 @@ The API id and hash go straight into your keyring; they are never written to a f
 
 ## Keys
 
+These are the defaults. **Every one of them can be changed in Settings** — the gear in the chat
+list, or `Ctrl+,`: choose an action, press Enter and then the new keys (A adds a key, Backspace
+removes one, R resets it). Settings shows when two actions would fight over the same keys, and its
+own keys never change, so a bad choice can always be undone. Your choices are kept in
+`~/.config/omagram/settings.json`.
+
 **Window**
 
 | key | action |
@@ -91,6 +97,7 @@ The API id and hash go straight into your keyring; they are never written to a f
 | `Alt+↑` / `Alt+↓` | previous / next chat |
 | `Ctrl+PgUp` / `Ctrl+PgDn`, `Ctrl+[` / `Ctrl+]` | previous / next folder tab |
 | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | chat list / messages / composer |
+| `Ctrl+,` | settings |
 
 **Chat list**
 
@@ -124,8 +131,13 @@ The API id and hash go straight into your keyring; they are never written to a f
 | `Esc` | cancel a reply or edit |
 | `Ctrl+O` / `Ctrl+Shift+O` | attach photos / send files uncompressed |
 | `Ctrl+S` | stickers (arrows or `hjkl`, `Tab` switches sets, `Enter` sends) |
+| `Ctrl+R` | record a voice message (`Enter` sends, `Esc` cancels) |
+| `Ctrl+Shift+R` | record a round video message (`Enter` starts, then sends) |
 
-**From anywhere** — bind these to keys you like:
+**From anywhere** — pick keys for quick reply, the bar panel and opening Omagram in Settings →
+*Shortcuts that work anywhere*. Omagram registers them with Hyprland while it runs, never writes
+them into your Hyprland config, leaves combinations you already use alone (Settings shows them as
+taken), and only ever removes bindings it made. Or bind the commands yourself:
 
 ```bash
 omarchy-shell shell toggle reidenxerx.omagram '{}'   # quick reply: find a chat and answer
