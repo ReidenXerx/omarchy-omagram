@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import Quickshell
 import qs.Commons
 import "Model.js" as Model
 import "Keymap.js" as Keymap
@@ -37,6 +38,18 @@ FocusScope {
 
   signal loadOlder()
   signal toList()
+  signal searchRequested(string text)
+
+  // What the messages need from here: which spoilers you opened, poll answers being chosen,
+  // messages selected, and a question waiting in the bar (joining a group, starting a bot).
+  property var revealed: ({})
+  property var pollChoices: ({})
+  property var selection: ({})
+  readonly property bool selecting: Object.keys(root.selection).length > 0
+  readonly property bool messagesFocused: messageList.activeFocus
+  property var prompt: null
+  readonly property var keyboard: Model.latestKeyboard(root.messages)
+  property real keyboardHiddenFor: 0
 
   function focusComposer() { composer.forceActiveFocus() }
 
@@ -61,6 +74,10 @@ FocusScope {
   }
 
   function resetForChat() {
+    root.revealed = ({})
+    root.pollChoices = ({})
+    root.selection = ({})
+    root.prompt = null
     root.replyToId = 0
     root.editingId = 0
     root.cursor = -1
@@ -217,6 +234,177 @@ FocusScope {
     if (root.stickToBottom) Qt.callLater(function () { messageList.positionViewAtEnd() })
   }
 
+  // ---------------------------------------------------------------- what messages ask for
+
+  function copyOf(map) {
+    var next = {}
+    for (var k in map) next[k] = map[k]
+    return next
+  }
+
+  function reveal(id) {
+    var next = root.copyOf(root.revealed)
+    next[id] = true
+    root.revealed = next
+  }
+
+  function stepFrom(index, delta) {
+    var i = index + delta
+    while (i > 0 && i < root.messages.length - 1 && Model.inAlbumAfterFirst(root.messages, i)) i += delta
+    if (delta < 0) while (i > 0 && Model.inAlbumAfterFirst(root.messages, i)) i--
+    return Math.max(0, Math.min(root.messages.length - 1, i))
+  }
+
+  function jumpTo(messageId) {
+    if (!root.focusMessage(messageId) && root.chat) app.openChatAt(root.chat.id, messageId)
+  }
+
+  function openExternal(url) {
+    var safe = Model.safeUrl(url)
+    if (!safe) { root.flash("That link cannot be opened"); return }
+    Quickshell.execDetached(["/usr/bin/xdg-open", safe])
+  }
+
+  function openUsername(username) {
+    client.request("username.chat", { username: username }, function (answer) {
+      if (answer.ok && answer.result.chatId) app.openChatById(answer.result.chatId, false)
+      else root.flash("No one on Telegram is @" + username)
+    })
+  }
+
+  function openUser(userId) {
+    if (!userId) return
+    client.request("user.chat", { userId: userId }, function (answer) {
+      if (answer.ok && answer.result.chatId) app.openChatById(answer.result.chatId, false)
+      else root.flash(answer.error || "That chat cannot be opened")
+    })
+  }
+
+  function sendText(text) {
+    if (!root.chat || !text) return
+    client.request("message.send", { chatId: root.chat.id, text: text }, function (answer) {
+      if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
+    })
+    root.stickToBottom = true
+  }
+
+  function openLink(link, message) {
+    var s = String(link || "")
+    if (s === "omagram:spoiler") { if (message) root.reveal(message.id); return }
+    if (s.indexOf("omagram:mention:") === 0) { root.openUsername(decodeURIComponent(s.slice(16))); return }
+    if (s.indexOf("omagram:user:") === 0) { root.openUser(Number(s.slice(13))); return }
+    if (s.indexOf("omagram:search:") === 0) { root.searchRequested(decodeURIComponent(s.slice(15))); return }
+    if (s.indexOf("omagram:command:") === 0) { root.sendText(decodeURIComponent(s.slice(16))); return }
+    var url = Model.safeUrl(s)
+    if (!url) return
+    if (/^mailto:/i.test(url)) { root.openExternal(url); return }
+    client.request("link.open", { url: url }, function (answer) {
+      if (!answer.ok) { root.flash(answer.error || "That link cannot be opened"); return }
+      var r = answer.result
+      if (r.kind === "external") {
+        root.openExternal(r.url)
+      } else if (r.kind === "chat" && r.chatId) {
+        if (r.messageId) app.openChatAt(r.chatId, r.messageId)
+        else app.openChatById(r.chatId, false)
+        if (r.botStart) root.prompt = { text: "Start the bot?", action: "Start",
+                                        run: function () { client.request("bot.start", { chatId: r.chatId, parameter: r.botStart }) } }
+      } else if (r.kind === "invite") {
+        if (r.chatId) { app.openChatById(r.chatId, false); return }
+        root.prompt = { text: "Join “" + r.title + "”" + (r.members ? " (" + r.members + " members)" : "") + "?", action: "Join",
+                        run: function () {
+                          client.request("chat.joinLink", { link: r.link }, function (joined) {
+                            if (joined.ok && joined.result.chatId) app.openChatById(joined.result.chatId, false)
+                            else root.flash(joined.error || "Could not join")
+                          })
+                        } }
+      }
+    })
+  }
+
+  function runPrompt(accept) {
+    var p = root.prompt
+    root.prompt = null
+    if (accept && p && p.run) p.run()
+  }
+
+  function pressButton(message, button) {
+    if (!message || !button) return
+    if (button.kind === "callback") {
+      client.request("button.callback", { chatId: message.chatId, messageId: message.id, data: button.data }, function (answer) {
+        if (!answer.ok) { root.flash(answer.error || "The bot did not answer"); return }
+        if (answer.result.url) root.openLink(answer.result.url, message)
+        else if (answer.result.text) root.flash(answer.result.text)
+      })
+    } else if (button.kind === "url") {
+      root.openLink(button.url, message)
+    } else if (button.kind === "user") {
+      root.openUser(button.userId)
+    } else if (button.kind === "copy") {
+      clipboard.text = button.copyText
+      clipboard.selectAll()
+      clipboard.copy()
+      root.flash("Copied")
+    } else {
+      root.flash("“" + button.text + "” needs an official Telegram app")
+    }
+  }
+
+  function pressKey(button) {
+    if (!button || !root.keyboard) return
+    if (button.kind !== "text") { root.flash("“" + button.text + "” needs an official Telegram app"); return }
+    root.sendText(button.text)
+    if (root.keyboard.oneTime) root.keyboardHiddenFor = root.keyboard.messageId
+  }
+
+  function vote(message, index) {
+    var poll = message && message.content ? message.content.poll : null
+    if (!poll || poll.closed) return
+    if (!poll.multiple) {
+      client.request("poll.vote", { chatId: message.chatId, messageId: message.id, optionIds: [index] }, function (answer) {
+        if (!answer.ok) root.flash(answer.error || "Could not vote")
+      })
+      return
+    }
+    var chosen = (root.pollChoices[message.id] || []).slice()
+    var at = chosen.indexOf(index)
+    if (at >= 0) chosen.splice(at, 1)
+    else chosen.push(index)
+    var next = root.copyOf(root.pollChoices)
+    next[message.id] = chosen
+    root.pollChoices = next
+  }
+
+  function submitVote(message) {
+    var chosen = root.pollChoices[message.id] || []
+    if (!chosen.length) return
+    client.request("poll.vote", { chatId: message.chatId, messageId: message.id, optionIds: chosen }, function (answer) {
+      if (!answer.ok) root.flash(answer.error || "Could not vote")
+    })
+    var next = root.copyOf(root.pollChoices)
+    delete next[message.id]
+    root.pollChoices = next
+  }
+
+  function toggleReaction(message, reaction) {
+    if (!message || !reaction || !reaction.emoji) return
+    client.request("reaction.set", { chatId: message.chatId, messageId: message.id, emoji: reaction.emoji, chosen: !reaction.chosen },
+                   function (answer) { if (!answer.ok) root.flash(answer.error || "Could not react") })
+  }
+
+  function toggleSelected(message) {
+    if (!message) return
+    var next = root.copyOf(root.selection)
+    if (next[message.id]) delete next[message.id]
+    else next[message.id] = true
+    root.selection = next
+  }
+
+  // Filled in with the message menu.
+  function openMenu(message, x, y) {}
+
+  Shortcut { sequences: ["Return", "Enter"]; enabled: !!root.prompt && !app.settingsOpen; onActivated: root.runPrompt(true) }
+  Shortcut { sequence: "Escape"; enabled: !!root.prompt && !app.settingsOpen; onActivated: root.runPrompt(false) }
+
   function flash(text) {
     root.notice = text
     noticeTimer.restart()
@@ -331,8 +519,13 @@ FocusScope {
           font.bold: true
         }
         Text {
-          text: !root.chat ? "" : ({ private: "Private chat", group: "Group", channel: "Channel", secret: "Secret chat" }[root.chat.kind] || "")
-          color: app.muted
+          readonly property string activity: !root.chat ? ""
+              : Model.actionText(Model.activeActions(app.chatActions, root.chat.id, app.clockMs), root.chat.kind === "private")
+          text: !root.chat ? "" : (activity
+              || (root.chat.kind === "private" ? (root.chat.bot ? "bot" : Model.statusText(app.userStatuses[root.chat.userId] || root.chat.status, root.nowMs))
+                  : ({ group: "Group", channel: "Channel", secret: "Secret chat" }[root.chat.kind] || "")))
+          textFormat: Text.PlainText
+          color: activity ? app.accent : app.muted
           font.family: app.fontFamily
           font.pixelSize: Style.font.caption
         }
@@ -370,11 +563,11 @@ FocusScope {
         var selected = root.selectedMessage
         function is(id) { return Keymap.matches(keys, id, event) }
         if (is("messages.down")) {
-          root.cursor = Math.min(root.messages.length - 1, root.cursor + 1)
+          root.cursor = root.stepFrom(root.cursor, 1)
           root.stickToBottom = root.cursor === root.messages.length - 1
           positionViewAtIndex(root.cursor, ListView.Contain)
         } else if (is("messages.up")) {
-          root.cursor = Math.max(0, root.cursor - 1)
+          root.cursor = root.stepFrom(root.cursor, -1)
           root.stickToBottom = false
           positionViewAtIndex(root.cursor, ListView.Contain)
           if (root.cursor < 5) root.loadOlder()
@@ -396,151 +589,11 @@ FocusScope {
         event.accepted = true
       }
 
-      delegate: Item {
-        id: row
-        required property var modelData
-        required property int index
-
-        readonly property var previous: index > 0 ? root.messages[index - 1] : null
-        readonly property bool newDay: !previous || !Model.sameDay(previous.date, modelData.date)
-        readonly property bool runStart: newDay || !Model.sameRun(previous, modelData)
-        readonly property bool showName: !modelData.outgoing && root.chat && root.chat.kind !== "private" && runStart
-        readonly property var quoted: modelData.replyTo ? Model.findMessage(root.messages, modelData.replyTo.messageId) : null
-        readonly property bool isCursor: index === root.cursor && messageList.activeFocus
-        readonly property string label: Model.contentLabel(modelData.content)
-        readonly property bool bare: !!modelData.content.media && (modelData.content.kind === "sticker" || modelData.content.kind === "videoNote")
-        property alias mediaItem: mediaView
-
+      delegate: MessageRow {
         width: messageList.width
-        height: (newDay ? day.height + Style.space(12) : 0) + (runStart ? Style.space(6) : 0) + bubble.height
-
-        Text {
-          id: day
-          visible: row.newDay
-          anchors.horizontalCenter: parent.horizontalCenter
-          y: Style.space(4)
-          text: Model.dayLabel(row.modelData.date, root.nowMs)
-          color: app.muted
-          font.family: app.fontFamily
-          font.pixelSize: Style.font.caption
-          font.bold: true
-        }
-
-        Rectangle {
-          id: bubble
-          readonly property real maxWidth: Math.min(row.width * 0.72, Style.space(640))
-          y: row.height - height
-          x: row.modelData.outgoing ? row.width - width - Style.space(18) : Style.space(18)
-          // Only what is shown counts: a hidden sender name or quote still has an implicit width.
-          width: Math.min(maxWidth, Math.max(body.visible ? body.implicitWidth : 0, meta.implicitWidth,
-                                            mediaView.visible ? mediaView.implicitWidth : 0,
-                                            name.visible ? name.implicitWidth : 0,
-                                            kindLabel.visible ? kindLabel.implicitWidth : 0,
-                                            quote.visible ? quote.implicitWidth : 0) + Style.space(24))
-          height: content.implicitHeight + Style.space(16)
-          radius: Style.cornerRadius * 1.5
-          // Stickers and round video messages float without a bubble, as in Telegram.
-          color: row.bare ? "transparent"
-               : (row.modelData.outgoing ? Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.2)
-                                         : Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.06))
-          border.width: row.isCursor ? Math.max(1, Style.space(1.5)) : (row.modelData.id === root.confirmDeleteId ? 1 : 0)
-          border.color: row.modelData.id === root.confirmDeleteId ? app.urgent : app.accent
-
-          Column {
-            id: content
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: Style.space(12)
-            anchors.topMargin: Style.space(8)
-            spacing: Style.space(3)
-
-            Text {
-              id: name
-              visible: row.showName
-              text: row.modelData.senderName || "Unknown"
-              textFormat: Text.PlainText
-              color: app.accent
-              font.family: app.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: true
-            }
-
-            Rectangle {
-              id: quote
-              visible: !!row.modelData.replyTo
-              width: parent.width
-              implicitWidth: quoteText.implicitWidth + Style.space(12)
-              height: quoteText.implicitHeight + Style.space(6)
-              color: "transparent"
-
-              Rectangle { width: Style.space(2); height: parent.height; color: app.accent }
-              Text {
-                id: quoteText
-                x: Style.space(8)
-                width: parent.width - x
-                elide: Text.ElideRight
-                maximumLineCount: 2
-                wrapMode: Text.WordWrap
-                textFormat: Text.PlainText
-                color: app.muted
-                font.family: app.fontFamily
-                font.pixelSize: Style.font.caption
-                text: row.quoted ? (row.quoted.senderName ? row.quoted.senderName + ": " : "") + Model.previewOf(row.quoted) : "Reply to an older message"
-              }
-            }
-
-            MediaView {
-              id: mediaView
-              app: root.app
-              message: row.modelData
-              maxWidth: bubble.maxWidth - Style.space(24)
-            }
-
-            Text {
-              id: kindLabel
-              visible: row.label !== "" && !row.modelData.content.media
-              text: row.label
-              textFormat: Text.PlainText
-              color: app.muted
-              font.family: app.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.italic: true
-            }
-
-            Text {
-              id: body
-              visible: text !== ""
-              width: Math.min(implicitWidth, bubble.maxWidth - Style.space(24))
-              text: row.modelData.content.text || ""
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              color: app.foreground
-              font.family: app.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            Text {
-              id: meta
-              anchors.right: parent.right
-              text: (row.modelData.editDate > 0 ? "edited  " : "") + Model.clock(row.modelData.date)
-                + (row.modelData.sending === "pending" ? "  ·  sending" : (row.modelData.sending === "failed" ? "  ·  failed" : ""))
-              color: row.modelData.sending === "failed" ? app.urgent : app.muted
-              font.family: app.fontFamily
-              font.pixelSize: Style.font.caption
-            }
-          }
-
-          // Under the bubble's content: media inside it (play buttons, photos) takes its own
-          // clicks, and a click anywhere else still selects the message.
-          MouseArea {
-            z: -1
-            anchors.fill: parent
-            acceptedButtons: Qt.LeftButton
-            onDoubleClicked: root.startReply(row.modelData)
-            onClicked: root.cursor = row.index
-          }
-        }
+        view: root
+        app: root.app
+        messages: root.messages
       }
     }
 
@@ -548,7 +601,7 @@ FocusScope {
     Rectangle {
       Layout.fillWidth: true
       Layout.preferredHeight: visible ? Style.space(40) : 0
-      visible: !!root.replyTo || !!root.editing || root.notice !== ""
+      visible: !!root.replyTo || !!root.editing || root.notice !== "" || !!root.prompt
       color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.04)
 
       Rectangle { width: Style.space(3); height: parent.height; color: root.notice !== "" && !root.replyTo && !root.editing ? app.muted : app.accent }
@@ -565,10 +618,68 @@ FocusScope {
         font.family: app.fontFamily
         font.pixelSize: Style.font.bodySmall
         text: {
+          if (root.prompt) return root.prompt.text + "   Enter: " + root.prompt.action + "  ·  Esc: cancel"
           if (root.notice !== "") return root.notice
           if (root.editing) return "Editing   Esc to cancel"
           if (root.replyTo) return "Replying to " + (root.replyTo.outgoing ? "yourself" : (root.replyTo.senderName || "message")) + ": " + Model.previewOf(root.replyTo) + "   Esc to cancel"
           return ""
+        }
+      }
+    }
+
+    // ------------------------------------------------ a bot's keyboard
+    Rectangle {
+      id: botKeyboard
+      Layout.fillWidth: true
+      visible: !!root.keyboard && root.keyboardHiddenFor !== root.keyboard.messageId && !root.recordingVoice
+      Layout.preferredHeight: visible ? keyboardColumn.implicitHeight + Style.space(16) : 0
+      color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.03)
+
+      Column {
+        id: keyboardColumn
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: Style.space(8)
+        spacing: Style.space(4)
+
+        Repeater {
+          model: root.keyboard ? root.keyboard.rows : []
+          delegate: Row {
+            id: keyRow
+            required property var modelData
+            width: keyboardColumn.width
+            spacing: Style.space(4)
+            Repeater {
+              model: keyRow.modelData
+              delegate: Rectangle {
+                required property var modelData
+                width: (keyRow.width - keyRow.spacing * (keyRow.modelData.length - 1)) / keyRow.modelData.length
+                height: Style.space(32)
+                radius: Style.cornerRadius
+                color: keyArea.containsMouse ? Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.3)
+                                             : Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.14)
+                Text {
+                  anchors.centerIn: parent
+                  width: parent.width - Style.space(12)
+                  horizontalAlignment: Text.AlignHCenter
+                  elide: Text.ElideRight
+                  text: modelData.text
+                  textFormat: Text.PlainText
+                  color: app.foreground
+                  font.family: app.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                MouseArea {
+                  id: keyArea
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.pressKey(modelData)
+                }
+              }
+            }
+          }
         }
       }
     }

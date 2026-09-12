@@ -22,6 +22,11 @@ Item {
   property real stickerSize: Style.space(180)
   property bool still: false
   property bool interactive: true
+  // Spoiler media stays covered, and does not play behind the cover, until you choose to see it.
+  property bool spoiler: false
+  property bool revealed: false
+  readonly property bool covered: view.spoiler && !view.revealed
+  signal revealRequested()
 
   readonly property var content: message ? message.content : null
   readonly property string kind: content ? content.kind : ""
@@ -57,12 +62,14 @@ Item {
 
   function activate() {
     if (!media) return
+    if (covered) { revealRequested(); return }
     if (!ready) { download(32); return }
     if (kind === "photo") { app.openPhoto(message); return }
     togglePlay()
   }
 
   function togglePlay() {
+    if (covered) { revealRequested(); return }
     if (loader.item && loader.item.toggle) loader.item.toggle()
   }
 
@@ -229,7 +236,7 @@ Item {
       Placeholder { visible: !view.ready }
       Loader {
         anchors.fill: parent
-        active: view.ready
+        active: view.ready && !view.covered
         sourceComponent: Video {
           source: view.url
           autoPlay: true
@@ -523,6 +530,35 @@ Item {
           font.pixelSize: Style.font.caption
         }
       }
+    }
+  }
+
+  // ------------------------------------------------ spoiler cover
+  Rectangle {
+    anchors.fill: parent
+    visible: view.covered && view.media !== null
+    radius: Style.cornerRadius
+    color: Qt.rgba(0.08, 0.08, 0.08, 1)
+    clip: true
+
+    Image {
+      anchors.fill: parent
+      source: Model.miniUrl(view.info.mini)
+      fillMode: Image.PreserveAspectCrop
+      opacity: 0.3
+    }
+    Text {
+      anchors.centerIn: parent
+      text: "Spoiler  ·  click to show"
+      color: "white"
+      font.family: view.app.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      font.bold: true
+    }
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: view.revealRequested()
     }
   }
 }

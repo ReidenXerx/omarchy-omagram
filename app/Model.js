@@ -322,3 +322,185 @@ function cleanPhone(value) {
 function validCode(value) {
   return /^[0-9]{3,10}$/.test(String(value || "").trim())
 }
+
+// ---------------------------------------------------------------- rich text
+
+function escapeHtml(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+}
+
+// A web or mail link a message may lead to, or "" when it must not be followed from here.
+// "example.com/page" is written without a scheme in messages, as Telegram shows it.
+function safeUrl(url) {
+  var u = String(url || "").trim()
+  if (!u || u.length > 2048 || /[\s\x00-\x1f"<>\\`]/.test(u)) return ""
+  if (/^(https?:\/\/|mailto:|tg:\/\/)/i.test(u)) return u
+  if (/^[A-Za-z0-9.-]+\.[A-Za-z]{2,}([\/:?#].*)?$/.test(u)) return "https://" + u
+  return ""
+}
+
+function linkFor(entity, piece) {
+  switch (entity.type) {
+  case "url": return safeUrl(piece)
+  case "textUrl": return safeUrl(entity.url)
+  case "email": return /^[^\s@]+@[^\s@]+$/.test(piece) ? "mailto:" + piece : ""
+  case "mention": return "omagram:mention:" + encodeURIComponent(piece.replace(/^@/, ""))
+  case "mentionName": return typeof entity.userId === "number" && entity.userId > 0 ? "omagram:user:" + entity.userId : ""
+  case "hashtag": case "cashtag": return "omagram:search:" + encodeURIComponent(piece)
+  case "botCommand": return "omagram:command:" + encodeURIComponent(piece)
+  }
+  return ""
+}
+
+// A message's text and formatting as the Rich Text a Text element shows. Everything that
+// comes from Telegram is escaped; links lead only to checked web or mail addresses or to
+// omagram: actions the window handles; a spoiler stays hidden until `revealed`.
+function richText(text, entities, revealed, codeBackground) {
+  var s = String(text || "")
+  var list = (Array.isArray(entities) ? entities : []).filter(function (e) {
+    return isObject(e) && typeof e.type === "string" && typeof e.offset === "number" && typeof e.length === "number"
+        && e.offset >= 0 && e.length > 0 && e.offset + e.length <= s.length
+  })
+  var cuts = [0, s.length]
+  list.forEach(function (e) { cuts.push(e.offset, e.offset + e.length) })
+  cuts = cuts.filter(function (c, i, all) { return all.indexOf(c) === i }).sort(function (a, b) { return a - b })
+  var out = ""
+  for (var i = 0; i + 1 < cuts.length; i++) {
+    var start = cuts[i], end = cuts[i + 1]
+    var piece = s.slice(start, end)
+    var on = list.filter(function (e) { return e.offset <= start && e.offset + e.length >= end })
+    var types = on.map(function (e) { return e.type })
+    if (types.indexOf("spoiler") >= 0 && !revealed) {
+      out += '<a href="omagram:spoiler">' + piece.replace(/[^\s]/g, "▒") + "</a>"
+      continue
+    }
+    var html = escapeHtml(piece)
+    if (types.indexOf("code") >= 0 || types.indexOf("pre") >= 0 || types.indexOf("preCode") >= 0)
+      html = '<code style="background-color:' + escapeHtml(codeBackground || "transparent") + '">' + html + "</code>"
+    if (types.indexOf("bold") >= 0) html = "<b>" + html + "</b>"
+    if (types.indexOf("italic") >= 0 || types.indexOf("blockQuote") >= 0) html = "<i>" + html + "</i>"
+    if (types.indexOf("underline") >= 0) html = "<u>" + html + "</u>"
+    if (types.indexOf("strikethrough") >= 0) html = "<s>" + html + "</s>"
+    for (var k = 0; k < on.length; k++) {
+      var whole = s.slice(on[k].offset, on[k].offset + on[k].length)
+      var href = linkFor(on[k], whole)
+      if (href) { html = '<a href="' + escapeHtml(href) + '">' + html + "</a>"; break }
+    }
+    out += html
+  }
+  return '<span style="white-space: pre-wrap">' + out + "</span>"
+}
+
+// ---------------------------------------------------------------- people and chats
+
+function statusText(status, nowMs) {
+  if (!isObject(status)) return ""
+  if (status.state === "online") return "online"
+  if (status.state === "offline" && status.wasOnline > 0) {
+    var minutes = Math.floor((nowMs / 1000 - status.wasOnline) / 60)
+    if (minutes < 1) return "last seen just now"
+    if (minutes < 60) return "last seen " + minutes + (minutes === 1 ? " minute ago" : " minutes ago")
+    if (sameDay(status.wasOnline, nowMs / 1000)) return "last seen today at " + clock(status.wasOnline)
+    if (daysBetween(status.wasOnline, nowMs) === 1) return "last seen yesterday at " + clock(status.wasOnline)
+    return "last seen " + dayLabel(status.wasOnline, nowMs)
+  }
+  return ({ recently: "last seen recently", lastWeek: "last seen within a week", lastMonth: "last seen within a month" })[status.state] || ""
+}
+
+var ACTION_WORDS = {
+  typing: "typing", recordingVoice: "recording a voice message", recordingVideo: "recording a video",
+  recordingVideoNote: "recording a video message", uploadingPhoto: "sending a photo", uploadingVideo: "sending a video",
+  uploadingFile: "sending a file", uploadingVoice: "sending a voice message", uploadingVideoNote: "sending a video message",
+  choosingSticker: "choosing a sticker", choosingLocation: "choosing a location", choosingContact: "choosing a contact",
+  playingGame: "playing a game", watchingAnimations: "watching an animation"
+}
+var ACTION_MS = 6000   // Telegram repeats an action every few seconds while it lasts
+
+function withAction(actions, event, nowMs) {
+  var next = {}
+  for (var k in actions || {}) next[k] = actions[k]
+  if (!isObject(event) || !event.chatId) return next
+  var chat = {}
+  for (var s in next[event.chatId] || {}) chat[s] = next[event.chatId][s]
+  if (event.action === "cancel" || !ACTION_WORDS[event.action]) delete chat[event.senderId]
+  else chat[event.senderId] = { senderName: event.senderName || "", action: event.action, until: nowMs + ACTION_MS }
+  next[event.chatId] = chat
+  return next
+}
+
+function activeActions(actions, chatId, nowMs) {
+  var chat = isObject(actions) ? actions[chatId] : null
+  var out = []
+  for (var id in chat || {}) if (chat[id].until > nowMs) out.push(chat[id])
+  return out
+}
+
+// "typing…" in a private chat; "Ann is typing…", "Ann and Bob are typing…" in a group.
+function actionText(list, privateChat) {
+  var active = (Array.isArray(list) ? list : []).filter(function (a) { return isObject(a) && ACTION_WORDS[a.action] })
+  if (!active.length) return ""
+  var word = ACTION_WORDS[active[0].action]
+  var same = active.every(function (a) { return a.action === active[0].action })
+  if (privateChat) return word + "…"
+  if (active.length === 1) return (active[0].senderName || "Someone") + " is " + word + "…"
+  if (active.length === 2) return (active[0].senderName || "Someone") + " and " + (active[1].senderName || "someone") + " are " + (same ? word : "busy") + "…"
+  return active.length + " people are " + (same ? word : "busy") + "…"
+}
+
+// ---------------------------------------------------------------- messages
+
+// "", "sending", "failed", "sent" or "read", for your own messages.
+function receipt(message, chat) {
+  if (!isObject(message) || !message.outgoing) return ""
+  if (message.sending === "pending") return "sending"
+  if (message.sending === "failed") return "failed"
+  return isObject(chat) && message.id <= (chat.lastReadOutbox || 0) ? "read" : "sent"
+}
+
+function updatePoll(messages, poll) {
+  if (!Array.isArray(messages) || !isObject(poll)) return messages
+  var changed = false
+  var out = messages.map(function (m) {
+    if (isObject(m) && isObject(m.content) && isObject(m.content.poll) && m.content.poll.id === poll.id) {
+      changed = true
+      var content = {}
+      for (var k in m.content) content[k] = m.content[k]
+      content.poll = poll
+      content.text = poll.question
+      var copy = {}
+      for (var j in m) copy[j] = m[j]
+      copy.content = content
+      return copy
+    }
+    return m
+  })
+  return changed ? out : messages
+}
+
+// The messages of an album that starts at `index`; [] when this message does not start one.
+function albumStart(messages, index) {
+  var m = messages[index]
+  if (!isObject(m) || !m.albumId) return []
+  if (index > 0 && isObject(messages[index - 1]) && messages[index - 1].albumId === m.albumId) return []
+  var out = []
+  for (var i = index; i < messages.length && isObject(messages[i]) && messages[i].albumId === m.albumId; i++) out.push(messages[i])
+  return out
+}
+
+function inAlbumAfterFirst(messages, index) {
+  var m = messages[index]
+  return index > 0 && isObject(m) && !!m.albumId && isObject(messages[index - 1]) && messages[index - 1].albumId === m.albumId
+}
+
+// The bot keyboard for the message box: the newest message that sets or removes one decides.
+function latestKeyboard(messages) {
+  if (!Array.isArray(messages)) return null
+  for (var i = messages.length - 1; i >= 0; i--) {
+    var markup = isObject(messages[i]) ? messages[i].markup : null
+    if (!isObject(markup)) continue
+    if (markup.type === "keyboard") return { messageId: messages[i].id, rows: markup.rows || [], oneTime: !!markup.oneTime, placeholder: markup.placeholder || "" }
+    if (markup.type === "remove") return null
+  }
+  return null
+}
+

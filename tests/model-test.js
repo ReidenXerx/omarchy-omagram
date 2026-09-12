@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard }", box)
 const M = box.M
 const plain = v => JSON.parse(JSON.stringify(v))
 const eq = (a, b, msg) => assert.deepStrictEqual(plain(a), plain(b), msg)
@@ -187,6 +187,69 @@ test("sizes, durations, fitting, auto-download, progress", () => {
   assert.strictEqual(X.progress({ size: 200, downloaded: 50 }), 0.25)
   assert.strictEqual(X.progress({ size: 0, downloaded: 50 }), 0)
   assert.strictEqual(X.progress({ size: 10, downloaded: 99 }), 1)
+})
+
+test("rich text is escaped, formatted and only links to safe places", () => {
+  const wrap = inner => '<span style="white-space: pre-wrap">' + inner + "</span>"
+  assert.strictEqual(M.richText('<b>x</b> & "q"', []), wrap("&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot;"))
+  assert.strictEqual(M.richText("hello world", [{ type: "bold", offset: 0, length: 5 }]), wrap("<b>hello</b> world"))
+  assert.strictEqual(M.richText("abcdefgh", [{ type: "bold", offset: 0, length: 5 }, { type: "italic", offset: 3, length: 5 }]),
+                     wrap("<b>abc</b><i><b>de</b></i><i>fgh</i>"))
+  assert.ok(!M.richText("click", [{ type: "textUrl", offset: 0, length: 5, url: "javascript:alert(1)" }]).includes("<a"))
+  assert.ok(!M.richText("click", [{ type: "textUrl", offset: 0, length: 5, url: 'https://x.org/"onmouseover="x' }]).includes("<a"))
+  assert.ok(M.richText("see example.com/a", [{ type: "url", offset: 4, length: 13 }]).includes('<a href="https://example.com/a">example.com/a</a>'))
+  assert.ok(M.richText("hi @durov", [{ type: "mention", offset: 3, length: 6 }]).includes('href="omagram:mention:durov"'))
+  assert.ok(M.richText("hi Ann", [{ type: "mentionName", offset: 3, length: 3, userId: 42 }]).includes('href="omagram:user:42"'))
+  assert.ok(M.richText("#news", [{ type: "hashtag", offset: 0, length: 5 }]).includes('href="omagram:search:%23news"'))
+  const hidden = M.richText("secret word", [{ type: "spoiler", offset: 0, length: 6 }], false)
+  assert.ok(!hidden.includes("secret") && hidden.includes('href="omagram:spoiler"'))
+  assert.ok(M.richText("secret word", [{ type: "spoiler", offset: 0, length: 6 }], true).includes("secret"))
+  assert.strictEqual(M.richText("short", [{ type: "bold", offset: 3, length: 50 }, { type: "bold", offset: -1, length: 2 }, "junk"]), wrap("short"))
+  assert.ok(M.richText("👋 hi", [{ type: "bold", offset: 3, length: 2 }]).includes("<b>hi</b>"), "offsets are UTF-16, like JavaScript strings")
+  assert.strictEqual(M.safeUrl("ftp://x.org"), "")
+  assert.strictEqual(M.safeUrl("mailto:a@b.c"), "mailto:a@b.c")
+})
+
+test("status, typing and read ticks in words", () => {
+  const now = Date.UTC(2026, 8, 12, 15, 0, 0)
+  assert.strictEqual(M.statusText({ state: "online" }, now), "online")
+  assert.strictEqual(M.statusText({ state: "offline", wasOnline: now / 1000 - 30 }, now), "last seen just now")
+  assert.strictEqual(M.statusText({ state: "offline", wasOnline: now / 1000 - 5 * 60 }, now), "last seen 5 minutes ago")
+  assert.strictEqual(M.statusText({ state: "recently" }, now), "last seen recently")
+  assert.strictEqual(M.statusText(null, now), "")
+  let actions = M.withAction({}, { chatId: 42, senderId: 7, senderName: "Ann", action: "typing" }, now)
+  actions = M.withAction(actions, { chatId: 42, senderId: 8, senderName: "Bob", action: "typing" }, now)
+  assert.strictEqual(M.actionText(M.activeActions(actions, 42, now + 1000), false), "Ann and Bob are typing…")
+  assert.strictEqual(M.actionText(M.activeActions(actions, 42, now + 1000), true), "typing…")
+  actions = M.withAction(actions, { chatId: 42, senderId: 8, action: "cancel" }, now)
+  assert.strictEqual(M.actionText(M.activeActions(actions, 42, now + 1000), false), "Ann is typing…")
+  assert.strictEqual(M.actionText(M.activeActions(actions, 42, now + 60000), false), "", "actions expire")
+  assert.strictEqual(M.receipt(msg(5, { outgoing: true }), { lastReadOutbox: 5 }), "read")
+  assert.strictEqual(M.receipt(msg(6, { outgoing: true }), { lastReadOutbox: 5 }), "sent")
+  assert.strictEqual(M.receipt(msg(6, { outgoing: true, sending: "pending" }), {}), "sending")
+  assert.strictEqual(M.receipt(msg(6), { lastReadOutbox: 9 }), "")
+})
+
+test("polls update in place and albums group", () => {
+  const withPoll = msg(3, { content: { kind: "poll", text: "Q", poll: { id: "77", question: "Q", options: [] } } })
+  const list = [msg(1), withPoll]
+  const updated = M.updatePoll(list, { id: "77", question: "Q2", options: [{ index: 0 }] })
+  assert.notStrictEqual(updated, list)
+  assert.strictEqual(updated[1].content.poll.question, "Q2")
+  assert.strictEqual(M.updatePoll(list, { id: "other" }), list, "unchanged lists stay the same object")
+  const album = [msg(1), msg(2, { albumId: "9" }), msg(3, { albumId: "9" }), msg(4, { albumId: "8" })]
+  eq(M.albumStart(album, 1).map(m => m.id), [2, 3])
+  eq(M.albumStart(album, 2), [])
+  assert.ok(M.inAlbumAfterFirst(album, 2) && !M.inAlbumAfterFirst(album, 1) && !M.inAlbumAfterFirst(album, 3))
+  eq(M.albumStart(album, 3).map(m => m.id), [4])
+})
+
+test("the bot keyboard in effect is set or removed by the newest message that says", () => {
+  const keyboard = { type: "keyboard", rows: [[{ text: "Start", kind: "text" }]], oneTime: true }
+  eq(M.latestKeyboard([msg(1, { markup: keyboard }), msg(2)]), { messageId: 1, rows: [[{ text: "Start", kind: "text" }]], oneTime: true, placeholder: "" })
+  assert.strictEqual(M.latestKeyboard([msg(1, { markup: keyboard }), msg(2, { markup: { type: "remove" } })]), null)
+  assert.strictEqual(M.latestKeyboard([msg(1, { markup: { type: "inline", rows: [] } })]), null)
+  assert.strictEqual(M.latestKeyboard(null), null)
 })
 
 for (const f of failures) console.log("FAIL " + f)

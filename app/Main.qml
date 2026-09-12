@@ -35,6 +35,19 @@ Scope {
 
   // Your shortcuts (only what differs from Keymap.js's defaults) and the global ones.
   property var shortcuts: ({})
+
+  // Live details: who is typing where (they expire on their own), and people's online status.
+  property var chatActions: ({})
+  property var userStatuses: ({})
+  property real clockMs: Date.now()
+  signal pinnedChanged(real chatId)
+
+  Timer {
+    interval: 1000
+    repeat: true
+    running: Object.keys(omagram.chatActions).length > 0
+    onTriggered: omagram.clockMs = Date.now()
+  }
   property var globalShortcuts: ({})
   property var globalStatus: ({})
   property bool settingsOpen: false
@@ -196,6 +209,26 @@ Scope {
       if (omagram.messages[e.chatId]) omagram.setMessages(e.chatId, Model.patchMessage(omagram.messages[e.chatId], e.messageId, { content: e.content }))
     } else if (name === "messageEdited") {
       if (omagram.messages[e.chatId]) omagram.setMessages(e.chatId, Model.patchMessage(omagram.messages[e.chatId], e.messageId, { editDate: e.editDate }))
+    } else if (name === "messageInteraction") {
+      if (omagram.messages[e.chatId])
+        omagram.setMessages(e.chatId, Model.patchMessage(omagram.messages[e.chatId], e.messageId, { reactions: e.reactions, views: e.views }))
+    } else if (name === "messagePinned") {
+      if (omagram.messages[e.chatId])
+        omagram.setMessages(e.chatId, Model.patchMessage(omagram.messages[e.chatId], e.messageId, { pinned: e.pinned }))
+      omagram.pinnedChanged(e.chatId)
+    } else if (name === "poll") {
+      for (var pollChat in omagram.messages) {
+        var polled = Model.updatePoll(omagram.messages[pollChat], e.poll)
+        if (polled !== omagram.messages[pollChat]) omagram.setMessages(pollChat, polled)
+      }
+    } else if (name === "chatAction") {
+      omagram.clockMs = Date.now()
+      omagram.chatActions = Model.withAction(omagram.chatActions, e, omagram.clockMs)
+    } else if (name === "userStatus") {
+      var statuses = {}
+      for (var who in omagram.userStatuses) statuses[who] = omagram.userStatuses[who]
+      statuses[e.userId] = e.status
+      omagram.userStatuses = statuses
     } else if (name === "settings") {
       omagram.applySettings(e)
     } else if (name === "recording") {
@@ -491,6 +524,7 @@ Scope {
           messages: omagram.openChat ? omagram.messagesFor(omagram.openChatId) : []
           nowMs: omagram.nowMs
           onLoadOlder: if (omagram.openChatId) omagram.loadHistory(omagram.openChatId, Model.oldestId(omagram.messagesFor(omagram.openChatId)))
+          onSearchRequested: function (text) { chatList.searchFor(text) }
           onToList: chatList.focusList()
         }
       }

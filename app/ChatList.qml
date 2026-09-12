@@ -72,6 +72,12 @@ FocusScope {
     listView.forceActiveFocus()
   }
 
+  function searchFor(text) {
+    root.scopeChatId = 0
+    search.text = text
+    root.focusSearch()
+  }
+
   function searchInChat(chatId, title) {
     search.text = ""   // first: clearing the text ends any earlier scope
     root.scopeChatId = chatId
@@ -470,14 +476,19 @@ FocusScope {
                 spacing: Style.space(6)
 
                 Text {
+                  readonly property string activity: Model.actionText(Model.activeActions(app.chatActions, row.chat.id, app.clockMs),
+                                                                      row.chat.kind === "private")
+                  readonly property bool draft: !activity && !!row.chat.draft && row.chat.id !== root.openChatId
                   Layout.fillWidth: true
                   elide: Text.ElideRight
                   maximumLineCount: 1
                   textFormat: Text.PlainText
-                  color: app.muted
+                  color: activity ? app.accent : (draft ? app.urgent : app.muted)
                   font.family: app.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   text: {
+                    if (activity) return activity
+                    if (draft) return "Draft: " + row.chat.draft
                     var last = row.chat.lastMessage
                     if (!last) return root.searchMode && row.chat.archived ? "In the archive" : ""
                     var who = last.outgoing ? "You: " : (row.chat.kind !== "private" && last.senderName ? last.senderName + ": " : "")
