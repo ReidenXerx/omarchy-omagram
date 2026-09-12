@@ -63,6 +63,12 @@ LOTTIE = pathlib.Path(safe.home_dir()) / ".cache/omagram/lottie"
 TGS_MAX = 1024 * 1024
 LOTTIE_MAX = 16 * 1024 * 1024
 LOTTIE_LIMITS = {"max_depth": 64, "max_items": 2_000_000, "max_string": 1024 * 1024}
+LOTTIE_CACHE_MAX = 256 * 1024 * 1024    # unpacked stickers kept on disk; the oldest go first
+LOTTIE_CACHE_FILES = 4096
+LOTTIE_FAILED_MAX = 512
+_lottie_failed = {}                     # stickers that are not sane TGS, by hash: never inflated twice
+_lottie_writes = 0
+EVENTS_MAX = 50000                      # TDLib updates waiting for the loop
 FILE_ID_MAX = 2 ** 31 - 1
 DOCUMENT_MAX = 2 * 1024 ** 3                        # Telegram's file limit without Premium
 PHOTO_MAX = 10 * 1024 ** 2                          # larger images go as documents
@@ -85,33 +91,71 @@ def lottie_json(path):
     """The Lottie animation inside a TGS sticker (gzip-compressed JSON), written once to a
     private cache named by the sticker's hash. Returns that path, or "" for anything that is
     not a sane TGS. Inflation stops at LOTTIE_MAX, so a compression bomb costs nothing, and
-    the JSON's shape is bounded before the UI's Lottie parser ever sees it."""
+    the JSON's shape is bounded before the UI's Lottie parser ever sees it. A sticker that
+    failed is remembered and not inflated again, and the cache is kept under a ceiling."""
+    global _lottie_writes
     try:
         blob = safe.read_file(path, TGS_MAX)
     except (safe.UnsafeError, OSError):
         return ""
     if not blob or blob[:2] != b"\x1f\x8b":
         return ""
+    digest = hashlib.sha256(blob).hexdigest()
+    target = LOTTIE / (digest + ".json")
+    if cached_lottie(target):
+        return str(target)
+    if digest in _lottie_failed:
+        return ""
     inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    doc = None
     try:
         data = inflater.decompress(blob, LOTTIE_MAX + 1)
-    except zlib.error:
-        return ""
-    if len(data) > LOTTIE_MAX or inflater.unconsumed_tail:
+        if len(data) <= LOTTIE_MAX and not inflater.unconsumed_tail:
+            doc = safe.loads(data, **LOTTIE_LIMITS)
+    except (zlib.error, ValueError, UnicodeDecodeError, safe.UnsafeError):
+        doc = None
+    if not isinstance(doc, dict):
+        _lottie_failed[digest] = True
+        if len(_lottie_failed) > LOTTIE_FAILED_MAX:
+            del _lottie_failed[next(iter(_lottie_failed))]
         return ""
     try:
-        doc = safe.loads(data, **LOTTIE_LIMITS)
-    except (ValueError, UnicodeDecodeError, safe.UnsafeError):
+        safe.write_file(target, data, mode=0o600)
+    except (safe.UnsafeError, OSError):
         return ""
-    if not isinstance(doc, dict):
-        return ""
-    target = LOTTIE / (hashlib.sha256(blob).hexdigest() + ".json")
-    if not os.path.isfile(target):
-        try:
-            safe.write_file(target, data, mode=0o600)
-        except (safe.UnsafeError, OSError):
-            return ""
+    _lottie_writes += 1
+    if _lottie_writes % 32 == 0:
+        trim_lottie_cache()
     return str(target)
+
+
+def cached_lottie(target):
+    """An already unpacked sticker: a regular file of ours, within the size limit."""
+    try:
+        st = os.lstat(target)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and 0 < st.st_size <= LOTTIE_MAX
+
+
+def trim_lottie_cache():
+    """Keeps the unpacked stickers under their size and count ceilings, the oldest out first."""
+    try:
+        entries = [(name, st) for name, st in safe.list_dir(LOTTIE, max_entries=LOTTIE_CACHE_FILES * 2)
+                   if name.endswith(".json") and stat.S_ISREG(st.st_mode)]
+    except (safe.UnsafeError, OSError):
+        return
+    total = sum(st.st_size for _, st in entries)
+    if total <= LOTTIE_CACHE_MAX and len(entries) <= LOTTIE_CACHE_FILES:
+        return
+    entries.sort(key=lambda entry: entry[1].st_mtime)
+    while entries and (total > LOTTIE_CACHE_MAX * 4 // 5 or len(entries) > LOTTIE_CACHE_FILES * 4 // 5):
+        name, st = entries.pop(0)
+        try:
+            safe.remove_file(LOTTIE / name)
+        except (safe.UnsafeError, OSError):
+            pass
+        total -= st.st_size
 
 
 def local_upload(path):
@@ -290,7 +334,7 @@ class Daemon:
         self.clients = {}
         self.pending = {}
         self.next_extra = 1
-        self.events = queue.Queue()
+        self.events = queue.Queue(maxsize=EVENTS_MAX)
         self.stopping = False
         self.closed = threading.Event()
         self.sel = selectors.DefaultSelector()
@@ -358,10 +402,21 @@ class Daemon:
         while not self.stopping or not self.closed.is_set():
             event = self.td.receive(1.0)
             if event is not None:
-                self.events.put(event)
-                self.wake()
+                self.enqueue(event)
             elif self.stopping and self.closed.is_set():
                 return
+
+    def enqueue(self, event):
+        """Hands an update to the loop. When the loop falls behind this waits, and TDLib keeps
+        the rest, rather than the queue growing without end."""
+        while True:
+            try:
+                self.events.put(event, timeout=1.0)
+                break
+            except queue.Full:
+                if self.closed.is_set():
+                    return
+        self.wake()
 
     def run(self):
         # Created on the thread that pumps it: Gio delivers bus signals to this context.
@@ -372,6 +427,7 @@ class Daemon:
             media.clean_stale()
         except (safe.UnsafeError, OSError):
             pass
+        trim_lottie_cache()
         if self.prefs["globalShortcuts"]:
             self.apply_globals()
         self.listen()

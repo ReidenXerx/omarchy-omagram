@@ -13,5 +13,5 @@
     "icon": "󰑚",
     "label": "Quick reply",
     "aliases": ["reply", "find chat", "switch chat"],
-    "action": "omarchy-shell shell toggle reidenxerx.omagram '{}'"
+    "action": "/usr/bin/omarchy-shell shell toggle reidenxerx.omagram '{}'"
   },

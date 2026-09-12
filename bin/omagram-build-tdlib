@@ -41,6 +41,8 @@ GIT_TIMEOUT = 900
 CONFIGURE_TIMEOUT = 600
 BUILD_TIMEOUT = 4 * 3600
 OUTPUT_MAX = 64 * 1024 * 1024
+LOG_MAX = 8 * 1024 * 1024         # the log keeps its end: that is where a failed build says why
+LIBRARY_MAX = 512 * 1024 * 1024
 GB = 1024 ** 3
 
 
@@ -67,8 +69,12 @@ def check_tools():
 
 def run_logged(argv, timeout, cwd=None, env=None):
     r = safe.run(argv, timeout=timeout, max_output=OUTPUT_MAX, cwd=cwd, env=env)
-    safe.write_file(LOG, (LOG.read_bytes() if LOG.exists() else b"") + b"\n$ " + " ".join(argv).encode() + b"\n"
-                    + r.stdout + r.stderr, mode=0o600)
+    try:
+        previous = safe.read_file(LOG, LOG_MAX) or b""
+    except safe.TooLarge:
+        previous = b""
+    entry = b"\n$ " + " ".join(argv).encode() + b"\n" + r.stdout + r.stderr
+    safe.write_file(LOG, (previous + entry)[-LOG_MAX:], mode=0o600)
     return r
 
 
@@ -112,7 +118,10 @@ def build(compiler):
 def install(built):
     safe.ensure_dir(td.LIB.parent, 0o700)
     os.chmod(td.DATA, 0o700)
-    safe.write_file(td.LIB, built.read_bytes(), mode=0o644)
+    library = safe.read_file(built, LIBRARY_MAX)
+    if not library:
+        raise safe.UnsafeError(f"{built} is missing or empty")
+    safe.write_file(td.LIB, library, mode=0o644)
     return verify()
 
 

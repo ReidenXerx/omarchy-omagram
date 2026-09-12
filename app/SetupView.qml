@@ -105,6 +105,7 @@ FocusScope {
         width: parent.width
         wrapMode: Text.WordWrap
         text: view.error
+        textFormat: Text.PlainText
         color: app.urgent
         font.family: app.fontFamily
         font.pixelSize: Style.font.bodySmall

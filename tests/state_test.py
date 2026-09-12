@@ -448,5 +448,19 @@ class Media(unittest.TestCase):
         self.assertEqual(s.apply({"@type": "updateFile", "file": "junk"}), [])
 
 
+class Bounds(unittest.TestCase):
+    def test_users_are_capped_but_never_someone_a_chat_is_with(self):
+        from unittest import mock
+        s = model.State()
+        with mock.patch.object(model, "USERS_MAX", 10):
+            s.apply({"@type": "updateNewChat", "chat": chat(1)})
+            for uid in range(1, 16):
+                s.apply({"@type": "updateUser", "user": {"@type": "user", "id": uid, "first_name": f"U{uid}"}})
+        self.assertLessEqual(len(s.users), 10)
+        self.assertIn(1, s.users, "the person a private chat is with stays")
+        self.assertIn(15, s.users, "the users heard of last stay")
+        self.assertNotIn(2, s.users, "the users heard of first go")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

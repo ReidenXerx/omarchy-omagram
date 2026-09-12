@@ -624,6 +624,7 @@ def auth_view(state):
 # ---------------------------------------------------------------- the account
 
 FILE_MARKS_MAX = 4096
+USERS_MAX = 50000
 
 
 class State:
@@ -982,11 +983,25 @@ class State:
             return []
         usernames = _list(_obj(user.get("usernames")).get("active_usernames"), 4)
         name = " ".join(p for p in (_str(user.get("first_name"), NAME_MAX), _str(user.get("last_name"), NAME_MAX)) if p)
+        self.users.pop(uid, None)   # inserted again: the users heard of most recently come last
         self.users[uid] = {"id": uid, "name": name or (_str(usernames[0], NAME_MAX) if usernames else ""),
                            "username": _str(usernames[0], NAME_MAX) if usernames else "",
                            "bot": _obj(user.get("type")).get("@type") == "userTypeBot",
                            "status": status_view(user.get("status"))}
+        self._trim_users()
         return [{"event": "user", "user": self.users[uid]}]
+
+    def _trim_users(self):
+        """Past the ceiling the users heard of longest ago go first -- never someone a chat is with."""
+        if len(self.users) <= USERS_MAX:
+            return
+        keep = {chat["userId"] for chat in self.chats.values() if chat["userId"]}
+        keep.add(self.me_id)
+        for uid in list(self.users):
+            if len(self.users) <= USERS_MAX * 9 // 10:
+                break
+            if uid not in keep:
+                del self.users[uid]
 
     def _on_updateUserStatus(self, u):
         uid = _int(u.get("user_id"))

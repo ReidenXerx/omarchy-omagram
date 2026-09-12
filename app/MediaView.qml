@@ -186,6 +186,7 @@ Item {
         visible: !(format === "webp" && still.status === Image.Ready) && !(format === "tgs" && sticker.lottie !== "" && !view.still)
                  && !(format === "webm" && view.ready && !view.still) && !(view.still && stillThumb.status === Image.Ready)
         text: view.info.emoji || "🙂"
+        textFormat: Text.PlainText
         font.pixelSize: Math.round(parent.height * 0.45)
         opacity: 0.35
       }

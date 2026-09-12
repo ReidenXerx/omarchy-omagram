@@ -77,6 +77,7 @@ FocusScope {
       wrapMode: Text.WordWrap
       color: app.foreground
       opacity: 0.85
+      textFormat: Text.PlainText
       font.family: app.fontFamily
       font.pixelSize: Style.font.body
       text: {

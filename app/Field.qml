@@ -30,6 +30,7 @@ FocusScope {
     Text {
       visible: field.label !== ""
       text: field.label
+      textFormat: Text.PlainText
       color: field.app.muted
       font.family: field.app.fontFamily
       font.pixelSize: Style.font.caption
@@ -64,6 +65,7 @@ FocusScope {
           anchors.verticalCenter: parent.verticalCenter
           visible: input.text === ""
           text: field.placeholder
+          textFormat: Text.PlainText
           color: field.app.muted
           opacity: 0.7
           font: input.font
@@ -76,6 +78,7 @@ FocusScope {
       width: parent.width
       wrapMode: Text.WordWrap
       text: field.error
+      textFormat: Text.PlainText
       color: field.app.urgent
       font.family: field.app.fontFamily
       font.pixelSize: Style.font.caption

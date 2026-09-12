@@ -100,27 +100,32 @@ def omarchy_shell():
     return shell
 
 
-def link(name, target):
-    path = APP_ROOT / name
+def link(dir_fd, name, target):
+    """A symbolic link in the app root, made through the root's descriptor."""
     try:
-        st = os.lstat(path)
-        if stat.S_ISLNK(st.st_mode) and os.readlink(path) == str(target):
+        st = os.lstat(name, dir_fd=dir_fd)
+        if stat.S_ISLNK(st.st_mode) and os.readlink(name, dir_fd=dir_fd) == str(target):
             return
         if not stat.S_ISLNK(st.st_mode):
-            raise safe.UnsafeError(f"{path} exists and is not a link")
-        os.unlink(path)
+            raise safe.UnsafeError(f"{APP_ROOT / name} exists and is not a link")
+        os.unlink(name, dir_fd=dir_fd)
     except FileNotFoundError:
         pass
-    os.symlink(str(target), str(path))
+    os.symlink(str(target), name, dir_fd=dir_fd)
 
 
 def prepare_root():
     shell = omarchy_shell()
-    safe.ensure_dir(APP_ROOT, 0o700)
-    link("App", PLUGIN / "app")
-    link("bin", BIN)
-    link("Commons", shell / "Commons")
-    link("Ui", shell / "Ui")
+    # Walked from the runtime directory without following symbolic links, every step checked to
+    # be ours, and then changed only through the descriptor: no directory can be swapped between
+    # the check and the use.
+    anchor, parts = safe._split_dir(APP_ROOT)
+    dir_fd = safe._open_dir(anchor, parts, create=True, mode=0o700)
+    try:
+        for name, target in (("App", PLUGIN / "app"), ("bin", BIN), ("Commons", shell / "Commons"), ("Ui", shell / "Ui")):
+            link(dir_fd, name, target)
+    finally:
+        os.close(dir_fd)
     safe.write_file(APP_ROOT / "shell.qml", SHELL_QML, mode=0o600)
 
 

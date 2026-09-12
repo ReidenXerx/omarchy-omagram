@@ -38,6 +38,7 @@ Item {
     Text {
       anchors.centerIn: parent
       text: Model.initials(avatar.chat ? avatar.chat.title : "")
+      textFormat: Text.PlainText
       color: avatar.app.accent
       font.family: avatar.app.fontFamily
       font.pixelSize: Math.round(avatar.size * 0.36)

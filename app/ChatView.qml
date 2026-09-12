@@ -805,7 +805,9 @@ FocusScope {
     if (message) root.copyText(root.captionHolder(message).content.text || Model.previewOf(message))
   }
 
-  TextEdit { id: clipboard; visible: false }
+  // Plain text only: copied text is never parsed as markup, which would drop tags from a message
+  // and could even fetch the images it names.
+  TextEdit { id: clipboard; visible: false; textFormat: TextEdit.PlainText }
 
   // ------------------------------------------------ no chat yet
   Text {

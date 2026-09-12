@@ -519,6 +519,7 @@ Item {
             Text {
               anchors.centerIn: parent
               text: Model.initials(person.contact ? person.contact.name : "")
+              textFormat: Text.PlainText
               color: row.app.accent
               font.family: row.app.fontFamily
               font.bold: true
@@ -580,6 +581,7 @@ Item {
               id: chip
               anchors.centerIn: parent
               text: (modelData.emoji || "✦") + " " + modelData.count
+              textFormat: Text.PlainText
               color: row.app.foreground
               font.family: row.app.fontFamily
               font.pixelSize: Style.font.caption

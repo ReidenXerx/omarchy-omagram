@@ -10,7 +10,10 @@ Item {
   id: client
 
   property string binDir: ""
-  readonly property string socketPath: (Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000") + "/omagram/omagram.sock"
+  // Where the service listens. Without XDG_RUNTIME_DIR there is no telling whose runtime
+  // directory it is, so nothing is guessed and no connection is made.
+  readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || ""
+  readonly property string socketPath: client.runtimeDir.charAt(0) === "/" ? client.runtimeDir + "/omagram/omagram.sock" : ""
   readonly property bool connected: !!client.sock && client.sock.connected
 
   // Omagram's own window: notification clicks that open a chat are handed to it.
@@ -74,6 +77,7 @@ Item {
   // Connected only once it is `sock`: a local connection can complete synchronously, and its
   // handler would otherwise run before the assignment and be taken for a stale socket.
   function reconnect() {
+    if (!client.socketPath) return
     var old = client.sock
     client.sock = socketComponent.createObject(client)
     if (old) old.destroy()

@@ -54,12 +54,27 @@ def valid(raw):
     return isinstance(parsed, dict)
 
 
+# The menu runs an entry's action as a shell command line, so the plugin's path is written into
+# one only when it is made of characters no shell gives a meaning to.
+PLAIN_PATH = re.compile(r"/[A-Za-z0-9._+/-]+")
+
+
+def plugin_bin():
+    """The plugin's bin directory as text that is safe in a command line -- and only if the
+    launcher the menu will run from it is a regular file you own that nobody else can write."""
+    bin_dir = str(PLUGIN_DIR / "bin")
+    if not PLAIN_PATH.fullmatch(bin_dir) or "/../" in bin_dir + "/" or "/./" in bin_dir + "/":
+        raise safe.UnsafeError(f"{bin_dir}: the plugin's path has characters a menu command cannot carry safely")
+    safe.trusted_user_file(PLUGIN_DIR / "bin" / "omagram")
+    return bin_dir
+
+
 def body():
     """The plugin's routes, with @PLUGIN_BIN@ resolved to where it is actually installed."""
     blob = safe.read_file(SNIPPET, SNIPPET_MAX)
     if blob is None:
         raise safe.UnsafeError(f"{SNIPPET} is missing")
-    return blob.decode("utf-8").replace("@PLUGIN_BIN@", str(PLUGIN_DIR / "bin")).rstrip()
+    return blob.decode("utf-8").replace("@PLUGIN_BIN@", plugin_bin()).rstrip()
 
 
 def without_block(raw):

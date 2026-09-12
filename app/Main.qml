@@ -106,6 +106,12 @@ Scope {
 
   function setFile(view) {
     if (!view || !view.id) return
+    if (!omagram.files[view.id] && Object.keys(omagram.files).length >= 4000) {
+      // Bounded: only downloads still running are kept; the rest come back from their messages.
+      var kept = {}
+      for (var id in omagram.files) if (omagram.files[id].active) kept[id] = omagram.files[id]
+      omagram.files = kept
+    }
     omagram.files[view.id] = view
     omagram.filesRevision++
   }
@@ -121,7 +127,10 @@ Scope {
     if (omagram.lottieCache[fileId]) { callback(omagram.lottieCache[fileId]); return }
     service.request("sticker.lottie", { fileId: fileId }, function (answer) {
       var path = answer.ok && answer.result && answer.result.path ? answer.result.path : ""
-      if (path) omagram.lottieCache[fileId] = path
+      if (path) {
+        if (Object.keys(omagram.lottieCache).length >= 2000) omagram.lottieCache = ({})
+        omagram.lottieCache[fileId] = path
+      }
       callback(path)
     })
   }
@@ -134,6 +143,20 @@ Scope {
   function setMessages(chatId, list) {
     omagram.messages[chatId] = list
     omagram.messagesRevision++
+  }
+
+  // The histories of the last 30 chats opened stay loaded; older ones are let go, and load
+  // again when their chat is opened.
+  property var historyOrder: []
+  function keepMessagesOf(chatId) {
+    var order = omagram.historyOrder.filter(function (id) { return id !== chatId })
+    order.push(chatId)
+    while (order.length > 30) {
+      var gone = order.shift()
+      delete omagram.messages[gone]
+      delete omagram.noOlder[gone]
+    }
+    omagram.historyOrder = order
   }
 
   Timer {
@@ -324,6 +347,7 @@ Scope {
   function openChatById(chatId, force) {
     if (!chatId || (chatId === omagram.openChatId && !force)) return
     omagram.viewerMessageId = 0
+    omagram.keepMessagesOf(chatId)
     if (omagram.openChatId && omagram.openChatId !== chatId) service.request("chat.close", { chatId: omagram.openChatId })
     omagram.openChatId = chatId
     service.request("chat.open", { chatId: chatId })
@@ -450,6 +474,7 @@ Scope {
           horizontalAlignment: Text.AlignHCenter
           wrapMode: Text.WordWrap
           color: omagram.auth.state === "error" || omagram.auth.state === "noLibrary" ? omagram.urgent : omagram.muted
+          textFormat: Text.PlainText
           font.family: omagram.fontFamily
           font.pixelSize: Style.font.body
           text: {

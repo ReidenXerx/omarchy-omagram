@@ -414,6 +414,28 @@ class MediaCommands(Harness):
         self.assertEqual(self.lottie(71, self.files / "stickers" / "a.tgs", done=False)["result"]["path"], "")
         self.assertFalse((self.root / "lottie").exists() and any((self.root / "lottie").iterdir()))
 
+    def test_a_failed_sticker_is_not_inflated_again(self):
+        import gzip
+        bad = self.files / "stickers" / "bad.tgs"
+        bad.write_bytes(gzip.compress(b"[1, 2, 3]"))
+        inflaters = []
+        real = self.d.zlib.decompressobj
+        with mock.patch.object(self.d.zlib, "decompressobj", lambda *args: inflaters.append(1) or real(*args)):
+            self.assertEqual(self.lottie(80, bad)["result"]["path"], "")
+            self.assertEqual(self.lottie(81, bad)["result"]["path"], "")
+        self.assertEqual(len(inflaters), 1, "the second request is answered from memory")
+
+    def test_the_sticker_cache_stays_under_its_ceiling_oldest_first(self):
+        cache = self.root / "lottie"
+        cache.mkdir(mode=0o700, exist_ok=True)
+        for n in range(6):
+            unpacked = cache / f"{n:064x}.json"
+            unpacked.write_bytes(b"{}" * 50)
+            os.utime(unpacked, (1000 + n, 1000 + n))
+        with mock.patch.object(self.d, "LOTTIE_CACHE_FILES", 5):
+            self.d.trim_lottie_cache()
+        self.assertEqual(sorted(int(p.stem, 16) for p in cache.iterdir()), [2, 3, 4, 5])
+
     def test_file_progress_reaches_clients(self):
         self.td_event({"@type": "updateFile", "@client_id": 1, "file": {
             "@type": "file", "id": 77, "size": 10, "expected_size": 10,

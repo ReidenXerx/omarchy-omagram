@@ -336,6 +336,7 @@ FocusScope {
                   id: chip
                   anchors.centerIn: parent
                   text: row.modelData.kind === "global" ? modelData : Keymap.label(modelData)
+                  textFormat: Text.PlainText
                   color: settings.app.foreground
                   font.family: settings.app.fontFamily
                   font.pixelSize: Style.font.caption
