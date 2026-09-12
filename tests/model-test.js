@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -544,6 +544,21 @@ test("the message box gives way where you cannot write", () => {
      ["You joined the channel", "Your request to join is sent: an admin will let you in",
       "A bot guards this chat: join it from another Telegram app", "The chat's bot turned down your request to join", "Could not join"])
   eq(M.joinText("joined", false), "You joined the group")
+})
+
+test("your profile: what can go to Telegram, its refusals in words, what each row shows", () => {
+  eq([["firstName", " "], ["firstName", "Ann"], ["firstName", "x".repeat(65)], ["lastName", ""], ["bio", "a\nb"], ["bio", "x".repeat(141)],
+      ["username", ""], ["username", "@ann_lee"], ["username", "1abcde"], ["username", "an n"], ["username", "abcd"]]
+       .map(([field, text]) => M.profileProblem(field, text)),
+     ["A first name is needed", "", "At most 64 characters", "", "One line only", "At most 140 characters",
+      "", "", "A username starts with a letter", "Letters, digits and underscores only", "5 to 32 characters"])
+  eq(["USERNAME_OCCUPIED", "USERNAME_NOT_MODIFIED", "FLOOD_WAIT_30", "", "Something else"].map(e => M.profileError(e)),
+     ["That username is taken", "", "Telegram asks you to wait before changing that again", "Telegram did not take the change", "Something else"])
+  const p = { firstName: "Ann", lastName: "", username: "ann_lee", bio: "", phone: "15550100", photo: null, photoId: "" }
+  eq(["firstName", "lastName", "username", "bio", "phone", "photo"].map(f => M.profileValue(p, f)),
+     ["Ann", "None", "@ann_lee", "None", "+15550100", "None"])
+  eq(M.profileValue(null, "bio"), "Loading…")
+  eq([M.profileChat(Object.assign({}, p, { lastName: "Lee" })).title, M.profileChat(null)], ["Ann Lee", null])
 })
 
 test("voice and video messages play at 1×, 1.5× or 2×", () => {

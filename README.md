@@ -43,8 +43,9 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   caption, and go as albums of up to ten (`Ctrl+Shift+O` sends them as files). Record voice
   messages (`Ctrl+R`) and round video messages (`Ctrl+Shift+R`). A file's menu opens it with its app or saves it to Downloads.
 - **Emoji** — Omarchy's emoji picker, from the message box (`Ctrl+;`).
-- **Account** — Settings shows how much Omagram keeps on this computer (and clears the cache),
-  every device signed in to your account (sign any of them out), and signs you out here.
+- **Account** — Settings has your profile (change your name, username, bio and photo; a photo is cut
+  to a centred square), how much Omagram keeps on this computer (and clears the cache), every device
+  signed in to your account (sign any of them out), and signs you out here.
 - **Secret chats** — start one from a person's info. Like every Telegram secret chat it lives on
   this computer only; its info shows the encryption key to compare with the other device.
 - **Stories** — the stories of the people and channels you follow, above the chat list

@@ -31,6 +31,7 @@ SENT = pathlib.Path(safe.home_dir()) / ".local" / "share" / "omagram" / "sent"
 VOICE_MAX_SECONDS = 600
 NOTE_MAX_SECONDS = 60           # Telegram's limit for a video message
 NOTE_SIZE = 480                 # square side in pixels; Telegram allows up to 640
+PHOTO_SIDE = 1280               # a profile photo's square side at most
 RECORDING_MAX = 512 * 1024 * 1024
 WAVEFORM_SAMPLES = 100
 PCM_RATE = 4000                 # enough to see loudness; a 10-minute message is 4.8 MB of samples
@@ -200,3 +201,20 @@ def prepare_video_note(source, target):
     if not r.ok:
         raise safe.UnsafeError("could not convert the recording")
     return duration_of(target)
+
+
+# ---------------------------------------------------------------- profile photos
+
+def profile_photo_argv(source, target):
+    """A centred square JPEG, the way Telegram takes a profile photo, from any picture ffmpeg reads
+    (the first frame of a moving one)."""
+    ffmpeg = str(safe.tool("ffmpeg"))
+    return [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(source), "-frames:v", "1",
+            "-vf", f"crop='min(iw,ih)':'min(iw,ih)',scale='min({PHOTO_SIDE},iw)':'min({PHOTO_SIDE},ih)'",
+            "-c:v", "mjpeg", "-q:v", "3", "-f", "image2", str(target)]
+
+
+def prepare_profile_photo(source, target):
+    r = safe.run(profile_photo_argv(source, target), timeout=DECODE_TIMEOUT, max_output=64 * 1024)
+    if not r.ok or not os.path.isfile(target) or os.path.getsize(target) == 0:
+        raise safe.UnsafeError("that picture could not be read")

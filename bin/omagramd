@@ -227,6 +227,10 @@ PROPERTIES = {"can_be_deleted_for_all_users": "canDeleteForAll", "can_be_deleted
               "can_be_saved": "canSave", "can_get_message_thread": "canGetThread"}
 DEFERRED = object()   # a command that answers later, from background work
 PLUGIN_ID = "reidenxerx.omagram"
+PROFILE_NAME_MAX = 64
+BIO_MAX = 140            # Telegram allows 70 characters, or 140 with Premium
+USERNAME_MAX = 32
+USERNAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{4,31}")
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
 MEDIA_FILTERS = {"photos": "searchMessagesFilterPhotoAndVideo", "files": "searchMessagesFilterDocument",
@@ -1547,6 +1551,94 @@ class Daemon:
                       "message_auto_delete_time": 0, "for_import": False},
                      client, rid, lambda chat: {"chatId": model._int(chat.get("id"))})
 
+    # ---------------------------------------------------------------- your profile
+
+    def profile_view(self, user, full):
+        """You, as the settings show you: your names, username, bio, phone number and photo."""
+        photo = model._obj(user.get("profile_photo"), "profilePhoto")
+        small = model.file_view(photo.get("small"), self.state.files_root) if photo else None
+        photo_id = model._int(photo.get("id")) if photo else 0
+        return {"userId": model._int(user.get("id")),
+                "firstName": model._str(user.get("first_name"), PROFILE_NAME_MAX),
+                "lastName": model._str(user.get("last_name"), PROFILE_NAME_MAX),
+                "username": model._str(model._obj(user.get("usernames")).get("editable_username"), USERNAME_MAX),
+                "phone": model._str(user.get("phone_number"), 32),
+                "bio": model.formatted(model._obj(full).get("bio"))[0][:BIO_MAX],
+                "photo": {"file": small, "mini": model.minithumbnail(photo.get("minithumbnail"))} if small else None,
+                "photoId": str(photo_id) if photo_id else ""}
+
+    def about_me(self, client, rid, then):
+        """Asks TDLib who you are and hands your user to `then`; a refusal goes to the client."""
+        def failed(error):
+            self.respond_error(client, rid, model._str(error.get("message"), 200) or "Telegram did not say who you are")
+        self.td_send({"@type": "getMe"}, transform=then, failed=failed)
+
+    def cmd_profile_get(self, client, rid, args):
+        def got(user):
+            uid = model._int(user.get("id"))
+            if uid <= 0:
+                self.respond_error(client, rid, "Telegram did not say who you are")
+                return
+            self.td_send({"@type": "getUserFullInfo", "user_id": uid}, client, rid, lambda full: self.profile_view(user, full))
+        self.about_me(client, rid, got)
+
+    def cmd_profile_set_name(self, client, rid, args):
+        first = arg_str(args, "firstName", PROFILE_NAME_MAX).strip()
+        last = arg_str(args, "lastName", PROFILE_NAME_MAX, 0).strip()
+        if not first:
+            raise BadRequest("a first name is needed")
+        if any(ord(c) < 32 for c in first + last):
+            raise BadRequest("a name is one line")
+        self.td_send({"@type": "setName", "first_name": first, "last_name": last}, client, rid)
+
+    def cmd_profile_set_bio(self, client, rid, args):
+        bio = arg_str(args, "bio", BIO_MAX, 0)
+        if any(ord(c) < 32 for c in bio):
+            raise BadRequest("a bio is one line")
+        self.td_send({"@type": "setBio", "bio": bio.strip()}, client, rid)
+
+    def cmd_profile_set_username(self, client, rid, args):
+        """An empty username removes it."""
+        username = arg_str(args, "username", USERNAME_MAX + 1, 0).strip()
+        if username.startswith("@"):
+            username = username[1:]
+        if username and not USERNAME.fullmatch(username):
+            raise BadRequest("a username is 5-32 letters, digits and underscores, starting with a letter")
+        self.td_send({"@type": "setUsername", "username": username}, client, rid)
+
+    def cmd_profile_set_photo(self, client, rid, args):
+        """A new profile photo from a picture you chose, cut to a centred square JPEG first. The copy
+        is deleted once Telegram has the photo, or has refused it."""
+        source, _ = local_upload(args.get("path"))
+        target = media.new_path("profile", ".jpg")
+
+        def done(_answer):
+            media.remove(target)
+            self.respond(client, rid, {})
+
+        def refused(error):
+            media.remove(target)
+            self.respond_error(client, rid, model._str(error.get("message"), 200) or "Telegram did not take the photo")
+
+        def converted(_result, error):
+            if error is not None:
+                media.remove(target)
+                self.respond_error(client, rid, "that picture could not be read")
+                return
+            self.td_send({"@type": "setProfilePhoto", "is_public": False,
+                          "photo": {"@type": "inputChatPhotoStatic", "photo": {"@type": "inputFileLocal", "path": str(target)}}},
+                         transform=done, failed=refused)
+        self.background(lambda: media.prepare_profile_photo(source, target), converted)
+
+    def cmd_profile_delete_photo(self, client, rid, args):
+        def got(user):
+            photo_id = model._int(model._obj(user.get("profile_photo"), "profilePhoto").get("id"))
+            if not photo_id:
+                self.respond_error(client, rid, "you have no profile photo")
+                return
+            self.td_send({"@type": "deleteProfilePhoto", "profile_photo_id": photo_id}, client, rid)
+        self.about_me(client, rid, got)
+
     # ---------------------------------------------------------------- devices and storage
 
     def cmd_sessions_list(self, client, rid, args):
@@ -2357,6 +2449,12 @@ COMMANDS = {
     "sessions.terminateOthers": ("cmd_sessions_terminate_others", True),
     "storage.stats": ("cmd_storage_stats", True),
     "storage.clear": ("cmd_storage_clear", True),
+    "profile.get": ("cmd_profile_get", True),
+    "profile.setName": ("cmd_profile_set_name", True),
+    "profile.setBio": ("cmd_profile_set_bio", True),
+    "profile.setUsername": ("cmd_profile_set_username", True),
+    "profile.setPhoto": ("cmd_profile_set_photo", True),
+    "profile.deletePhoto": ("cmd_profile_delete_photo", True),
     "topics.list": ("cmd_topics_list", True),
     "topic.history": ("cmd_topic_history", True),
     "chat.scheduled": ("cmd_chat_scheduled", True),

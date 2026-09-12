@@ -1148,6 +1148,68 @@ class ChatsAndAccount(Harness):
         self.assertFalse(self.request(self.conn, 147, "chat.readMentions", chatId=-10077, threadId=3)["ok"])
         self.assertFalse(self.request(self.conn, 148, "thread.history", chatId=-10077, threadId=0)["ok"])
 
+    def test_your_profile(self):
+        me = {"@type": "user", "id": 777, "first_name": "Ann", "last_name": "Lee", "phone_number": "15550100",
+              "usernames": {"@type": "usernames", "active_usernames": ["ann_lee"], "disabled_usernames": [],
+                            "editable_username": "ann_lee"},
+              "profile_photo": {"@type": "profilePhoto", "id": "5000000000000000001", "has_animation": False}}
+        before = self.sent_count("getMe")
+        self.send(self.conn, {"id": 150, "cmd": "profile.get", "args": {}})
+        asked = self.next_query("getMe", before)
+        fulls = self.sent_count("getUserFullInfo")
+        self.answer(asked, me)
+        full = self.next_query("getUserFullInfo", fulls)
+        self.answer(full, {"@type": "userFullInfo", "bio": {"@type": "formattedText", "text": "Hello there", "entities": []}})
+        p = self.read(self.conn, lambda v: v.get("id") == 150)["result"]
+        self.assertEqual((full["user_id"], p["firstName"], p["lastName"], p["username"], p["bio"], p["phone"], p["photoId"], p["photo"]),
+                         (777, "Ann", "Lee", "ann_lee", "Hello there", "15550100", "5000000000000000001", None))
+
+        q, r = self.call(151, "profile.setName", "setName", {"@type": "ok"}, firstName=" Ann ", lastName="")
+        self.assertEqual((q["first_name"], q["last_name"], r["ok"]), ("Ann", "", True))
+        for rid, args in ((152, {"firstName": "   ", "lastName": ""}), (153, {"firstName": "A\nB", "lastName": ""}),
+                          (154, {"firstName": "x" * 65, "lastName": ""}), (155, {"firstName": "Ann", "lastName": 5}),
+                          (156, {"firstName": "Ann"})):
+            self.assertFalse(self.request(self.conn, rid, "profile.setName", **args)["ok"], args)
+        q, _ = self.call(156, "profile.setBio", "setBio", {"@type": "ok"}, bio=" Building things ")
+        self.assertEqual(q["bio"], "Building things")
+        self.assertFalse(self.request(self.conn, 157, "profile.setBio", bio="two\nlines")["ok"])
+        q, _ = self.call(158, "profile.setUsername", "setUsername", {"@type": "ok"}, username="@new_name")
+        self.assertEqual(q["username"], "new_name")
+        q, _ = self.call(159, "profile.setUsername", "setUsername", {"@type": "ok"}, username="")
+        self.assertEqual(q["username"], "", "an empty username removes it")
+        for rid, name in ((160, "abcd"), (161, "1abcde"), (162, "has space"), (163, "x" * 33)):
+            self.assertFalse(self.request(self.conn, rid, "profile.setUsername", username=name)["ok"], name)
+
+        before = self.sent_count("getMe")
+        self.send(self.conn, {"id": 164, "cmd": "profile.deletePhoto", "args": {}})
+        asked = self.next_query("getMe", before)
+        deletes = self.sent_count("deleteProfilePhoto")
+        self.answer(asked, me)
+        deleted = self.next_query("deleteProfilePhoto", deletes)
+        self.answer(deleted, {"@type": "ok"})
+        self.assertTrue(self.read(self.conn, lambda v: v.get("id") == 164)["ok"])
+        self.assertEqual(deleted["profile_photo_id"], 5000000000000000001)
+
+        picture = self.root / "me.png"
+        picture.write_bytes(b"\x89PNG not really")
+
+        def cut(source, target):
+            pathlib.Path(target).write_bytes(b"\xff\xd8 a square")
+        with mock.patch.object(self.d.media, "prepare_profile_photo", cut):
+            before = self.sent_count("setProfilePhoto")
+            self.send(self.conn, {"id": 165, "cmd": "profile.setPhoto", "args": {"path": str(picture)}})
+            q = self.next_query("setProfilePhoto", before)
+        made = pathlib.Path(q["photo"]["photo"]["path"])
+        self.assertEqual((q["photo"]["@type"], q["is_public"], made.parent, made.exists()),
+                         ("inputChatPhotoStatic", False, self.root / "rec", True))
+        self.answer(q, {"@type": "ok"})
+        self.assertTrue(self.read(self.conn, lambda v: v.get("id") == 165)["ok"])
+        self.assertFalse(made.exists(), "the square copy goes once Telegram has it")
+        with mock.patch.object(self.d.media, "prepare_profile_photo", side_effect=RuntimeError("not a picture")):
+            self.assertFalse(self.request(self.conn, 166, "profile.setPhoto", path=str(picture))["ok"])
+        self.assertFalse(self.request(self.conn, 167, "profile.setPhoto", path="me.png")["ok"])
+        self.assertEqual(list((self.root / "rec").glob("profile-*")), [], "nothing is left behind")
+
     def test_mention_and_command_suggestions(self):
         def member(uid):
             return {"@type": "chatMember", "member_id": {"@type": "messageSenderUser", "user_id": uid},

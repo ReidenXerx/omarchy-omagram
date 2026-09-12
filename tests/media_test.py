@@ -131,6 +131,13 @@ class Recordings(unittest.TestCase):
         self.assertIn(str(media.NOTE_MAX_SECONDS), note)
         self.assertTrue(any(f"scale={media.NOTE_SIZE}:{media.NOTE_SIZE}" in part for part in note))
 
+    def test_a_profile_photo_becomes_a_centred_square_jpeg(self):
+        with mock.patch.object(safe, "tool", lambda name: pathlib.Path("/usr/bin") / name):
+            argv = media.profile_photo_argv("/in.png", "/out.jpg")
+        self.assertEqual((argv[0], argv[argv.index("-i") + 1], argv[-1]), ("/usr/bin/ffmpeg", "/in.png", "/out.jpg"))
+        self.assertIn("crop='min(iw,ih)':'min(iw,ih)'", argv[argv.index("-vf") + 1])
+        self.assertEqual((argv[argv.index("-frames:v") + 1], argv[argv.index("-c:v") + 1]), ("1", "mjpeg"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

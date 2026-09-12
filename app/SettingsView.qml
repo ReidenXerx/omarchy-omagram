@@ -1,13 +1,16 @@
 import QtQuick
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import qs.Commons
 import "Model.js" as Model
 import "Keymap.js" as Keymap
 
-// Settings: your account (what Omagram keeps on this computer, the devices signed in, signing
-// out), every keyboard shortcut in Omagram, and the shortcuts that work anywhere.
+// Settings: your profile (name, username, bio, photo), your account (what Omagram keeps on this
+// computer, the devices signed in, signing out), every keyboard shortcut in Omagram, and the
+// shortcuts that work anywhere.
 //
-// ↑/↓ or j/k choose. Enter opens an account row -- anything that changes the account asks first,
+// ↑/↓ or j/k choose. Enter changes a field of your profile (Enter saves it, Esc leaves it as it
+// was; Backspace on the photo removes it). Enter opens an account row -- anything that changes the account asks first,
 // answered with Enter or Esc -- or records new keys for an action (the next combination you press
 // replaces its keys); A adds a key, Backspace removes its last key, R resets it, Esc closes. While
 // recording, Esc cancels. These keys are fixed on purpose: whatever you do to the other shortcuts,
@@ -26,13 +29,17 @@ FocusScope {
   property bool sessionsOpen: false
   property var confirm: null         // { text, run }: a question waiting for Enter or Esc
   property real nowMs: Date.now()
+  property var profile: null         // what profile.get last said
+  property var editing: null         // { field, label }: a field of your profile being changed
+  property bool photoBusy: false
+  readonly property var profileChat: Model.profileChat(settings.profile)
 
   readonly property var overrides: settings.app ? settings.app.shortcuts : ({})
   readonly property var globals: settings.app ? settings.app.globalShortcuts : ({})
   readonly property var globalStatus: settings.app ? settings.app.globalStatus : ({})
   readonly property var rows: settings.buildRows()
   readonly property var current: settings.rows[settings.cursor] || null
-  readonly property var accountKinds: ["storage", "sessions", "session", "otherSessions", "logout"]
+  readonly property var accountKinds: ["profilePhoto", "profileField", "profilePhone", "storage", "sessions", "session", "otherSessions", "logout"]
 
   signal closed()
 
@@ -41,10 +48,16 @@ FocusScope {
     settings.recording = ""
     settings.error = ""
     settings.confirm = null
+    settings.editing = null
     settings.nowMs = Date.now()
     settings.forceActiveFocus()
+    settings.loadProfile()
     settings.loadStorage()
     settings.loadSessions()
+  }
+
+  function loadProfile() {
+    settings.app.request("profile.get", {}, function (answer) { if (answer.ok) settings.profile = answer.result })
   }
 
   function loadStorage() {
@@ -56,7 +69,14 @@ FocusScope {
   }
 
   function buildRows() {
-    var out = [{ kind: "header", title: "Account", note: "" },
+    var out = [{ kind: "header", title: "Profile", note: "" },
+               { kind: "profilePhoto", label: "Photo" },
+               { kind: "profileField", field: "firstName", label: "First name" },
+               { kind: "profileField", field: "lastName", label: "Last name" },
+               { kind: "profileField", field: "username", label: "Username" },
+               { kind: "profileField", field: "bio", label: "Bio" },
+               { kind: "profilePhone", label: "Phone number" },
+               { kind: "header", title: "Account", note: "" },
                { kind: "storage", label: "Storage on this computer" },
                { kind: "sessions", label: "Devices signed in" }]
     if (settings.sessionsOpen) {
@@ -153,6 +173,7 @@ FocusScope {
 
   function removeLast() {
     var row = settings.current
+    if (row && row.kind === "profilePhoto") { settings.askRemovePhoto(); return }
     if (!settings.editable(row)) return
     if (row.kind === "global") {
       settings.send(settings.overrides, settings.withGlobal(row.id, ""))
@@ -177,6 +198,85 @@ FocusScope {
               unavailable: "Only inside Hyprland", off: "Not active" })[state] || state
   }
 
+  // ---------------------------------------------------------------- your profile
+
+  function startEditing(row) {
+    if (!settings.profile) { settings.error = "Your profile is still loading"; return }
+    settings.error = ""
+    settings.confirm = null
+    settings.editing = { field: row.field, label: row.label }
+    editor.text = settings.profile[row.field] || ""
+    editor.forceActiveFocus()
+  }
+
+  function cancelEditing() {
+    settings.editing = null
+    settings.forceActiveFocus()
+  }
+
+  function saveEditing() {
+    var editing = settings.editing
+    var profile = settings.profile
+    if (!editing || !profile) return
+    var text = editor.text.trim()
+    if (Model.profileProblem(editing.field, text) !== "") return   // the field shows what is wrong
+    var command = "profile.setBio"
+    var args = { bio: text }
+    if (editing.field === "firstName" || editing.field === "lastName") {
+      command = "profile.setName"
+      args = { firstName: editing.field === "firstName" ? text : profile.firstName,
+               lastName: editing.field === "lastName" ? text : profile.lastName }
+    } else if (editing.field === "username") {
+      text = text.replace(/^@/, "")
+      command = "profile.setUsername"
+      args = { username: text }
+    }
+    settings.cancelEditing()
+    if (text === (profile[editing.field] || "")) return
+    settings.app.request(command, args, function (answer) {
+      var problem = answer.ok ? "" : Model.profileError(answer.error)
+      if (problem !== "") settings.error = problem
+      settings.loadProfile()
+    })
+  }
+
+  function urlToPath(url) {
+    var s = String(url)
+    return s.indexOf("file://") === 0 ? decodeURIComponent(s.slice(7)) : ""
+  }
+
+  // Telegram takes a square JPEG: the service cuts one from the middle of the picture.
+  function setPhoto(path) {
+    settings.forceActiveFocus()
+    if (!path) return
+    settings.error = ""
+    settings.photoBusy = true
+    settings.app.request("profile.setPhoto", { path: path }, function (answer) {
+      settings.photoBusy = false
+      if (!answer.ok) settings.error = Model.profileError(answer.error)
+      settings.loadProfile()
+    })
+  }
+
+  function askRemovePhoto() {
+    if (!settings.profile || !(settings.profile.photo || settings.profile.photoId)) return
+    settings.ask("Remove your profile photo? If you had earlier ones, the one before it shows instead.", function () {
+      settings.app.request("profile.deletePhoto", {}, function (answer) {
+        if (!answer.ok) settings.error = Model.profileError(answer.error)
+        settings.loadProfile()
+      })
+    })
+  }
+
+  FileDialog {
+    id: photoDialog
+    title: "Your new profile photo"
+    fileMode: FileDialog.OpenFile
+    nameFilters: ["Pictures (*.jpg *.jpeg *.png *.webp *.gif *.bmp)"]
+    onAccepted: settings.setPhoto(settings.urlToPath(selectedFile))
+    onRejected: settings.forceActiveFocus()
+  }
+
   // ---------------------------------------------------------------- the account
 
   function ask(text, run) {
@@ -192,7 +292,14 @@ FocusScope {
 
   function activate(row) {
     if (!row) return
-    if (row.kind === "storage") {
+    if (row.kind === "profileField") {
+      settings.startEditing(row)
+    } else if (row.kind === "profilePhoto") {
+      settings.error = ""
+      photoDialog.open()
+    } else if (row.kind === "profilePhone") {
+      settings.error = "Your phone number is changed in Telegram's app on your phone."
+    } else if (row.kind === "storage") {
       settings.ask("Clear the cache? Downloaded photos, videos and files are deleted from this computer; they download again when you open them.", function () {
         settings.app.request("storage.clear", {}, function (answer) {
           if (!answer.ok) { settings.error = answer.error || "The cache could not be cleared"; return }
@@ -237,6 +344,11 @@ FocusScope {
       return
     }
     var key = event.key
+    if (settings.editing) {   // the field being changed has the keys; nothing else moves meanwhile
+      if (key === Qt.Key_Escape) settings.cancelEditing()
+      event.accepted = true
+      return
+    }
     if (settings.confirm) {
       if (key === Qt.Key_Return || key === Qt.Key_Enter) settings.answer(true)
       else if (key === Qt.Key_Escape) settings.answer(false)
@@ -369,6 +481,33 @@ FocusScope {
       }
     }
 
+    // A field of your profile being changed: Enter saves it, Esc leaves it as it was.
+    Rectangle {
+      Layout.fillWidth: true
+      visible: !!settings.editing
+      Layout.preferredHeight: visible ? editor.implicitHeight + Style.space(24) : 0
+      radius: Style.cornerRadius
+      color: Qt.rgba(settings.app.accent.r, settings.app.accent.g, settings.app.accent.b, 0.06)
+      border.width: 1
+      border.color: settings.app.accent
+
+      Field {
+        id: editor
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: Style.space(12)
+        app: settings.app
+        label: settings.editing ? settings.editing.label + "   ·   Enter saves   ·   Esc cancels" : ""
+        placeholder: settings.editing && settings.editing.field === "username" ? "a name people can find you by"
+                   : (settings.editing && settings.editing.field === "bio" ? "a few words about you" : "")
+        maximumLength: settings.editing && settings.editing.field === "bio" ? 140 : 64
+        error: settings.editing ? Model.profileProblem(settings.editing.field, editor.text) : ""
+        onAccepted: settings.saveEditing()
+        Keys.onEscapePressed: settings.cancelEditing()
+      }
+    }
+
     Text {
       Layout.fillWidth: true
       visible: settings.error !== ""
@@ -403,7 +542,8 @@ FocusScope {
 
         width: list.width
         height: header ? Style.space(modelData.note ? 58 : 44)
-              : (account ? Style.space(modelData.kind === "session" || modelData.kind === "storage" ? 58 : 44)
+              : (account ? Style.space(modelData.kind === "profilePhoto" ? 66
+                                       : (["session", "storage", "profileField", "profilePhone"].indexOf(modelData.kind) >= 0 ? 58 : 44))
                          : Style.space(clashes.length || modelData.kind === "global" ? 58 : 42))
         radius: Style.cornerRadius
         color: row.isCursor && !row.header ? settings.app.selected
@@ -446,6 +586,15 @@ FocusScope {
             Layout.fillWidth: true
             spacing: Style.space(8)
 
+            Avatar {
+              visible: row.modelData.kind === "profilePhoto"
+              app: settings.app
+              chat: settings.profileChat
+              size: Style.space(40)
+              Layout.preferredWidth: size
+              Layout.preferredHeight: size
+            }
+
             Text {
               Layout.fillWidth: true
               elide: Text.ElideRight
@@ -458,7 +607,10 @@ FocusScope {
             }
             Text {
               textFormat: Text.PlainText
-              text: ({ storage: "Enter clears the cache", sessions: settings.sessionsOpen ? "Enter hides them" : "Enter shows them",
+              text: ({ profileField: "Enter changes it",
+                       profilePhoto: settings.profile && (settings.profile.photo || settings.profile.photoId)
+                                     ? "Enter changes it  ·  Backspace removes it" : "Enter sets one",
+                       storage: "Enter clears the cache", sessions: settings.sessionsOpen ? "Enter hides them" : "Enter shows them",
                        session: row.modelData.session && row.modelData.session.current ? "this computer" : "Enter signs it out",
                        otherSessions: "Enter", logout: "Enter" })[row.modelData.kind] || ""
               color: settings.app.muted
@@ -473,7 +625,11 @@ FocusScope {
             elide: Text.ElideRight
             textFormat: Text.PlainText
             text: row.modelData.kind === "storage" ? Model.storageText(settings.storage)
-                : (row.modelData.kind === "session" ? Model.sessionDetail(row.modelData.session, settings.nowMs) : "")
+                : row.modelData.kind === "session" ? Model.sessionDetail(row.modelData.session, settings.nowMs)
+                : row.modelData.kind === "profileField" ? Model.profileValue(settings.profile, row.modelData.field)
+                : row.modelData.kind === "profilePhone" ? Model.profileValue(settings.profile, "phone")
+                : row.modelData.kind === "profilePhoto" ? (settings.photoBusy ? "Setting your new photo…" : Model.profileValue(settings.profile, "photo"))
+                : ""
             color: settings.app.muted
             font.family: settings.app.fontFamily
             font.pixelSize: Style.font.caption

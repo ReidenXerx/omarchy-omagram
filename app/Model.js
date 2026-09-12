@@ -1230,6 +1230,58 @@ function agoText(seconds, nowMs) {
   return listTime(seconds, nowMs)
 }
 
+// ---------------------------------------------------------------- your profile
+
+// What is wrong with a field of your profile as typed, or "" when it can go to Telegram.
+function profileProblem(field, text) {
+  var t = String(text === undefined || text === null ? "" : text)
+  for (var i = 0; i < t.length; i++) if (t.charCodeAt(i) < 32) return "One line only"
+  var trimmed = t.trim()
+  if (field === "firstName") return trimmed === "" ? "A first name is needed" : (trimmed.length > 64 ? "At most 64 characters" : "")
+  if (field === "lastName") return trimmed.length > 64 ? "At most 64 characters" : ""
+  if (field === "bio") return trimmed.length > 140 ? "At most 140 characters" : ""
+  if (field === "username") {
+    var name = trimmed.replace(/^@/, "")
+    if (name === "") return ""
+    if (!/^[A-Za-z]/.test(name)) return "A username starts with a letter"
+    if (!/^[A-Za-z0-9_]+$/.test(name)) return "Letters, digits and underscores only"
+    if (name.length < 5 || name.length > 32) return "5 to 32 characters"
+  }
+  return ""
+}
+
+// Telegram turning a change of your profile down, in words; "" when nothing was wrong after all.
+function profileError(error) {
+  var e = String(error || "")
+  if (/NOT_MODIFIED/.test(e)) return ""
+  if (/USERNAME_OCCUPIED|USERNAME_PURCHASE_AVAILABLE/.test(e)) return "That username is taken"
+  if (/USERNAME_INVALID|username is invalid/i.test(e)) return "Telegram does not accept that username"
+  if (/FIRSTNAME_INVALID|LASTNAME_INVALID/.test(e)) return "Telegram does not accept that name"
+  if (/ABOUT_TOO_LONG/.test(e)) return "That bio is too long"
+  if (/PHOTO_CROP_SIZE_SMALL|PHOTO_INVALID_DIMENSIONS/.test(e)) return "That picture is too small: pick one at least 160 pixels on each side"
+  if (/FLOOD_WAIT/.test(e)) return "Telegram asks you to wait before changing that again"
+  return e || "Telegram did not take the change"
+}
+
+// What a row of your profile shows under its name.
+function profileValue(profile, field) {
+  if (!isObject(profile)) return "Loading…"
+  if (field === "firstName") return profile.firstName || ""
+  if (field === "lastName") return profile.lastName || "None"
+  if (field === "username") return profile.username ? "@" + profile.username : "None: people find you by your name or number"
+  if (field === "bio") return profile.bio || "None"
+  if (field === "phone") return profile.phone ? "+" + profile.phone : ""
+  if (field === "photo") return profile.photo || profile.photoId ? "" : "None"
+  return ""
+}
+
+// You, the way Avatar draws a chat: your photo, or your initials.
+function profileChat(profile) {
+  if (!isObject(profile)) return null
+  return { id: 0, kind: "private", userId: 0, photo: profile.photo || null,
+           title: [profile.firstName, profile.lastName].filter(function (part) { return !!part }).join(" ") }
+}
+
 // A signed-in device: "Telegram Desktop 5.1", then "PC · Windows 11 · Kyiv · active 5 minutes ago".
 function sessionTitle(session) {
   if (!isObject(session)) return ""
