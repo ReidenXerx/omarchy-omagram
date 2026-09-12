@@ -1603,6 +1603,7 @@ FocusScope {
           else if (is("messages.save")) { if (selected) root.saveFile(selected) }
           else if (is("messages.link")) { if (selected) root.copyLink(selected) }
           else if (is("messages.thread")) root.openThread(selected)
+          else if (is("messages.speed")) root.flash("Voice and video messages play at " + Model.speedLabel(app.cycleSpeed()))
           else return
           event.accepted = true
         }

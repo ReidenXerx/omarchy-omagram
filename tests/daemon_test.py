@@ -1420,7 +1420,7 @@ class Settings(Harness):
 
     def test_settings_come_with_hello_and_are_saved_and_shared(self):
         hello = self.request(self.conn, 1, "hello")["result"]
-        self.assertEqual(hello["settings"], {"shortcuts": {}, "globalShortcuts": {}})
+        self.assertEqual(hello["settings"], {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1})
         self.assertEqual(hello["globalStatus"]["global.quickReply"], "off")
         other = self.connect()
         answer = self.request(self.conn, 2, "settings.set", settings={"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}})
@@ -1433,6 +1433,13 @@ class Settings(Harness):
         self.assertFalse(self.request(self.conn, 3, "settings.set", settings={"shortcuts": {"Bad Id": ["A"]}})["ok"])
         self.assertFalse(self.request(self.conn, 4, "settings.set", settings="junk")["ok"])
         self.assertEqual(json.loads(self.d.prefs.SETTINGS.read_text())["shortcuts"], {"window.voice": ["Ctrl+Alt+V"]})
+        answer = self.request(self.conn, 40, "settings.playback", rate=1.5)
+        self.assertEqual(answer["result"]["settings"]["playbackRate"], 1.5)
+        self.assertEqual(self.read(other, lambda v: v.get("event") == "settings")["settings"]["playbackRate"], 1.5)
+        self.assertTrue(self.request(self.conn, 41, "settings.set", settings={"shortcuts": {"window.voice": ["Ctrl+Alt+R"]}})["ok"])
+        self.assertEqual(json.loads(self.d.prefs.SETTINGS.read_text())["playbackRate"], 1.5, "the settings page leaves the speed alone")
+        for rid, rate in ((42, 3), (43, True), (44, "2")):
+            self.assertFalse(self.request(self.conn, rid, "settings.playback", rate=rate)["ok"])
 
     def test_global_shortcuts_are_registered_and_registered_again(self):
         answer = self.request(self.conn, 5, "settings.set",

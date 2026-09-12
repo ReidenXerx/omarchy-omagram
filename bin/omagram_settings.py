@@ -25,6 +25,7 @@ SETTINGS_MAX = 64 * 1024
 JSON_LIMITS = {"max_depth": 6, "max_items": 5000, "max_string": 256}
 ACTIONS_MAX = 200
 KEYS_MAX = 6
+PLAYBACK_RATES = (1, 1.5, 2)   # how fast voice and video messages play
 ACTION_ID = re.compile(r"[a-z][A-Za-z]{0,20}\.[a-z][A-Za-z]{0,40}")
 SEQUENCE = re.compile(r"[\x21-\x7e]{1,40}")
 
@@ -53,7 +54,7 @@ BINDS_MAX = 4 * 1024 * 1024
 
 
 def empty():
-    return {"shortcuts": {}, "globalShortcuts": {}}
+    return {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1}
 
 
 # ---------------------------------------------------------------- key combinations for Hyprland
@@ -142,6 +143,11 @@ def check(value, strict=True):
             continue
         seen.add(normal)
         out["globalShortcuts"][action] = normal
+    rate = value.get("playbackRate", 1)
+    if isinstance(rate, bool) or rate not in PLAYBACK_RATES:
+        bad("playbackRate is 1, 1.5 or 2")
+    else:
+        out["playbackRate"] = rate
     return out
 
 

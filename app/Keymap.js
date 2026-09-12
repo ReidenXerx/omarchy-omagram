@@ -100,6 +100,7 @@ var ACTIONS = [
   { id: "messages.save", label: "Save the file to Downloads", keys: ["S"] },
   { id: "messages.link", label: "Copy a link to the message", keys: ["Shift+Y"] },
   { id: "messages.thread", label: "The post's comments, or the replies to the message", keys: ["C"] },
+  { id: "messages.speed", label: "Voice and video messages at 1×, 1.5× or 2×", keys: ["."] },
 
   { id: "composer.send", label: "Send", keys: ["Return", "Enter"] },
   { id: "composer.newLine", label: "New line", keys: ["Shift+Return", "Shift+Enter"] },

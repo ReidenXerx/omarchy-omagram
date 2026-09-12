@@ -84,8 +84,11 @@ Item {
     if (Model.autoDownload(kind, file ? file.size : 0)) download(kind === "sticker" ? 20 : 12)
   }
 
+  // Above the click area: a button inside (play, speed) takes its own click, and a click anywhere
+  // else falls through to it.
   Loader {
     id: loader
+    z: 1
     width: view.box.width
     height: view.box.height
     sourceComponent: ({ photo: photoView, sticker: stickerView, gif: gifView, video: videoView, videoNote: videoNoteView,
@@ -139,6 +142,33 @@ Item {
       color: "white"
       font.family: view.app.glyphFamily
       font.pixelSize: Style.font.title
+    }
+  }
+
+  // 1×, 1.5× or 2×: a click plays faster, and 2× goes back to 1×. Kept for next time.
+  component SpeedChip: Rectangle {
+    id: chip
+    property bool dark: false   // over a video
+    width: speedText.implicitWidth + Style.space(12)
+    height: speedText.implicitHeight + Style.space(4)
+    radius: Style.cornerRadius
+    color: chip.dark ? Qt.rgba(0, 0, 0, speedArea.containsMouse ? 0.7 : 0.5)
+                     : Qt.rgba(view.app.accent.r, view.app.accent.g, view.app.accent.b, speedArea.containsMouse ? 0.3 : 0.14)
+    Text {
+      id: speedText
+      anchors.centerIn: parent
+      text: Model.speedLabel(view.app.playbackRate)
+      color: chip.dark ? "white" : view.app.accent
+      font.family: view.app.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: true
+    }
+    MouseArea {
+      id: speedArea
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: view.app.cycleSpeed()
     }
   }
 
@@ -287,8 +317,16 @@ Item {
         sourceComponent: Video {
           source: view.url
           autoPlay: true
+          playbackRate: Model.playbackRate(view.app.playbackRate)
           fillMode: VideoOutput.PreserveAspectFit
         }
+      }
+      SpeedChip {
+        dark: true
+        visible: videoItem.started && view.ready
+        anchors.left: parent.left
+        anchors.bottom: parent.bottom
+        anchors.margins: Style.space(8)
       }
       PlayBadge {
         visible: !videoItem.started || (videoLoader.item && videoLoader.item.playbackState !== MediaPlayer.PlayingState)
@@ -349,6 +387,7 @@ Item {
             autoPlay: true
             muted: !note.sound
             loops: note.sound ? 1 : MediaPlayer.Infinite
+            playbackRate: note.sound ? Model.playbackRate(view.app.playbackRate) : 1
             fillMode: VideoOutput.PreserveAspectCrop
             onStopped: note.sound = false
           }
@@ -386,6 +425,13 @@ Item {
         font.family: view.app.glyphFamily
         font.pixelSize: Style.font.caption
       }
+      SpeedChip {
+        dark: true
+        visible: note.sound
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.topMargin: Style.space(12)
+      }
     }
   }
 
@@ -407,6 +453,7 @@ Item {
         id: audio
         source: view.ready ? view.url : ""
         audioOutput: AudioOutput {}
+        playbackRate: Model.playbackRate(view.app.playbackRate)
         onMediaStatusChanged: if (mediaStatus === MediaPlayer.EndOfMedia) position = 0
       }
 
@@ -432,7 +479,7 @@ Item {
         id: bars
         anchors.left: voiceButton.right
         anchors.leftMargin: Style.space(10)
-        anchors.right: voiceTime.left
+        anchors.right: voiceSpeed.visible ? voiceSpeed.left : voiceTime.left
         anchors.rightMargin: Style.space(10)
         anchors.verticalCenter: parent.verticalCenter
         height: Style.space(28)
@@ -454,6 +501,15 @@ Item {
             opacity: view.ready ? 1 : 0.4 + 0.6 * view.fraction
           }
         }
+      }
+
+      // While it plays, or whenever the speed is not 1×.
+      SpeedChip {
+        id: voiceSpeed
+        visible: view.ready && (voice.playing || Model.playbackRate(view.app.playbackRate) !== 1)
+        anchors.right: voiceTime.left
+        anchors.rightMargin: Style.space(8)
+        anchors.verticalCenter: parent.verticalCenter
       }
 
       Text {
@@ -487,6 +543,14 @@ Item {
         id: track
         source: fileItem.isAudio && view.ready ? view.url : ""
         audioOutput: AudioOutput {}
+        playbackRate: Model.playbackRate(view.app.playbackRate)
+      }
+
+      SpeedChip {
+        id: trackSpeed
+        visible: fileItem.isAudio && view.ready && (fileItem.playing || Model.playbackRate(view.app.playbackRate) !== 1)
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
       }
 
       Rectangle {
@@ -511,7 +575,8 @@ Item {
       Column {
         anchors.left: fileButton.right
         anchors.leftMargin: Style.space(10)
-        anchors.right: parent.right
+        anchors.right: trackSpeed.visible ? trackSpeed.left : parent.right
+        anchors.rightMargin: trackSpeed.visible ? Style.space(8) : 0
         anchors.verticalCenter: parent.verticalCenter
         spacing: Style.space(2)
 
@@ -538,6 +603,7 @@ Item {
 
   // ------------------------------------------------ spoiler cover
   Rectangle {
+    z: 2
     anchors.fill: parent
     visible: view.covered && view.media !== null
     radius: Style.cornerRadius

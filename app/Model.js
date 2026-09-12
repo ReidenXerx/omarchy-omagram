@@ -249,6 +249,21 @@ function composerBlock(chat) {
   return ""
 }
 
+// How fast voice and video messages, videos and music play: 1×, 1.5× or 2×, in turn.
+var SPEEDS = [1, 1.5, 2]
+
+function playbackRate(value) {
+  return SPEEDS.indexOf(Number(value)) >= 0 ? Number(value) : 1
+}
+
+function nextSpeed(rate) {
+  return SPEEDS[(SPEEDS.indexOf(playbackRate(rate)) + 1) % SPEEDS.length]
+}
+
+function speedLabel(rate) {
+  return playbackRate(rate) + "×"
+}
+
 // Under a channel post: its comments, or the way to leave the first; under a message in a
 // discussion group: its replies, once there are any.
 function repliesText(replies, channel) {

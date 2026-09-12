@@ -82,11 +82,21 @@ Scope {
   property var globalStatus: ({})
   property bool settingsOpen: false
 
+  // Voice and video messages, videos and music play at 1×, 1.5× or 2× (Qt keeps a voice's pitch);
+  // the choice is kept in the settings for the next time.
+  property real playbackRate: 1
+  function cycleSpeed() {
+    omagram.playbackRate = Model.nextSpeed(omagram.playbackRate)
+    service.request("settings.playback", { rate: omagram.playbackRate })
+    return omagram.playbackRate
+  }
+
   function applySettings(view) {
     if (!view || !view.settings) return
     omagram.shortcuts = view.settings.shortcuts || ({})
     omagram.globalShortcuts = view.settings.globalShortcuts || ({})
     omagram.globalStatus = view.globalStatus || ({})
+    omagram.playbackRate = Model.playbackRate(view.settings.playbackRate)
   }
   property var chats: []
   property var messages: ({})

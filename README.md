@@ -38,7 +38,7 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   bots' buttons and keyboards. Web links open in your browser; Telegram links open in Omagram.
   Typing `@` in a group suggests who to mention, and `/` suggests the commands of the chat's bots.
 - **Media** — photos (with a full-size viewer), videos, GIFs, files, round video notes and
-  voice messages with a waveform. Send photos, videos, music and files with `Ctrl+O`, by dropping
+  voice messages with a waveform, played at 1×, 1.5× or 2× (`.`, or the chip beside them). Send photos, videos, music and files with `Ctrl+O`, by dropping
   them on the chat or by pasting a copied image: they wait above the message box, which holds their
   caption, and go as albums of up to ten (`Ctrl+Shift+O` sends them as files). Record voice
   messages (`Ctrl+R`) and round video messages (`Ctrl+Shift+R`). A file's menu opens it with its app or saves it to Downloads.
@@ -161,6 +161,7 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `f` / `p` / `s` | forward / pin or unpin / save its file to Downloads |
 | `Shift+Y` | copy a link to the message |
 | `c` | the post's comments, or the replies to the message |
+| `.` | voice and video messages at 1×, 1.5× or 2× |
 | `x` | select or unselect (so does Ctrl+click); `f`, `y` and `d` then act on everything selected |
 | `m`, `Menu` or `Shift+F10` | the message's menu (so does a right click) |
 | `d` or `Delete` | delete (press again to confirm) |
