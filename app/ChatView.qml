@@ -104,6 +104,57 @@ FocusScope {
   Shortcut { sequence: "Ctrl+O"; enabled: !!root.chat; onActivated: root.attach(true) }
   Shortcut { sequence: "Ctrl+Shift+O"; enabled: !!root.chat; onActivated: root.attach(false) }
   Shortcut { sequence: "Ctrl+S"; enabled: !!root.chat; onActivated: root.toggleStickers() }
+  Shortcut {
+    sequence: "Ctrl+R"
+    enabled: !!root.chat && !videoNote.visible
+    onActivated: root.recordingVoice ? root.stopVoice(true) : root.startVoice()
+  }
+  Shortcut { sequence: "Ctrl+Shift+R"; enabled: !!root.chat && !root.recordingVoice; onActivated: videoNote.open(root.chat.id) }
+  Shortcut { sequences: ["Return", "Enter"]; enabled: root.recordingVoice; onActivated: root.stopVoice(true) }
+  Shortcut { sequence: "Escape"; enabled: root.recordingVoice; onActivated: root.stopVoice(false) }
+
+  // ---------------------------------------------------------------- voice messages
+
+  readonly property bool recordingVoice: !!app.recording && app.recording.state === "voice"
+                                         && !!root.chat && app.recording.chatId === root.chat.id
+  property real recordingNow: Date.now()
+  readonly property real recordingSeconds: root.recordingVoice ? Math.max(0, (root.recordingNow - app.recording.startedAt) / 1000) : 0
+
+  Timer {
+    interval: 200
+    repeat: true
+    running: root.recordingVoice
+    onTriggered: root.recordingNow = Date.now()
+  }
+
+  function startVoice() {
+    if (!root.chat || root.recordingVoice) return
+    root.recordingNow = Date.now()
+    client.request("voice.start", { chatId: root.chat.id }, function (answer) {
+      if (!answer.ok) root.flash("Could not record: " + (answer.error || "no microphone"))
+    })
+  }
+
+  function stopVoice(send) {
+    var args = { send: send }
+    if (send && root.replyToId) args.replyToMessageId = root.replyToId
+    client.request("voice.stop", args, function (answer) {
+      if (!answer.ok) root.flash(answer.error || "Could not send the voice message")
+    })
+    if (send) {
+      root.replyToId = 0
+      root.stickToBottom = true
+    }
+    Qt.callLater(root.focusComposer)
+  }
+
+  function composerAction(action) {
+    if (!root.chat) return
+    if (action === "attach") root.attach(true)
+    else if (action === "stickers") root.toggleStickers()
+    else if (action === "video") videoNote.open(root.chat.id)
+    else if (action === "voice") root.startVoice()
+  }
 
   FileDialog {
     id: attachDialog
@@ -549,7 +600,11 @@ FocusScope {
       Rectangle { width: parent.width; height: 1; color: app.border; opacity: 0.35 }
 
       Rectangle {
-        anchors.fill: parent
+        visible: !root.recordingVoice
+        anchors.left: parent.left
+        anchors.right: composerButtons.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
         anchors.margins: Style.space(10)
         radius: Style.cornerRadius
         color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.05)
@@ -611,6 +666,152 @@ FocusScope {
           }
         }
       }
+
+      // Attach, stickers, a video message, a voice message.
+      Row {
+        id: composerButtons
+        visible: !root.recordingVoice
+        anchors.right: parent.right
+        anchors.rightMargin: Style.space(8)
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: 0
+
+        Repeater {
+          // md-paperclip U+F03E2, md-sticker-emoji U+F0785, md-video U+F0567, md-microphone U+F036C
+          model: [
+            { glyph: String.fromCodePoint(0xF03E2), action: "attach", hint: "Attach photos or files   Ctrl+O" },
+            { glyph: String.fromCodePoint(0xF0785), action: "stickers", hint: "Stickers   Ctrl+S" },
+            { glyph: String.fromCodePoint(0xF0567), action: "video", hint: "Video message   Ctrl+Shift+R" },
+            { glyph: String.fromCodePoint(0xF036C), action: "voice", hint: "Voice message   Ctrl+R" }
+          ]
+          delegate: Item {
+            id: composerButton
+            required property var modelData
+            width: Style.space(38)
+            height: Style.space(38)
+
+            Text {
+              anchors.centerIn: parent
+              text: composerButton.modelData.glyph
+              color: buttonArea.containsMouse || (composerButton.modelData.action === "stickers" && root.stickersOpen) ? app.accent : app.muted
+              font.family: app.glyphFamily
+              font.pixelSize: Style.font.title
+            }
+            MouseArea {
+              id: buttonArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.composerAction(composerButton.modelData.action)
+              onContainsMouseChanged: if (containsMouse) root.flash(composerButton.modelData.hint)
+            }
+          }
+        }
+      }
+
+      // Recording a voice message: replaces the composer until it is sent or cancelled.
+      Rectangle {
+        visible: root.recordingVoice
+        anchors.fill: parent
+        anchors.margins: Style.space(10)
+        radius: Style.cornerRadius
+        color: Qt.rgba(app.urgent.r, app.urgent.g, app.urgent.b, 0.1)
+        border.width: Math.max(1, Style.space(1.5))
+        border.color: app.urgent
+
+        Row {
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(14)
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(10)
+
+          Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(10)
+            height: width
+            radius: width / 2
+            color: app.urgent
+            SequentialAnimation on opacity {
+              running: root.recordingVoice
+              loops: Animation.Infinite
+              NumberAnimation { to: 0.25; duration: 600 }
+              NumberAnimation { to: 1; duration: 600 }
+            }
+          }
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Recording  " + Model.formatDuration(root.recordingSeconds)
+            color: app.foreground
+            font.family: app.fontFamily
+            font.pixelSize: Style.font.body
+          }
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Enter sends  ·  Esc cancels"
+            color: app.muted
+            font.family: app.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        Row {
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(6)
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(4)
+
+          Repeater {
+            // md-close U+F0156, md-send U+F048A
+            model: [
+              { glyph: String.fromCodePoint(0xF0156), send: false },
+              { glyph: String.fromCodePoint(0xF048A), send: true }
+            ]
+            delegate: Item {
+              id: recordButton
+              required property var modelData
+              width: Style.space(38)
+              height: Style.space(38)
+              Text {
+                anchors.centerIn: parent
+                text: recordButton.modelData.glyph
+                color: recordButton.modelData.send ? app.accent : (recordArea.containsMouse ? app.urgent : app.muted)
+                font.family: app.glyphFamily
+                font.pixelSize: Style.font.title
+              }
+              MouseArea {
+                id: recordArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.stopVoice(recordButton.modelData.send)
+              }
+            }
+          }
+        }
+      }
     }
+  }
+
+  // ------------------------------------------------ video messages
+  VideoNoteRecorder {
+    id: videoNote
+    anchors.fill: parent
+    app: root.app
+    onRecorded: function (chatId, path) {
+      var args = { chatId: chatId, path: path }
+      if (root.replyToId) args.replyToMessageId = root.replyToId
+      root.replyToId = 0
+      root.stickToBottom = true
+      root.flash("Preparing the video message…")
+      client.request("videonote.send", args, function (answer) {
+        if (!answer.ok) root.flash("Could not send the video message: " + (answer.error || "unknown error"))
+      })
+      root.focusComposer()
+    }
+    onDiscarded: function (path) {
+      if (path) client.request("videonote.discard", { path: path })
+      root.focusComposer()
+    }
+    onFailed: function (message) { root.flash(message) }
   }
 }

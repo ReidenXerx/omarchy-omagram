@@ -30,6 +30,7 @@ Scope {
   // ---------------------------------------------------------------- state
 
   property var auth: ({ state: "connecting" })
+  property var recording: ({ state: "idle" })   // a voice message being recorded, as the service reports it
   property var chats: []
   property var messages: ({})
   property int messagesRevision: 0
@@ -138,7 +139,11 @@ Scope {
 
     onServiceEvent: function (name, message) { omagram.onEvent(name, message) }
 
-    onConnectedChanged: if (!connected) omagram.auth = { state: "connecting" }
+    onConnectedChanged: {
+      if (connected) return
+      omagram.auth = { state: "connecting" }
+      omagram.recording = { state: "idle" }
+    }
   }
 
   function onEvent(name, e) {
@@ -176,6 +181,8 @@ Scope {
       if (omagram.messages[e.chatId]) omagram.setMessages(e.chatId, Model.patchMessage(omagram.messages[e.chatId], e.messageId, { content: e.content }))
     } else if (name === "messageEdited") {
       if (omagram.messages[e.chatId]) omagram.setMessages(e.chatId, Model.patchMessage(omagram.messages[e.chatId], e.messageId, { editDate: e.editDate }))
+    } else if (name === "recording") {
+      omagram.recording = e
     } else if (name === "messagesDeleted") {
       if (omagram.messages[e.chatId]) omagram.setMessages(e.chatId, Model.removeMessages(omagram.messages[e.chatId], e.messageIds))
     }
