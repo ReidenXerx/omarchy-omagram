@@ -65,11 +65,13 @@ Item {
     if (covered) { revealRequested(); return }
     if (!ready) { download(32); return }
     if (kind === "photo") { app.openPhoto(message); return }
+    if (kind === "file") { app.openFile(message); return }
     togglePlay()
   }
 
   function togglePlay() {
     if (covered) { revealRequested(); return }
+    if (kind === "file") return   // a document has nothing to play: activate() opens it
     if (loader.item && loader.item.toggle) loader.item.toggle()
   }
 
@@ -475,7 +477,7 @@ Item {
 
       function toggle() {
         if (!view.ready) { view.download(32); return }
-        if (!isAudio) return
+        if (!isAudio) { view.app.openFile(view.message); return }
         if (playing) track.pause()
         else track.play()
       }

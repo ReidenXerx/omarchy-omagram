@@ -100,10 +100,10 @@ function indexOfChat(chats, id) {
   return -1
 }
 
-function filterChats(chats, query) {
+function filterChats(chats, query, meId) {
   var q = String(query || "").trim().toLowerCase()
   if (!q) return chats
-  return chats.filter(function (c) { return String(c.title || "").toLowerCase().indexOf(q) >= 0 })
+  return chats.filter(function (c) { return chatTitle(c, meId).toLowerCase().indexOf(q) >= 0 })
 }
 
 function unreadTotal(chats) {
@@ -502,5 +502,136 @@ function latestKeyboard(messages) {
     if (markup.type === "remove") return null
   }
   return null
+}
+
+// ---------------------------------------------------------------- menus, selection, files
+
+var MUTE_FOREVER = 2147483647
+var FILE_KINDS = ["photo", "video", "gif", "voice", "videoNote", "audio", "file"]
+var CAPTION_KINDS = ["photo", "video", "gif", "voice", "audio", "file"]
+// Files that could run code when opened with their app: opening one asks first, as Telegram does.
+var RISKY_EXTENSIONS = ["appimage", "apk", "bash", "bat", "bin", "cmd", "com", "csh", "deb", "desktop", "el", "elf", "exe",
+                        "fish", "hta", "htm", "html", "jar", "js", "ko", "ksh", "lnk", "mjs", "msi", "php", "pkg", "pl", "ps1",
+                        "py", "pyc", "pyw", "rb", "rpm", "run", "scr", "service", "sh", "so", "svg", "url", "vbs", "xhtml", "zsh"]
+
+// "Saved Messages" for your chat with yourself, as every Telegram app calls it.
+function chatTitle(chat, meId) {
+  if (!isObject(chat)) return ""
+  if (chat.kind === "private" && meId && chat.userId === meId) return "Saved Messages"
+  return String(chat.title || "") || "Deleted account"
+}
+
+// What a message's menu offers. `properties` is what Telegram allows for the message, null until
+// it has answered: until then only what needs no permission is there.
+function messageMenu(message, properties) {
+  if (!isObject(message) || !isObject(message.content)) return []
+  var p = isObject(properties) ? properties : null
+  var c = message.content
+  var out = []
+  if (!p || p.canReply) out.push({ id: "reply", label: "Reply" })
+  if (c.text && (!p || p.canSave !== false)) out.push({ id: "copy", label: "Copy text" })
+  if (p && p.canGetLink) out.push({ id: "link", label: "Copy link" })
+  if (p && p.canEdit) out.push({ id: "edit", label: c.kind === "text" ? "Edit" : "Edit caption" })
+  if (p && p.canForward) out.push({ id: "forward", label: "Forward" })
+  if (p && p.canPin) out.push(message.pinned ? { id: "unpin", label: "Unpin" } : { id: "pin", label: "Pin" })
+  out.push({ id: "select", label: "Select" })
+  if (isObject(c.media) && isObject(c.media.file) && FILE_KINDS.indexOf(c.kind) >= 0 && (!p || p.canSave !== false)) {
+    out.push({ id: "open", label: "Open with its app" })
+    out.push({ id: "save", label: "Save to Downloads" })
+  }
+  if (isObject(c.poll) && c.poll.voted && !c.poll.closed && !c.poll.quiz) out.push({ id: "retract", label: "Retract vote" })
+  if (p && p.canDeleteForAll) out.push({ id: "deleteAll", label: "Delete for everyone", danger: true })
+  if (p && p.canDeleteForMe) out.push({ id: "deleteMe", label: "Delete for me", danger: true })
+  return out
+}
+
+function muteMenu(chat) {
+  if (!isObject(chat)) return []
+  if (chat.muted) return [{ id: "unmute", label: "Unmute" }]
+  return [{ id: "mute:3600", label: "Mute for 1 hour" }, { id: "mute:28800", label: "Mute for 8 hours" },
+          { id: "mute:172800", label: "Mute for 2 days" }, { id: "mute:forever", label: "Mute forever" }]
+}
+
+// Seconds to mute for, from a mute menu item: 0 unmutes, -1 is not a mute item.
+function muteSeconds(id) {
+  if (id === "unmute") return 0
+  if (id === "mute:forever") return MUTE_FOREVER
+  var m = /^mute:([1-9][0-9]{0,8})$/.exec(String(id))
+  return m ? Number(m[1]) : -1
+}
+
+function chatMenu(chat, listKey, searchMode) {
+  if (!isObject(chat)) return []
+  var out = [{ id: "open", label: "Open" }]
+  if (chat.unread > 0 || chat.mentions > 0) out.push({ id: "read", label: "Mark as read" })
+  if (!searchMode) out.push(pinnedIn(chat, listKey) ? { id: "unpin", label: "Unpin" } : { id: "pin", label: "Pin" })
+  out.push(chat.muted ? { id: "unmute", label: "Unmute" } : { id: "mute", label: "Mute" })
+  out.push(chat.archived ? { id: "unarchive", label: "Move out of the archive" } : { id: "archive", label: "Archive" })
+  return out
+}
+
+// The messages one bubble stands for: every message of an album, or just the one.
+function albumIds(messages, message) {
+  if (!isObject(message)) return []
+  if (!message.albumId || !Array.isArray(messages)) return [message.id]
+  var ids = messages.filter(function (m) { return isObject(m) && m.albumId === message.albumId }).map(function (m) { return m.id })
+  return ids.length ? ids : [message.id]
+}
+
+// Selects the messages, or unselects them when all of them already are.
+function toggleSelection(selection, ids) {
+  var next = {}
+  for (var k in selection || {}) next[k] = selection[k]
+  var list = Array.isArray(ids) ? ids : []
+  var all = list.length > 0 && list.every(function (id) { return next[id] === true })
+  list.forEach(function (id) { if (all) delete next[id]; else next[id] = true })
+  return next
+}
+
+// Selected messages that are still loaded, oldest first.
+function selectedIds(messages, selection) {
+  if (!Array.isArray(messages) || !isObject(selection)) return []
+  return messages.filter(function (m) { return isObject(m) && selection[m.id] === true }).map(function (m) { return m.id })
+}
+
+// Selected messages as text for the clipboard, the way Telegram copies them.
+function selectionText(messages, selection) {
+  if (!Array.isArray(messages) || !isObject(selection)) return ""
+  return messages.filter(function (m) { return isObject(m) && selection[m.id] === true }).map(function (m) {
+    var body = isObject(m.content) && m.content.text ? String(m.content.text) : previewOf(m)
+    return (m.outgoing ? "You" : (m.senderName || "Unknown")) + ", [" + clock(m.date) + "]\n" + body
+  }).join("\n\n")
+}
+
+function reactionChosen(message, emoji) {
+  return isObject(message) && Array.isArray(message.reactions)
+    && message.reactions.some(function (r) { return isObject(r) && r.emoji === emoji && r.chosen === true })
+}
+
+// Whether opening a file with its app could run code: no extension, or one that runs.
+function riskyFile(name) {
+  var m = /\.([A-Za-z0-9]{1,12})$/.exec(String(name || "").trim())
+  return !m || RISKY_EXTENSIONS.indexOf(m[1].toLowerCase()) >= 0
+}
+
+// The name a message's file is saved under in Downloads.
+function saveName(message) {
+  var c = isObject(message) && isObject(message.content) ? message.content : {}
+  var media = isObject(c.media) ? c.media : {}
+  var given = String(media.fileName || c.fileName || "")
+  if (given) return given
+  var d = new Date((isObject(message) && message.date > 0 ? message.date : 0) * 1000)
+  var stamp = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "_"
+            + pad(d.getHours()) + "-" + pad(d.getMinutes()) + "-" + pad(d.getSeconds())
+  var base = { photo: "photo", video: "video", gif: "animation", voice: "voice", videoNote: "video-message", audio: "audio" }[c.kind] || "file"
+  var ext = { photo: ".jpg", video: ".mp4", gif: ".mp4", voice: ".ogg", videoNote: ".mp4" }[c.kind] || ""
+  return base + "_" + stamp + ext
+}
+
+// Chats to forward to: Saved Messages first, then the main list and the archive.
+function forwardTargets(chats, query, meId) {
+  var every = chatsIn(chats, "main").concat(chatsIn(chats, "archive"))
+  var own = function (c) { return c.kind === "private" && !!meId && c.userId === meId }
+  return filterChats(every.filter(own).concat(every.filter(function (c) { return !own(c) })), query, meId).slice(0, 100)
 }
 

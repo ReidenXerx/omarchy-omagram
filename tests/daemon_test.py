@@ -309,6 +309,13 @@ class Service(Harness):
         self.send(conn, {"id": 38, "cmd": "chat.read", "args": {"chatId": 42, "messageIds": [9]}})
         self.assertTrue(self.last_query("viewMessages")["force_read"])
 
+        # A caption is edited on its own, and may be emptied.
+        self.send(conn, {"id": 39, "cmd": "message.edit", "args": {"chatId": 42, "messageId": 9, "text": "", "caption": True}})
+        query = self.last_query("editMessageCaption")
+        self.assertEqual((query["message_id"], query["caption"]["text"]), (9, ""))
+        self.assertFalse(self.request(conn, 40, "message.edit", chatId=42, messageId=9, text="x" * 1025, caption=True)["ok"])
+        self.assertFalse(self.request(conn, 41, "message.edit", chatId=42, messageId=9, text="")["ok"], "a text message needs text")
+
     def test_logout_starts_over_signed_out(self):
         conn = self.connect()
         self.sign_in(conn)

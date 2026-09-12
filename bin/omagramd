@@ -1406,13 +1406,18 @@ class Daemon:
         self.td_send({"@type": "getStickerSet", "set_id": int(set_id)}, client, rid, stickers)
 
     def cmd_message_edit(self, client, rid, args):
-        self.td_send({"@type": "editMessageText", "chat_id": arg_int(args, "chatId"),
-                      "message_id": arg_int(args, "messageId", 1), "reply_markup": None,
-                      "input_message_content": {"@type": "inputMessageText",
-                                                "text": {"@type": "formattedText", "text": arg_str(args, "text", TEXT_MAX),
-                                                         "entities": []},
-                                                "link_preview_options": None, "clear_draft": False}},
-                     client, rid, self.state.message)
+        chat_id, message_id = arg_int(args, "chatId"), arg_int(args, "messageId", 1)
+        if args.get("caption") is True:   # the caption of a photo, video, file...; it may be emptied
+            query = {"@type": "editMessageCaption", "chat_id": chat_id, "message_id": message_id, "reply_markup": None,
+                     "caption": {"@type": "formattedText", "text": arg_str(args, "text", CAPTION_MAX, 0), "entities": []},
+                     "show_caption_above_media": False}
+        else:
+            query = {"@type": "editMessageText", "chat_id": chat_id, "message_id": message_id, "reply_markup": None,
+                     "input_message_content": {"@type": "inputMessageText",
+                                               "text": {"@type": "formattedText", "text": arg_str(args, "text", TEXT_MAX),
+                                                        "entities": []},
+                                               "link_preview_options": None, "clear_draft": False}}
+        self.td_send(query, client, rid, self.state.message)
 
     def cmd_message_delete(self, client, rid, args):
         revoke = args.get("revoke", True)

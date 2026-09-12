@@ -45,6 +45,7 @@ Item {
                                                   Math.round(row.app.foreground.b * 255)]
     .map(function (v) { return (v < 16 ? "0" : "") + v.toString(16) }).join("")
   property alias mediaItem: mediaView
+  property alias bubbleItem: bubble
 
   visible: !row.hiddenInAlbum
   height: row.hiddenInAlbum ? 0
@@ -657,18 +658,19 @@ Item {
     }
 
     // Under the bubble's content: media, links and buttons inside take their own clicks; a click
-    // anywhere else selects the message, a double click replies, a right click opens its menu.
+    // anywhere else puts the cursor on the message (Ctrl+click, or any click while messages are
+    // selected, selects it), a double click replies, a right click opens its menu.
     MouseArea {
       z: -1
       anchors.fill: parent
       acceptedButtons: Qt.LeftButton | Qt.RightButton
-      onDoubleClicked: function (mouse) { if (mouse.button === Qt.LeftButton) row.view.startReply(row.message) }
+      onDoubleClicked: function (mouse) { if (mouse.button === Qt.LeftButton && !row.view.selecting) row.view.startReply(row.message) }
       onClicked: function (mouse) {
         row.view.cursor = row.index
         if (mouse.button === Qt.RightButton) {
           var at = mapToItem(row.view, mouse.x, mouse.y)
           row.view.openMenu(row.message, at.x, at.y)
-        } else if (row.view.selecting) {
+        } else if (row.view.selecting || (mouse.modifiers & Qt.ControlModifier)) {
           row.view.toggleSelected(row.message)
         }
       }

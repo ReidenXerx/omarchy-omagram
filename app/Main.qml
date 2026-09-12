@@ -282,6 +282,29 @@ Scope {
     })
   }
 
+  // Muting is Telegram's own setting, so it applies on every device.
+  function muteChat(chatId, seconds) {
+    service.request("chat.mute", { chatId: chatId, muteFor: seconds }, function (answer) {
+      if (!answer.ok && screen.item && screen.item.notify) screen.item.notify(answer.error || "Could not change the chat's notifications")
+    })
+  }
+
+  function toggleMute(chatId) {
+    var chat = Model.findChat(omagram.chats, chatId)
+    if (chat) omagram.muteChat(chatId, chat.muted ? 0 : Model.MUTE_FOREVER)
+  }
+
+  function markChatRead(chatId) {
+    var chat = Model.findChat(omagram.chats, chatId)
+    if (!chat) return
+    if (chat.lastMessage && chat.lastMessage.id) omagram.markRead(chatId, [chat.lastMessage.id])
+    if (chat.mentions > 0) service.request("chat.readMentions", { chatId: chatId })
+  }
+
+  function openFile(message) {
+    if (screen.item && screen.item.openFile) screen.item.openFile(message)
+  }
+
   // A message found by search: open its chat, load the messages around it, put the cursor on it.
   function openChatAt(chatId, messageId) {
     omagram.openChatById(chatId, false)
@@ -339,7 +362,7 @@ Scope {
 
   FloatingWindow {
     id: window
-    title: omagram.openChat ? omagram.openChat.title + " — Omagram" : "Omagram"
+    title: omagram.openChat ? Model.chatTitle(omagram.openChat, omagram.meId) + " — Omagram" : "Omagram"
     color: omagram.background
     implicitWidth: 1100
     implicitHeight: 760
@@ -463,18 +486,22 @@ Scope {
       function focusMessages() { chatView.focusMessages() }
       function focusMessage(id) { return chatView.focusMessage(id) }
       function notify(text) { chatView.flash(text) }
+      function openFile(message) { chatView.openFile(message) }
 
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.search"); enabled: !omagram.settingsOpen; onActivated: chatList.focusSearch() }
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.previousChat"); enabled: !omagram.settingsOpen; onActivated: chatList.step(-1) }
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.nextChat"); enabled: !omagram.settingsOpen; onActivated: chatList.step(1) }
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusList"); enabled: !omagram.settingsOpen; onActivated: chatList.focusList() }
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusMessages"); enabled: !omagram.settingsOpen; onActivated: chatView.focusMessages() }
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusComposer"); enabled: !omagram.settingsOpen; onActivated: chatView.focusComposer() }
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.nextTab"); enabled: !omagram.settingsOpen; onActivated: chatList.tabStep(1) }
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.previousTab"); enabled: !omagram.settingsOpen; onActivated: chatList.tabStep(-1) }
+      // A menu or the forward dialog has the keyboard: the window's shortcuts wait.
+      readonly property bool modal: chatView.modalOpen || chatList.modalOpen || forwardPicker.visible
+
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.search"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.focusSearch() }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.previousChat"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.step(-1) }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.nextChat"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.step(1) }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusList"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.focusList() }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusMessages"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatView.focusMessages() }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusComposer"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatView.focusComposer() }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.nextTab"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.tabStep(1) }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.previousTab"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.tabStep(-1) }
       Shortcut {
         sequences: Keymap.keysFor(omagram.shortcuts, "window.searchInChat")
-        enabled: !!omagram.openChat && !omagram.settingsOpen
+        enabled: !!omagram.openChat && !omagram.settingsOpen && !mainScope.modal
         onActivated: chatList.searchInChat(omagram.openChatId, omagram.openChat ? omagram.openChat.title : "")
       }
 
@@ -500,6 +527,8 @@ Scope {
           onPinRequested: function (chatId) { omagram.togglePin(chatId) }
           onArchiveRequested: function (chatId) { omagram.toggleArchive(chatId) }
           onSettingsRequested: omagram.settingsOpen = true
+          onMuteRequested: function (chatId) { omagram.toggleMute(chatId) }
+          onReadRequested: function (chatId) { omagram.markChatRead(chatId) }
           onActivated: function (chatId) {
             omagram.openChatById(chatId, false)
             chatView.focusComposer()
@@ -524,9 +553,26 @@ Scope {
           messages: omagram.openChat ? omagram.messagesFor(omagram.openChatId) : []
           nowMs: omagram.nowMs
           onLoadOlder: if (omagram.openChatId) omagram.loadHistory(omagram.openChatId, Model.oldestId(omagram.messagesFor(omagram.openChatId)))
+          blocked: forwardPicker.visible || chatList.modalOpen
           onSearchRequested: function (text) { chatList.searchFor(text) }
+          onSearchInChatRequested: chatList.searchInChat(omagram.openChatId, Model.chatTitle(omagram.openChat, omagram.meId))
+          onForwardRequested: function (fromChatId, messageIds) { forwardPicker.open(fromChatId, messageIds) }
           onToList: chatList.focusList()
         }
+      }
+
+      ForwardPicker {
+        id: forwardPicker
+        anchors.fill: parent
+        app: omagram
+        chats: omagram.chats
+        onPicked: function (chatId, title) {
+          service.request("message.forward", { chatId: chatId, fromChatId: forwardPicker.fromChatId, messageIds: forwardPicker.messageIds },
+                          function (answer) { chatView.flash(answer.ok ? "Forwarded to " + title : "Could not forward: " + (answer.error || "unknown error")) })
+          chatView.clearSelection()
+          chatView.focusMessages()
+        }
+        onDismissed: chatView.focusMessages()
       }
     }
   }

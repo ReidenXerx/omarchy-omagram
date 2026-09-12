@@ -27,6 +27,9 @@ var SECTIONS = [
   { id: "videoNote", title: "Recording a video message", scope: "videoNote", app: "window" },
   { id: "stickers", title: "Stickers", scope: "stickers", app: "window" },
   { id: "photo", title: "Photo viewer", scope: "photo", app: "window" },
+  { id: "menu", title: "Menus", scope: "menu", app: "window" },
+  { id: "picker", title: "Choosing a chat to forward to", scope: "picker", app: "window" },
+  { id: "prompt", title: "Questions above the message box", scope: "prompt", app: "window" },
   { id: "panel", title: "Bar panel", scope: "panel", app: "shell" },
   { id: "quick", title: "Quick reply: finding a chat", scope: "quick", app: "shell" },
   { id: "quickMessage", title: "Quick reply: writing", scope: "quickMessage", app: "shell" }
@@ -48,6 +51,10 @@ var ACTIONS = [
   { id: "window.voice", label: "Record a voice message", keys: ["Ctrl+R"] },
   { id: "window.videoNote", label: "Record a video message", keys: ["Ctrl+Shift+R"] },
   { id: "window.settings", label: "Settings", keys: ["Ctrl+,"] },
+  { id: "window.emoji", label: "Emoji", keys: ["Ctrl+;", "Ctrl+."] },
+  { id: "window.nextMention", label: "Jump to the next mention of you", keys: ["Ctrl+M"] },
+  { id: "window.mute", label: "Mute or unmute the open chat", keys: ["Ctrl+Shift+M"] },
+  { id: "window.pinnedMessage", label: "Go to the pinned message", keys: ["Ctrl+Shift+P"] },
 
   { id: "list.down", label: "Next chat", keys: ["Down", "J"] },
   { id: "list.up", label: "Previous chat", keys: ["Up", "K"] },
@@ -63,6 +70,8 @@ var ACTIONS = [
   { id: "list.archive", label: "Archive or unarchive", keys: ["A"] },
   { id: "list.toChat", label: "Go to the open chat", keys: ["Tab"] },
   { id: "list.clearSearch", label: "Clear the search", keys: ["Esc"] },
+  { id: "list.mute", label: "Mute or unmute", keys: ["M"] },
+  { id: "list.menu", label: "The chat's menu", keys: ["Menu", "Shift+F10"] },
 
   { id: "messages.down", label: "Next message", keys: ["Down", "J"] },
   { id: "messages.up", label: "Previous message", keys: ["Up", "K"] },
@@ -73,8 +82,14 @@ var ACTIONS = [
   { id: "messages.edit", label: "Edit your message", keys: ["E"] },
   { id: "messages.copy", label: "Copy the text", keys: ["Y"] },
   { id: "messages.delete", label: "Delete (press twice)", keys: ["D", "Del"] },
-  { id: "messages.toComposer", label: "Back to the message box", keys: ["Esc", "I"] },
+  { id: "messages.toComposer", label: "Back to the message box (clears a selection first)", keys: ["Esc", "I"] },
   { id: "messages.toList", label: "Go to the chat list", keys: ["Tab"] },
+  { id: "messages.menu", label: "The message's menu", keys: ["M", "Menu", "Shift+F10"] },
+  { id: "messages.forward", label: "Forward", keys: ["F"] },
+  { id: "messages.select", label: "Select or unselect", keys: ["X"] },
+  { id: "messages.pin", label: "Pin or unpin", keys: ["P"] },
+  { id: "messages.save", label: "Save the file to Downloads", keys: ["S"] },
+  { id: "messages.link", label: "Copy a link to the message", keys: ["Shift+Y"] },
 
   { id: "composer.send", label: "Send", keys: ["Return", "Enter"] },
   { id: "composer.newLine", label: "New line", keys: ["Shift+Return", "Shift+Enter"] },
@@ -101,6 +116,19 @@ var ACTIONS = [
   { id: "photo.next", label: "Next photo", keys: ["Right", "L"] },
   { id: "photo.close", label: "Close", keys: ["Esc", "Q"] },
 
+  { id: "menu.down", label: "Next item", keys: ["Down", "J"] },
+  { id: "menu.up", label: "Previous item", keys: ["Up", "K"] },
+  { id: "menu.pick", label: "Choose the item", keys: ["Return", "Enter"] },
+  { id: "menu.close", label: "Close", keys: ["Esc"] },
+
+  { id: "picker.down", label: "Next chat", keys: ["Down", "Ctrl+N"] },
+  { id: "picker.up", label: "Previous chat", keys: ["Up", "Ctrl+P"] },
+  { id: "picker.pick", label: "Forward there", keys: ["Return", "Enter"] },
+  { id: "picker.close", label: "Cancel", keys: ["Esc"] },
+
+  { id: "prompt.accept", label: "Yes", keys: ["Return", "Enter"] },
+  { id: "prompt.cancel", label: "No", keys: ["Esc"] },
+
   { id: "panel.reply", label: "Reply to the chat", keys: ["R"] },
   { id: "panel.openInWindow", label: "Open it in the window", keys: ["O"] },
 
@@ -123,14 +151,14 @@ var NAMED_CODES = {
   "16777216": "Esc", "16777217": "Tab", "16777218": "Tab", "16777219": "Backspace", "16777220": "Return",
   "16777221": "Enter", "16777222": "Ins", "16777223": "Del", "16777232": "Home", "16777233": "End",
   "16777234": "Left", "16777235": "Up", "16777236": "Right", "16777237": "Down", "16777238": "PgUp",
-  "16777239": "PgDown", "32": "Space"
+  "16777239": "PgDown", "16777301": "Menu", "32": "Space"
 }
 
 var ALIASES = {
   esc: "Esc", escape: "Esc", tab: "Tab", backspace: "Backspace", return: "Return", enter: "Enter",
   ins: "Ins", insert: "Ins", del: "Del", delete: "Del", home: "Home", end: "End", left: "Left", up: "Up",
   right: "Right", down: "Down", pgup: "PgUp", pageup: "PgUp", pgdown: "PgDown", pagedown: "PgDown",
-  space: "Space"
+  space: "Space", menu: "Menu"
 }
 
 var MODIFIER_NAMES = { ctrl: CTRL, control: CTRL, alt: ALT, shift: SHIFT, meta: META, super: META, win: META }

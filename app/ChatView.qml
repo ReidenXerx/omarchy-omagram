@@ -6,15 +6,16 @@ import qs.Commons
 import "Model.js" as Model
 import "Keymap.js" as Keymap
 
-// The open chat: messages and the composer.
+// The open chat: its header, the pinned message, messages and the composer.
 //
-// Composer: Enter sends, Shift+Enter adds a line, Esc cancels a reply or edit (or moves to
-// the messages), ↑ in an empty composer edits your last message, Tab moves to the messages.
-// Anywhere in the chat: Ctrl+O attaches photos or files, Ctrl+Shift+O sends files uncompressed,
-// Ctrl+S opens stickers; files dropped on the chat are sent.
-// Messages: ↑/↓ or j/k select, Enter or o downloads or opens the selected media, Space plays or
-// pauses it, r replies, e edits yours, y copies, d or Delete asks to delete (press again to
-// confirm), Esc or i returns to the composer, Tab returns to the chat list.
+// Every key is in Keymap.js and can be changed in settings. By default -- composer: Enter sends,
+// Shift+Enter adds a line, Esc cancels a reply or edit, ↑ in an empty composer edits your last
+// message, pasting a copied image offers to send it. Anywhere in the chat: Ctrl+O attaches,
+// Ctrl+S opens stickers, Ctrl+; emoji, Ctrl+M jumps to a mention, Ctrl+Shift+M mutes; files
+// dropped on the chat are sent. Messages: ↑/↓ or j/k select, Enter opens media, r replies, e
+// edits, y copies, f forwards, x selects, p pins, s saves a file, m opens the message's menu,
+// d or Delete asks to delete (press again to confirm), Esc returns to the composer. A right
+// click opens a message's menu; Ctrl+click selects.
 FocusScope {
   id: root
 
@@ -51,6 +52,27 @@ FocusScope {
   readonly property var keyboard: Model.latestKeyboard(root.messages)
   property real keyboardHiddenFor: 0
 
+  // The message menu and what Telegram allows for its message; the mute menu in the header.
+  property var menuMessage: null
+  property var menuProperties: null
+  property var menuReactions: []
+  property bool menuToComposer: false
+  readonly property bool modalOpen: messageMenu.visible || muteMenu.visible
+  property bool blocked: false        // a dialog over the whole window, such as choosing where to forward
+  property bool confirmDeleteRevoke: true
+  property var pinnedMessage: null
+
+  // Telegram keeps drafts, so they follow you to your other devices; while you type, the chat
+  // sees "typing…" as it would from any Telegram app.
+  property bool settingText: false
+  property string savedDraft: ""
+  property string draftBeforeEdit: ""
+  property bool editingCaption: false
+  property real lastTypingMs: 0
+
+  signal forwardRequested(real fromChatId, var messageIds)
+  signal searchInChatRequested()
+
   function focusComposer() { composer.forceActiveFocus() }
 
   function focusMessages() {
@@ -74,18 +96,28 @@ FocusScope {
   }
 
   function resetForChat() {
+    messageMenu.close()
+    muteMenu.close()
+    draftTimer.stop()
     root.revealed = ({})
     root.pollChoices = ({})
     root.selection = ({})
     root.prompt = null
     root.replyToId = 0
     root.editingId = 0
+    root.editingCaption = false
+    root.draftBeforeEdit = ""
     root.cursor = -1
     root.confirmDeleteId = 0
     root.notice = ""
     root.stickToBottom = true
     root.stickersOpen = false
-    composer.text = ""
+    root.pinnedMessage = null
+    root.lastTypingMs = 0
+    // The chat's draft, as Telegram keeps it: you continue where you left off, on any device.
+    root.savedDraft = root.chat && root.chat.draft ? root.chat.draft : ""
+    root.setComposerText(root.savedDraft)
+    root.loadPinned()
   }
 
   function attach(asPhoto) {
@@ -119,7 +151,7 @@ FocusScope {
     else root.focusComposer()
   }
 
-  readonly property bool shortcutsOn: !!root.chat && !app.settingsOpen
+  readonly property bool shortcutsOn: !!root.chat && !app.settingsOpen && !root.modalOpen && !root.blocked
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.attach"); enabled: root.shortcutsOn; onActivated: root.attach(true) }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.attachFiles"); enabled: root.shortcutsOn; onActivated: root.attach(false) }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.stickers"); enabled: root.shortcutsOn; onActivated: root.toggleStickers() }
@@ -135,6 +167,14 @@ FocusScope {
   }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "voice.send"); enabled: root.recordingVoice && !app.settingsOpen; onActivated: root.stopVoice(true) }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "voice.cancel"); enabled: root.recordingVoice && !app.settingsOpen; onActivated: root.stopVoice(false) }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.emoji"); enabled: root.shortcutsOn; onActivated: root.openEmoji() }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.nextMention"); enabled: root.shortcutsOn; onActivated: root.nextMention() }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.mute"); enabled: root.shortcutsOn; onActivated: app.toggleMute(root.chat.id) }
+  Shortcut {
+    sequences: Keymap.keysFor(app.shortcuts, "window.pinnedMessage")
+    enabled: root.shortcutsOn && !!root.pinnedMessage
+    onActivated: root.jumpTo(root.pinnedMessage.id)
+  }
 
   // ---------------------------------------------------------------- voice messages
 
@@ -174,6 +214,7 @@ FocusScope {
   function composerAction(action) {
     if (!root.chat) return
     if (action === "attach") root.attach(true)
+    else if (action === "emoji") root.openEmoji()
     else if (action === "stickers") root.toggleStickers()
     else if (action === "video") videoNote.open(root.chat.id)
     else if (action === "voice") root.startVoice()
@@ -224,6 +265,7 @@ FocusScope {
 
   onChatChanged: {
     if (!root.chat || root.chat.id !== root.lastChatId) {
+      if (root.lastChatId) root.leaveChat(root.lastChatId)
       root.lastChatId = root.chat ? root.chat.id : 0
       resetForChat()
     }
@@ -340,10 +382,7 @@ FocusScope {
     } else if (button.kind === "user") {
       root.openUser(button.userId)
     } else if (button.kind === "copy") {
-      clipboard.text = button.copyText
-      clipboard.selectAll()
-      clipboard.copy()
-      root.flash("Copied")
+      root.copyText(button.copyText)
     } else {
       root.flash("“" + button.text + "” needs an official Telegram app")
     }
@@ -391,19 +430,279 @@ FocusScope {
                    function (answer) { if (!answer.ok) root.flash(answer.error || "Could not react") })
   }
 
+  // An album is selected as a whole, as it is shown.
   function toggleSelected(message) {
     if (!message) return
-    var next = root.copyOf(root.selection)
-    if (next[message.id]) delete next[message.id]
-    else next[message.id] = true
-    root.selection = next
+    root.selection = Model.toggleSelection(root.selection, Model.albumIds(root.messages, message))
   }
 
-  // Filled in with the message menu.
-  function openMenu(message, x, y) {}
+  function clearSelection() { root.selection = ({}) }
 
-  Shortcut { sequences: ["Return", "Enter"]; enabled: !!root.prompt && !app.settingsOpen; onActivated: root.runPrompt(true) }
-  Shortcut { sequence: "Escape"; enabled: !!root.prompt && !app.settingsOpen; onActivated: root.runPrompt(false) }
+  readonly property bool promptKeysOn: !!root.prompt && !app.settingsOpen && !root.modalOpen && !root.blocked
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "prompt.accept"); enabled: root.promptKeysOn; onActivated: root.runPrompt(true) }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "prompt.cancel"); enabled: root.promptKeysOn; onActivated: root.runPrompt(false) }
+
+  // ---------------------------------------------------------------- the message menu
+
+  function openMenu(message, x, y) {
+    if (!message || !root.chat || message.content.kind === "service") return
+    root.menuToComposer = composer.activeFocus
+    root.menuMessage = message
+    root.menuProperties = null
+    root.menuReactions = []
+    messageMenu.open(x, y)
+    if (message.sending) return   // not on Telegram's servers yet: there is nothing to ask
+    var id = message.id
+    client.request("message.properties", { chatId: message.chatId, messageId: id }, function (answer) {
+      if (answer.ok && messageMenu.visible && root.menuMessage && root.menuMessage.id === id) root.menuProperties = answer.result
+    })
+    client.request("reactions.available", { chatId: message.chatId, messageId: id }, function (answer) {
+      if (answer.ok && messageMenu.visible && root.menuMessage && root.menuMessage.id === id)
+        root.menuReactions = (answer.result.emoji || []).slice(0, 8)
+    })
+  }
+
+  // The selected message's menu, from the keyboard: beside its bubble.
+  function openMenuAtCursor() {
+    if (!root.selectedMessage) return
+    var item = messageList.itemAtIndex(root.cursor)
+    var at = item ? item.bubbleItem.mapToItem(root, Math.min(item.bubbleItem.width, Style.space(48)), Math.min(item.bubbleItem.height, Style.space(28)))
+                  : Qt.point(root.width / 2, root.height / 2)
+    root.openMenu(root.selectedMessage, at.x, at.y)
+  }
+
+  function afterMenu() {
+    if (root.menuToComposer) root.focusComposer()
+    else root.focusMessages()
+  }
+
+  function menuPicked(id) {
+    var message = root.menuMessage
+    if (!message || !root.chat) return
+    if (id === "reply") root.startReply(message)
+    else if (id === "copy") root.copyText(message.content.text)
+    else if (id === "link") root.copyLink(message)
+    else if (id === "edit") root.startEdit(root.captionHolder(message), true)
+    else if (id === "forward") root.forward(Model.albumIds(root.messages, message))
+    else if (id === "pin" || id === "unpin") root.setPinned(message, id === "pin")
+    else if (id === "select") root.toggleSelected(message)
+    else if (id === "open") root.openFile(message)
+    else if (id === "save") root.saveFile(message)
+    else if (id === "retract") root.retractVote(message)
+    else if (id === "deleteAll" || id === "deleteMe") root.confirmDelete(Model.albumIds(root.messages, message), id === "deleteAll")
+  }
+
+  function react(message, emoji) {
+    if (!message || !emoji) return
+    client.request("reaction.set", { chatId: message.chatId, messageId: message.id, emoji: emoji, chosen: !Model.reactionChosen(message, emoji) },
+                   function (answer) { if (!answer.ok) root.flash(answer.error || "Could not react") })
+  }
+
+  function retractVote(message) {
+    client.request("poll.vote", { chatId: message.chatId, messageId: message.id, optionIds: [] }, function (answer) {
+      if (!answer.ok) root.flash(answer.error || "Could not retract the vote")
+    })
+  }
+
+  // An album's caption is on one of its messages, not always the first.
+  function captionHolder(message) {
+    if (!message.albumId) return message
+    for (var i = 0; i < root.messages.length; i++) {
+      var m = root.messages[i]
+      if (m.albumId === message.albumId && m.content.text) return m
+    }
+    return message
+  }
+
+  function copyText(text, done) {
+    clipboard.text = text
+    clipboard.selectAll()
+    clipboard.copy()
+    root.flash(done || "Copied")
+  }
+
+  function copyLink(message) {
+    if (!message) return
+    client.request("message.link", { chatId: message.chatId, messageId: message.id }, function (answer) {
+      if (answer.ok && answer.result.link)
+        root.copyText(answer.result.link, answer.result.public ? "Link copied" : "Link copied: it opens only for members of this chat")
+      else root.flash(answer.error || "This message has no link")
+    })
+  }
+
+  function setPinned(message, pinned) {
+    if (!message) return
+    client.request("message.pin", { chatId: message.chatId, messageId: message.id, pinned: pinned }, function (answer) {
+      if (!answer.ok) root.flash(answer.error || (pinned ? "Could not pin the message" : "Could not unpin the message"))
+    })
+  }
+
+  function loadPinned() {
+    if (!root.chat) return
+    var chatId = root.chat.id
+    client.request("chat.pinned", { chatId: chatId }, function (answer) {
+      if (root.chat && root.chat.id === chatId) root.pinnedMessage = answer.ok ? answer.result.message : null
+    })
+  }
+
+  Connections {
+    target: root.app
+    function onPinnedChanged(chatId) { if (root.chat && chatId === root.chat.id) root.loadPinned() }
+  }
+
+  // ---------------------------------------------------------------- forwarding and deleting
+
+  function forward(ids) {
+    if (!root.chat || !ids || !ids.length) return
+    root.forwardRequested(root.chat.id, ids.slice(0, 100))
+  }
+
+  function forwardSelection() {
+    root.forward(Model.selectedIds(root.messages, root.selection))
+  }
+
+  function deleteMessages(ids, revoke) {
+    if (!root.chat || !ids.length) return
+    client.request("message.delete", { chatId: root.chat.id, messageIds: ids.slice(0, 100), revoke: revoke }, function (answer) {
+      if (!answer.ok) root.flash("Could not delete: " + (answer.error || "unknown error"))
+    })
+  }
+
+  function confirmDelete(ids, revoke) {
+    if (!ids.length) return
+    root.prompt = { text: (ids.length === 1 ? "Delete the message" : "Delete " + ids.length + " messages") + (revoke ? " for everyone?" : " for you?"),
+                    action: "Delete", run: function () { root.deleteMessages(ids, revoke); root.clearSelection() } }
+  }
+
+  // Telegram deletes for everyone what it allows to be, and the rest only for you.
+  function deleteSelection() {
+    var ids = Model.selectedIds(root.messages, root.selection)
+    if (!ids.length) return
+    root.prompt = { text: "Delete " + (ids.length === 1 ? "the message" : ids.length + " messages") + ", for everyone where allowed?",
+                    action: "Delete", run: function () { root.deleteMessages(ids, true); root.clearSelection() } }
+  }
+
+  function runSelection(action) {
+    if (action === "forward") root.forwardSelection()
+    else if (action === "copy") root.copy(null)
+    else if (action === "delete") root.deleteSelection()
+    else root.clearSelection()
+  }
+
+  // ---------------------------------------------------------------- files, mentions, emoji, pasting
+
+  function fileOf(message) {
+    var media = message && message.content ? message.content.media : null
+    return media && media.file ? app.fileState(media.file) : null
+  }
+
+  function openFile(message) {
+    var file = root.fileOf(message)
+    if (!file) return
+    if (!file.path) { app.download(file.id, 32); root.flash("Downloading… open it again when it is done"); return }
+    var name = Model.saveName(message)
+    var run = function () {
+      client.request("file.open", { fileId: file.id }, function (answer) { if (!answer.ok) root.flash(answer.error || "Could not open the file") })
+    }
+    if (Model.riskyFile(name) || Model.riskyFile(file.path.split("/").pop()))
+      root.prompt = { text: "“" + name + "” could run a program on this computer. Open it anyway?", action: "Open", run: run }
+    else run()
+  }
+
+  function saveFile(message) {
+    var file = root.fileOf(message)
+    if (!file) return
+    if (!file.path) { app.download(file.id, 32); root.flash("Downloading… save it again when it is done"); return }
+    client.request("file.save", { fileId: file.id, fileName: Model.saveName(message) }, function (answer) {
+      if (answer.ok) root.flash("Saved to Downloads as " + String(answer.result.path).split("/").pop())
+      else root.flash(answer.error || "Could not save the file")
+    })
+  }
+
+  function openMuteMenu(item) {
+    if (!root.chat) return
+    var at = item.mapToItem(root, item.width, item.height)
+    muteMenu.open(at.x - Style.space(260), at.y)
+  }
+
+  function nextMention() {
+    if (!root.chat) return
+    var chatId = root.chat.id
+    client.request("chat.nextMention", { chatId: chatId }, function (answer) {
+      if (!answer.ok || !root.chat || root.chat.id !== chatId) return
+      if (answer.result.messageId) {
+        root.jumpTo(answer.result.messageId)
+        app.markRead(chatId, [answer.result.messageId])   // seen now, so the mention is read
+      } else {
+        client.request("chat.readMentions", { chatId: chatId })
+      }
+    })
+  }
+
+  function toBottom() {
+    if (!root.chat) return
+    root.stickToBottom = true
+    messageList.positionViewAtEnd()
+    app.loadHistory(root.chat.id, 0)
+  }
+
+  // Omarchy's emoji picker types the emoji into whatever has the keyboard: the message box.
+  function openEmoji() {
+    if (!root.chat) return
+    root.focusComposer()
+    Quickshell.execDetached(["/usr/bin/omarchy-shell", "shell", "toggle", "omarchy.emojis"])
+  }
+
+  function pasteImage() {
+    if (!root.chat) return
+    var chatId = root.chat.id
+    client.request("clipboard.image", {}, function (answer) {
+      if (!answer.ok || !answer.result.path || !root.chat || root.chat.id !== chatId) return
+      var path = answer.result.path
+      root.prompt = { text: "Send the image from the clipboard?", action: "Send", run: function () { root.sendPaths([path], true) } }
+    })
+  }
+
+  // ---------------------------------------------------------------- drafts and typing
+
+  function setComposerText(text) {
+    root.settingText = true
+    composer.text = text
+    root.settingText = false
+  }
+
+  Timer { id: draftTimer; interval: 1500; onTriggered: root.saveDraft(0) }
+
+  function saveDraft(chatId) {
+    var id = chatId || (root.chat ? root.chat.id : 0)
+    if (!id) return
+    var text = (root.editingId ? root.draftBeforeEdit : composer.text).replace(/\s+$/, "").slice(0, 4096)
+    if (text === root.savedDraft) return
+    root.savedDraft = text
+    var args = { chatId: id, text: text }
+    if (root.replyToId && !root.editingId) args.replyToMessageId = root.replyToId
+    client.request("chat.draft", args)
+  }
+
+  function composerEdited() {
+    if (root.settingText || !root.chat) return
+    draftTimer.restart()
+    if (root.editingId) return
+    if (composer.text === "") {
+      if (root.lastTypingMs) client.request("chat.action", { chatId: root.chat.id, action: "cancel" })
+      root.lastTypingMs = 0
+    } else if (Date.now() - root.lastTypingMs > 4500) {   // Telegram shows an action for about five seconds
+      root.lastTypingMs = Date.now()
+      client.request("chat.action", { chatId: root.chat.id, action: "typing" })
+    }
+  }
+
+  function leaveChat(chatId) {
+    draftTimer.stop()
+    root.saveDraft(chatId)
+    if (root.lastTypingMs) client.request("chat.action", { chatId: chatId, action: "cancel" })
+    root.lastTypingMs = 0
+  }
 
   function flash(text) {
     root.notice = text
@@ -414,61 +713,96 @@ FocusScope {
 
   function send() {
     var text = composer.text.replace(/\s+$/, "")
-    if (!root.chat || !text.trim()) return
-    if (text.length > 4096) { root.flash("A message can be at most 4096 characters."); return }
+    if (!root.chat) return
     if (root.editingId) {
-      var id = root.editingId
-      client.request("message.edit", { chatId: root.chat.id, messageId: id, text: text }, function (answer) {
+      if (!root.editingCaption && !text.trim()) return
+      var limit = root.editingCaption ? 1024 : 4096
+      if (text.length > limit) { root.flash((root.editingCaption ? "A caption" : "A message") + " can be at most " + limit + " characters."); return }
+      client.request("message.edit", { chatId: root.chat.id, messageId: root.editingId, text: text, caption: root.editingCaption }, function (answer) {
         if (!answer.ok) root.flash("Could not edit: " + (answer.error || "unknown error"))
       })
-    } else {
-      var args = { chatId: root.chat.id, text: text }
-      if (root.replyToId) args.replyToMessageId = root.replyToId
-      client.request("message.send", args, function (answer) {
-        if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
-      })
+      root.finishEdit()
+      return
     }
-    composer.text = ""
+    if (!text.trim()) return
+    if (text.length > 4096) { root.flash("A message can be at most 4096 characters."); return }
+    var args = { chatId: root.chat.id, text: text }
+    if (root.replyToId) args.replyToMessageId = root.replyToId
+    client.request("message.send", args, function (answer) {
+      if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
+    })
+    // Sending clears the draft on Telegram's side and ends "typing…".
+    draftTimer.stop()
+    root.savedDraft = ""
+    root.lastTypingMs = 0
+    root.setComposerText("")
     root.replyToId = 0
-    root.editingId = 0
     root.stickToBottom = true
   }
 
   function startReply(message) {
     if (!message) return
-    root.editingId = 0
+    if (root.editingId) root.finishEdit()
     root.replyToId = message.id
     root.focusComposer()
   }
 
-  function startEdit(message) {
-    if (!message || !message.outgoing || message.content.kind !== "text") return
+  // Your own text messages and captions; `allowed` when Telegram said this one may be edited.
+  function startEdit(message, allowed) {
+    if (!message || !message.content || (!allowed && !message.outgoing)) return
+    var kind = message.content.kind
+    if (kind !== "text" && Model.CAPTION_KINDS.indexOf(kind) < 0) return
+    if (!root.editingId) root.draftBeforeEdit = composer.text
     root.replyToId = 0
     root.editingId = message.id
-    composer.text = message.content.text
+    root.editingCaption = kind !== "text"
+    root.setComposerText(message.content.text || "")
     root.focusComposer()
     composer.cursorPosition = composer.length
   }
 
+  // Leaving an edit brings back what you were writing before it.
+  function finishEdit() {
+    root.editingId = 0
+    root.editingCaption = false
+    root.setComposerText(root.draftBeforeEdit)
+    root.draftBeforeEdit = ""
+  }
+
+  // d twice deletes: for everyone when Telegram allows it, otherwise only for you.
   function askDelete(message) {
-    if (!message) return
+    if (root.selecting) { root.deleteSelection(); return }
+    if (!message || !root.chat) return
     if (root.confirmDeleteId === message.id) {
-      client.request("message.delete", { chatId: root.chat.id, messageIds: [message.id], revoke: true }, function (answer) {
-        if (!answer.ok) root.flash("Could not delete: " + (answer.error || "unknown error"))
-      })
+      root.deleteMessages(Model.albumIds(root.messages, message), root.confirmDeleteRevoke)
       root.confirmDeleteId = 0
       return
     }
-    root.confirmDeleteId = message.id
-    root.flash(message.outgoing || root.chat.kind === "private" ? "Press again to delete for everyone" : "Press again to delete")
+    var id = message.id
+    root.confirmDeleteId = id
+    root.confirmDeleteRevoke = true
+    root.flash("Press again to delete")
+    if (message.sending) return
+    client.request("message.properties", { chatId: message.chatId, messageId: id }, function (answer) {
+      if (!answer.ok || root.confirmDeleteId !== id) return
+      var p = answer.result
+      root.confirmDeleteRevoke = p.canDeleteForAll
+      if (!p.canDeleteForAll && !p.canDeleteForMe) {
+        root.confirmDeleteId = 0
+        root.flash("This message cannot be deleted")
+      } else {
+        root.flash(p.canDeleteForAll ? "Press again to delete for everyone" : "Press again to delete it for you")
+      }
+    })
   }
 
   function copy(message) {
-    if (!message) return
-    clipboard.text = message.content.text || Model.previewOf(message)
-    clipboard.selectAll()
-    clipboard.copy()
-    root.flash("Copied")
+    if (root.selecting) {
+      var count = Model.selectedIds(root.messages, root.selection).length
+      root.copyText(Model.selectionText(root.messages, root.selection), count === 1 ? "Copied the message" : "Copied " + count + " messages")
+      return
+    }
+    if (message) root.copyText(root.captionHolder(message).content.text || Model.previewOf(message))
   }
 
   TextEdit { id: clipboard; visible: false }
@@ -507,11 +841,15 @@ FocusScope {
       Column {
         anchors.left: headerAvatar.right
         anchors.leftMargin: Style.space(12)
+        anchors.right: headerButtons.left
+        anchors.rightMargin: Style.space(8)
         anchors.verticalCenter: parent.verticalCenter
         spacing: Style.space(2)
 
         Text {
-          text: root.chat ? root.chat.title : ""
+          width: parent.width
+          elide: Text.ElideRight
+          text: root.chat ? Model.chatTitle(root.chat, app.meId) : ""
           textFormat: Text.PlainText
           color: app.foreground
           font.family: app.fontFamily
@@ -521,8 +859,11 @@ FocusScope {
         Text {
           readonly property string activity: !root.chat ? ""
               : Model.actionText(Model.activeActions(app.chatActions, root.chat.id, app.clockMs), root.chat.kind === "private")
+          width: parent.width
+          elide: Text.ElideRight
           text: !root.chat ? "" : (activity
-              || (root.chat.kind === "private" ? (root.chat.bot ? "bot" : Model.statusText(app.userStatuses[root.chat.userId] || root.chat.status, root.nowMs))
+              || (root.chat.kind === "private"
+                  ? (root.chat.userId === app.meId ? "" : (root.chat.bot ? "bot" : Model.statusText(app.userStatuses[root.chat.userId] || root.chat.status, root.nowMs)))
                   : ({ group: "Group", channel: "Channel", secret: "Secret chat" }[root.chat.kind] || "")))
           textFormat: Text.PlainText
           color: activity ? app.accent : app.muted
@@ -531,85 +872,216 @@ FocusScope {
         }
       }
 
+      // Search in this chat; its notifications.
+      Row {
+        id: headerButtons
+        anchors.right: parent.right
+        anchors.rightMargin: Style.space(10)
+        anchors.verticalCenter: parent.verticalCenter
+
+        Repeater {
+          // md-magnify U+F0349; md-bell-outline U+F009C, md-bell-off U+F009B
+          model: [
+            { glyph: String.fromCodePoint(0xF0349), action: "search",
+              hint: "Search in this chat   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.searchInChat")[0] || "") },
+            { glyph: String.fromCodePoint(root.chat && root.chat.muted ? 0xF009B : 0xF009C), action: "mute",
+              hint: (root.chat && root.chat.muted ? "Muted" : "Notifications are on") + "   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.mute")[0] || "") }
+          ]
+          delegate: Item {
+            id: headerButton
+            required property var modelData
+            width: Style.space(36)
+            height: Style.space(36)
+
+            Text {
+              anchors.centerIn: parent
+              text: headerButton.modelData.glyph
+              color: headerArea.containsMouse ? app.accent : app.muted
+              font.family: app.glyphFamily
+              font.pixelSize: Style.font.title
+            }
+            MouseArea {
+              id: headerArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: headerButton.modelData.action === "search" ? root.searchInChatRequested() : root.openMuteMenu(headerButton)
+              onContainsMouseChanged: if (containsMouse) root.flash(headerButton.modelData.hint)
+            }
+          }
+        }
+      }
+
       Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: app.border; opacity: 0.35 }
     }
 
+    // ------------------------------------------------ the pinned message
+    Rectangle {
+      Layout.fillWidth: true
+      Layout.preferredHeight: visible ? Style.space(44) : 0
+      visible: !!root.pinnedMessage
+      color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.03)
+
+      Rectangle {
+        x: Style.space(18)
+        anchors.verticalCenter: parent.verticalCenter
+        width: Style.space(3)
+        height: parent.height - Style.space(14)
+        radius: width / 2
+        color: app.accent
+      }
+      Column {
+        anchors.left: parent.left
+        anchors.leftMargin: Style.space(30)
+        anchors.right: parent.right
+        anchors.rightMargin: Style.space(18)
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: Style.space(1)
+
+        Text {
+          text: "Pinned message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.pinnedMessage")[0] || "")
+          color: app.accent
+          font.family: app.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
+        Text {
+          width: parent.width
+          elide: Text.ElideRight
+          text: root.pinnedMessage ? Model.previewOf(root.pinnedMessage) : ""
+          textFormat: Text.PlainText
+          color: app.foreground
+          font.family: app.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+      }
+      MouseArea {
+        anchors.fill: parent
+        cursorShape: Qt.PointingHandCursor
+        onClicked: if (root.pinnedMessage) root.jumpTo(root.pinnedMessage.id)
+      }
+      Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: app.border; opacity: 0.25 }
+    }
+
     // ------------------------------------------------ messages
-    ListView {
-      id: messageList
+    Item {
       Layout.fillWidth: true
       Layout.fillHeight: true
-      clip: true
-      model: root.messages
-      spacing: Style.space(2)
-      boundsBehavior: Flickable.StopAtBounds
-      topMargin: Style.space(12)
-      bottomMargin: Style.space(12)
 
-      WheelScroll {
-        view: messageList
-        onScrolled: {
-          root.stickToBottom = messageList.atYEnd
-          if (messageList.contentY <= messageList.originY + Style.space(200) && messageList.count > 0) root.loadOlder()
-        }
-      }
+      ListView {
+        id: messageList
+        anchors.fill: parent
+        clip: true
+        model: root.messages
+        spacing: Style.space(2)
+        boundsBehavior: Flickable.StopAtBounds
+        topMargin: Style.space(12)
+        bottomMargin: Style.space(12)
 
-      onMovementEnded: root.stickToBottom = atYEnd
-      onAtYBeginningChanged: if (atYBeginning && count > 0 && moving) root.loadOlder()
-      onContentYChanged: if (contentY <= originY + Style.space(200) && count > 0 && (moving || activeFocus)) root.loadOlder()
-
-      Keys.onPressed: function (event) {
-        var keys = root.app.shortcuts
-        var selected = root.selectedMessage
-        function is(id) { return Keymap.matches(keys, id, event) }
-        if (is("messages.down")) {
-          root.cursor = root.stepFrom(root.cursor, 1)
-          root.stickToBottom = root.cursor === root.messages.length - 1
-          positionViewAtIndex(root.cursor, ListView.Contain)
-        } else if (is("messages.up")) {
-          root.cursor = root.stepFrom(root.cursor, -1)
-          root.stickToBottom = false
-          positionViewAtIndex(root.cursor, ListView.Contain)
-          if (root.cursor < 5) root.loadOlder()
-        } else if (is("messages.reply")) root.startReply(selected)
-        else if (is("messages.edit")) root.startEdit(selected)
-        else if (is("messages.copy")) root.copy(selected)
-        else if (is("messages.delete")) root.askDelete(selected)
-        else if (is("messages.play") || is("messages.open")) {
-          var item = messageList.itemAtIndex(root.cursor)
-          if (item && item.mediaItem && item.mediaItem.media) {
-            if (is("messages.play")) item.mediaItem.togglePlay()
-            else item.mediaItem.activate()
+        WheelScroll {
+          view: messageList
+          onScrolled: {
+            root.stickToBottom = messageList.atYEnd
+            if (messageList.contentY <= messageList.originY + Style.space(200) && messageList.count > 0) root.loadOlder()
           }
         }
-        else if (is("messages.toComposer")) { root.cursor = -1; root.focusComposer() }
-        else if (is("messages.toList")) root.toList()
-        else if (is("messages.last")) { root.cursor = root.messages.length - 1; root.stickToBottom = true; positionViewAtEnd() }
-        else return
-        event.accepted = true
+
+        onMovementEnded: root.stickToBottom = atYEnd
+        onAtYBeginningChanged: if (atYBeginning && count > 0 && moving) root.loadOlder()
+        onContentYChanged: if (contentY <= originY + Style.space(200) && count > 0 && (moving || activeFocus)) root.loadOlder()
+
+        Keys.onPressed: function (event) {
+          var keys = root.app.shortcuts
+          var selected = root.selectedMessage
+          function is(id) { return Keymap.matches(keys, id, event) }
+          if (is("messages.down")) {
+            root.cursor = root.stepFrom(root.cursor, 1)
+            root.stickToBottom = root.cursor === root.messages.length - 1
+            positionViewAtIndex(root.cursor, ListView.Contain)
+          } else if (is("messages.up")) {
+            root.cursor = root.stepFrom(root.cursor, -1)
+            root.stickToBottom = false
+            positionViewAtIndex(root.cursor, ListView.Contain)
+            if (root.cursor < 5) root.loadOlder()
+          } else if (is("messages.reply")) root.startReply(selected)
+          else if (is("messages.edit")) root.startEdit(selected ? root.captionHolder(selected) : null)
+          else if (is("messages.copy")) root.copy(selected)
+          else if (is("messages.delete")) root.askDelete(selected)
+          else if (is("messages.play") || is("messages.open")) {
+            var item = messageList.itemAtIndex(root.cursor)
+            if (item && item.mediaItem && item.mediaItem.media) {
+              if (is("messages.play")) item.mediaItem.togglePlay()
+              else item.mediaItem.activate()
+            }
+          }
+          else if (is("messages.toComposer")) {
+            if (root.selecting) root.clearSelection()
+            else { root.cursor = -1; root.focusComposer() }
+          }
+          else if (is("messages.toList")) root.toList()
+          else if (is("messages.last")) { root.cursor = root.messages.length - 1; root.stickToBottom = true; positionViewAtEnd() }
+          else if (is("messages.menu")) root.openMenuAtCursor()
+          else if (is("messages.forward")) {
+            if (root.selecting) root.forwardSelection()
+            else if (selected) root.forward(Model.albumIds(root.messages, selected))
+          }
+          else if (is("messages.select")) root.toggleSelected(selected)
+          else if (is("messages.pin")) { if (selected) root.setPinned(selected, !selected.pinned) }
+          else if (is("messages.save")) { if (selected) root.saveFile(selected) }
+          else if (is("messages.link")) { if (selected) root.copyLink(selected) }
+          else return
+          event.accepted = true
+        }
+
+        delegate: MessageRow {
+          width: messageList.width
+          view: root
+          app: root.app
+          messages: root.messages
+        }
       }
 
-      delegate: MessageRow {
-        width: messageList.width
-        view: root
-        app: root.app
-        messages: root.messages
+      // Your unread mentions, and the way back to the newest messages with how many are unread.
+      Column {
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: Style.space(22)
+        anchors.bottomMargin: Style.space(18)
+        spacing: Style.space(14)
+
+        FloatButton {
+          visible: !!root.chat && root.chat.mentions > 0
+          glyph: String.fromCodePoint(0xF0065)   // md-at
+          count: root.chat ? root.chat.mentions : 0
+          onActivated: root.nextMention()
+        }
+        FloatButton {
+          visible: !!root.chat && messageList.count > 0 && !messageList.atYEnd
+          glyph: String.fromCodePoint(0xF0140)   // md-chevron-down
+          count: root.chat ? root.chat.unread : 0
+          onActivated: root.toBottom()
+        }
       }
     }
 
-    // ------------------------------------------------ reply / edit / notice bar
+    // ------------------------------------------------ reply / edit / notice bar, and questions
     Rectangle {
       Layout.fillWidth: true
       Layout.preferredHeight: visible ? Style.space(40) : 0
       visible: !!root.replyTo || !!root.editing || root.notice !== "" || !!root.prompt
       color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.04)
 
-      Rectangle { width: Style.space(3); height: parent.height; color: root.notice !== "" && !root.replyTo && !root.editing ? app.muted : app.accent }
+      Rectangle {
+        width: Style.space(3)
+        height: parent.height
+        color: root.prompt ? app.urgent : (root.notice !== "" && !root.replyTo && !root.editing ? app.muted : app.accent)
+      }
 
       Text {
+        readonly property string cancelKey: Keymap.label(Keymap.keysFor(app.shortcuts, "composer.cancel")[0] || "")
         anchors.left: parent.left
         anchors.leftMargin: Style.space(18)
-        anchors.right: parent.right
+        anchors.right: promptButtons.visible ? promptButtons.left : parent.right
         anchors.rightMargin: Style.space(18)
         anchors.verticalCenter: parent.verticalCenter
         elide: Text.ElideRight
@@ -618,11 +1090,113 @@ FocusScope {
         font.family: app.fontFamily
         font.pixelSize: Style.font.bodySmall
         text: {
-          if (root.prompt) return root.prompt.text + "   Enter: " + root.prompt.action + "  ·  Esc: cancel"
+          if (root.prompt) return root.prompt.text
           if (root.notice !== "") return root.notice
-          if (root.editing) return "Editing   Esc to cancel"
-          if (root.replyTo) return "Replying to " + (root.replyTo.outgoing ? "yourself" : (root.replyTo.senderName || "message")) + ": " + Model.previewOf(root.replyTo) + "   Esc to cancel"
+          if (root.editing) return (root.editingCaption ? "Editing the caption" : "Editing") + "   " + cancelKey + " to cancel"
+          if (root.replyTo) return "Replying to " + (root.replyTo.outgoing ? "yourself" : (root.replyTo.senderName || "message")) + ": "
+                                   + Model.previewOf(root.replyTo) + "   " + cancelKey + " to cancel"
           return ""
+        }
+      }
+
+      // A question's answers, with their keys.
+      Row {
+        id: promptButtons
+        visible: !!root.prompt
+        anchors.right: parent.right
+        anchors.rightMargin: Style.space(10)
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: Style.space(4)
+
+        Repeater {
+          model: root.prompt ? [
+            { accept: true, label: root.prompt.action + "   " + Keymap.label(Keymap.keysFor(app.shortcuts, "prompt.accept")[0] || "") },
+            { accept: false, label: "Cancel   " + Keymap.label(Keymap.keysFor(app.shortcuts, "prompt.cancel")[0] || "") }
+          ] : []
+          delegate: Rectangle {
+            id: promptAnswer
+            required property var modelData
+            width: promptLabel.implicitWidth + Style.space(18)
+            height: Style.space(28)
+            radius: Style.cornerRadius
+            color: promptArea.containsMouse ? Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.3)
+                 : (promptAnswer.modelData.accept ? Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.14) : "transparent")
+            Text {
+              id: promptLabel
+              anchors.centerIn: parent
+              text: promptAnswer.modelData.label
+              textFormat: Text.PlainText
+              color: app.foreground
+              font.family: app.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: promptAnswer.modelData.accept
+            }
+            MouseArea {
+              id: promptArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.runPrompt(promptAnswer.modelData.accept)
+            }
+          }
+        }
+      }
+    }
+
+    // ------------------------------------------------ selected messages
+    Rectangle {
+      Layout.fillWidth: true
+      Layout.preferredHeight: visible ? Style.space(40) : 0
+      visible: root.selecting && !!root.chat
+      color: Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.1)
+
+      Text {
+        anchors.left: parent.left
+        anchors.leftMargin: Style.space(18)
+        anchors.verticalCenter: parent.verticalCenter
+        text: Model.selectedIds(root.messages, root.selection).length + " selected"
+        color: app.foreground
+        font.family: app.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+      }
+
+      Row {
+        anchors.right: parent.right
+        anchors.rightMargin: Style.space(10)
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: Style.space(4)
+
+        Repeater {
+          model: [
+            { action: "forward", label: "Forward", key: "messages.forward" },
+            { action: "copy", label: "Copy", key: "messages.copy" },
+            { action: "delete", label: "Delete", key: "messages.delete" },
+            { action: "clear", label: "Cancel", key: "messages.toComposer" }
+          ]
+          delegate: Rectangle {
+            id: selectionAction
+            required property var modelData
+            width: selectionLabel.implicitWidth + Style.space(18)
+            height: Style.space(28)
+            radius: Style.cornerRadius
+            color: selectionArea.containsMouse ? Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.25) : "transparent"
+            Text {
+              id: selectionLabel
+              anchors.centerIn: parent
+              text: selectionAction.modelData.label + "   " + Keymap.label(Keymap.keysFor(app.shortcuts, selectionAction.modelData.key)[0] || "")
+              color: selectionAction.modelData.action === "delete" ? app.urgent : app.foreground
+              font.family: app.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              id: selectionArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.runSelection(selectionAction.modelData.action)
+            }
+          }
         }
       }
     }
@@ -754,14 +1328,22 @@ FocusScope {
                 composerFlick.contentY = cursorRectangle.y + cursorRectangle.height - composerFlick.height
             }
 
+            onTextChanged: root.composerEdited()
+
             Keys.onPressed: function (event) {
               var keys = root.app.shortcuts
               function is(id) { return Keymap.matchesInText(keys, id, event) }
-              if (is("composer.send")) root.send()
+              // A text box takes Enter before any shortcut can, so a question is answered here.
+              if (root.prompt && is("prompt.accept")) root.runPrompt(true)
+              else if (root.prompt && is("prompt.cancel")) root.runPrompt(false)
+              // A copied image has no text to paste: it is offered to send instead.
+              else if (event.matches(StandardKey.Paste) && !composer.canPaste) root.pasteImage()
+              else if (is("composer.send")) root.send()
               else if (is("composer.newLine")) composer.insert(composer.cursorPosition, "\n")
               else if (is("composer.cancel")) {
-                if (root.editingId) { root.editingId = 0; composer.text = "" }
+                if (root.editingId) root.finishEdit()
                 else if (root.replyToId) root.replyToId = 0
+                else if (root.selecting) root.clearSelection()
                 else root.focusMessages()
               }
               else if (is("composer.editLast") && composer.text === "") root.startEdit(Model.lastOwnEditable(root.messages))
@@ -772,7 +1354,7 @@ FocusScope {
 
             Text {
               visible: composer.text === ""
-              text: root.editing ? "Edit message"
+              text: root.editing ? (root.editingCaption ? "Caption" : "Edit message")
                   : "Message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.send")[0] || "") + " to send, "
                     + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.newLine")[0] || "") + " for a new line"
               color: app.muted
@@ -793,8 +1375,9 @@ FocusScope {
         spacing: 0
 
         Repeater {
-          // md-paperclip U+F03E2, md-sticker-emoji U+F0785, md-video U+F0567, md-microphone U+F036C
+          // md-emoticon-outline U+F01F2, md-paperclip U+F03E2, md-sticker-emoji U+F0785, md-video U+F0567, md-microphone U+F036C
           model: [
+            { glyph: String.fromCodePoint(0xF01F2), action: "emoji", hint: "Emoji   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.emoji")[0] || "") },
             { glyph: String.fromCodePoint(0xF03E2), action: "attach", hint: "Attach photos or files   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.attach")[0] || "") },
             { glyph: String.fromCodePoint(0xF0785), action: "stickers", hint: "Stickers   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.stickers")[0] || "") },
             { glyph: String.fromCodePoint(0xF0567), action: "video", hint: "Video message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.videoNote")[0] || "") },
@@ -930,5 +1513,78 @@ FocusScope {
       root.focusComposer()
     }
     onFailed: function (message) { root.flash(message) }
+  }
+
+  // ------------------------------------------------ menus
+  ContextMenu {
+    id: messageMenu
+    anchors.fill: parent
+    app: root.app
+    items: Model.messageMenu(root.menuMessage, root.menuProperties)
+    reactions: root.menuReactions
+    chosen: root.menuMessage ? (root.menuMessage.reactions || []).filter(function (r) { return r.chosen }).map(function (r) { return r.emoji }) : []
+    onDismissed: root.afterMenu()
+    onPicked: function (id) { root.afterMenu(); root.menuPicked(id) }
+    onReacted: function (emoji) { root.afterMenu(); root.react(root.menuMessage, emoji) }
+  }
+
+  ContextMenu {
+    id: muteMenu
+    anchors.fill: parent
+    app: root.app
+    items: Model.muteMenu(root.chat)
+    onDismissed: root.focusComposer()
+    onPicked: function (id) {
+      root.focusComposer()
+      if (root.chat && Model.muteSeconds(id) >= 0) app.muteChat(root.chat.id, Model.muteSeconds(id))
+    }
+  }
+
+  // A round button floating over the messages, with a count on it.
+  component FloatButton: Rectangle {
+    id: floatButton
+    property string glyph: ""
+    property int count: 0
+    signal activated()
+
+    width: Style.space(42)
+    height: width
+    radius: width / 2
+    color: root.app.background
+    border.width: 1
+    border.color: Qt.rgba(root.app.foreground.r, root.app.foreground.g, root.app.foreground.b, floatArea.containsMouse ? 0.4 : 0.18)
+
+    Text {
+      anchors.centerIn: parent
+      text: floatButton.glyph
+      color: floatArea.containsMouse ? root.app.accent : root.app.foreground
+      font.family: root.app.glyphFamily
+      font.pixelSize: Style.font.title
+    }
+    Rectangle {
+      visible: floatButton.count > 0
+      anchors.horizontalCenter: parent.horizontalCenter
+      anchors.verticalCenter: parent.top
+      height: Style.space(18)
+      width: Math.max(height, countText.implicitWidth + Style.space(10))
+      radius: height / 2
+      color: root.app.accent
+      Text {
+        id: countText
+        anchors.centerIn: parent
+        text: floatButton.count > 999 ? "999+" : String(floatButton.count)
+        color: root.app.background
+        font.family: root.app.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
+    }
+    MouseArea {
+      id: floatArea
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: floatButton.activated()
+    }
   }
 }

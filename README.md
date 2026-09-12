@@ -15,13 +15,21 @@ overlay on a key, and desktop notifications you can answer without leaving what 
 
 ## What it does
 
-- **Chats** — your chat list with folders as tabs, pinned and muted chats, unread counts and
-  the archive. Pin (`p`) and archive (`a`) from the keyboard.
-- **Messages** — send, reply, edit and delete, with read state kept in sync with your other
-  devices. Text is shown as plain text: bold, italics and links are not rendered yet.
+- **Chats** — your chat list with folders as tabs, pinned, muted and archived chats, unread
+  counts, and drafts that follow you to your other devices. Pin (`p`), archive (`a`) and mute
+  (`m`) from the keyboard, or right-click a chat. Your chat with yourself is Saved Messages.
+- **Messages** — send, reply, edit, forward, pin, react and delete (for you or for everyone),
+  or select several and act on them at once. Read ticks, "typing…", last seen and the pinned
+  message above the chat, with read state kept in sync with your other devices. Right-click a
+  message (or press `m`) for everything Telegram allows on it.
+- **Rich messages** — formatting, links, mentions and hashtags, spoilers, link previews, polls
+  you can vote in, places, contacts, albums, service messages ("Ann joined the group"), and
+  bots' buttons and keyboards. Web links open in your browser; Telegram links open in Omagram.
 - **Media** — photos (with a full-size viewer), videos, GIFs, files, round video notes and
-  voice messages with a waveform. Send photos and files with `Ctrl+O` or by dropping them on
-  the chat, and record voice messages (`Ctrl+R`) and round video messages (`Ctrl+Shift+R`).
+  voice messages with a waveform. Send photos and files with `Ctrl+O`, by dropping them on the
+  chat or by pasting a copied image, and record voice messages (`Ctrl+R`) and round video
+  messages (`Ctrl+Shift+R`). A file's menu opens it with its app or saves it to Downloads.
+- **Emoji** — Omarchy's emoji picker, from the message box (`Ctrl+;`).
 - **Stickers** — static, animated (TGS) and video (WebM) stickers, and a sticker picker with
   your recent stickers and installed sets.
 - **Search** — chats in every list, and messages in all chats or in the open one.
@@ -32,9 +40,8 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   click opens a panel of recent chats where you can reply inline; right click opens the window.
 - **Quick reply** — an overlay to find a chat by typing, read its latest messages and answer.
 
-Not supported yet: secret chats, calls, signing in by QR code, creating groups or channels,
-reactions, and rendering formatting or clickable links. Polls, contacts, locations and service
-messages show as a short label.
+Not supported yet: secret chats, calls, stories, signing in by QR code, creating groups or
+channels, forum topics, and a chat's info page.
 
 ## Requirements
 
@@ -97,6 +104,10 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Alt+↑` / `Alt+↓` | previous / next chat |
 | `Ctrl+PgUp` / `Ctrl+PgDn`, `Ctrl+[` / `Ctrl+]` | previous / next folder tab |
 | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | chat list / messages / composer |
+| `Ctrl+;` or `Ctrl+.` | emoji |
+| `Ctrl+M` | jump to the next message that mentions you |
+| `Ctrl+Shift+M` | mute or unmute the open chat |
+| `Ctrl+Shift+P` | go to the pinned message |
 | `Ctrl+,` | settings |
 
 **Chat list**
@@ -109,6 +120,8 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `[` / `]` | previous / next tab |
 | `p` | pin or unpin |
 | `a` | archive or unarchive |
+| `m` | mute or unmute |
+| `Menu` or `Shift+F10` | the chat's menu (so does a right click) |
 | `Tab` | go to the open chat |
 
 **Messages**
@@ -119,8 +132,12 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Enter` or `o` | download or open its media |
 | `Space` | play or pause |
 | `r` / `e` / `y` | reply / edit yours / copy |
+| `f` / `p` / `s` | forward / pin or unpin / save its file to Downloads |
+| `Shift+Y` | copy a link to the message |
+| `x` | select or unselect (so does Ctrl+click); `f`, `y` and `d` then act on everything selected |
+| `m`, `Menu` or `Shift+F10` | the message's menu (so does a right click) |
 | `d` or `Delete` | delete (press again to confirm) |
-| `Esc` or `i` | back to the composer |
+| `Esc` or `i` | clear the selection, or back to the composer |
 
 **Composer**
 
@@ -130,9 +147,15 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `↑` in an empty composer | edit your last message |
 | `Esc` | cancel a reply or edit |
 | `Ctrl+O` / `Ctrl+Shift+O` | attach photos / send files uncompressed |
+| `Ctrl+V` with an image copied | send the image (it asks first) |
 | `Ctrl+S` | stickers (arrows or `hjkl`, `Tab` switches sets, `Enter` sends) |
 | `Ctrl+R` | record a voice message (`Enter` sends, `Esc` cancels) |
 | `Ctrl+Shift+R` | record a round video message (`Enter` starts, then sends) |
+
+**Menus and questions** — in a menu `↑` `↓` or `j` `k` choose, `Enter` picks, `Esc` closes, and
+`1`–`8` pick a quick reaction. When the bar above the message box asks something (deleting,
+joining a group, opening a file that could run a program), `Enter` answers yes and `Esc` no. In
+the forward dialog, type to find a chat, `↑` `↓` or `Ctrl+N` `Ctrl+P` choose and `Enter` forwards.
 
 **From anywhere** — pick keys for quick reply, the bar panel and opening Omagram in Settings →
 *Shortcuts that work anywhere*. Omagram registers them with Hyprland while it runs, never writes
@@ -169,9 +192,11 @@ to reply and `Enter` again to send, `Ctrl+O` to open the chat in the window, `Es
   verbosity it records message text.
 - **Only you can talk to the service.** Its socket is `0600` in your runtime directory, and it
   checks every connection's user id.
-- **Telegram content is shown as text.** Names, messages and previews are always rendered as
-  plain text, and notification bodies are escaped, because Omarchy's notifications render
-  markup and links.
+- **Telegram content is shown as text.** Names and previews are rendered as plain text, message
+  formatting is escaped before it is drawn, and notification bodies are escaped, because
+  Omarchy's notifications render markup and links. Links lead only to web and mail addresses
+  (opened in your browser) or inside Omagram; joining a group, starting a bot and opening a file
+  that could run a program (a script, an executable, a `.desktop` file, a web page) ask first.
 - **Bounded and checked.** Every request is validated field by field; network strings, lists
   and animated stickers are size-capped; files you send must be regular, readable files of at
   most 2 GB outside Omagram's own database; helpers run by absolute path as argument lists,
@@ -185,7 +210,10 @@ to reply and `Enter` again to send, `Ctrl+O` to open the chat in the window, `Es
 python3 tests/state_test.py     # TDLib objects → what the UI sees, hostile values
 python3 tests/daemon_test.py    # the service on a sandboxed socket with a fake TDLib
 python3 tests/notify_test.py    # notifications with a fake bus
-node tests/model-test.js        # the window's list and message logic
+python3 tests/media_test.py     # preparing voice and video messages
+python3 tests/settings_test.py  # settings and global shortcuts, with Hyprland faked
+node tests/model-test.js        # the window's list, message and menu logic
+node tests/keymap-test.js       # shortcuts: parsing, matching, clashes
 ```
 
 ## Remove

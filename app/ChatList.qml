@@ -7,9 +7,10 @@ import "Keymap.js" as Keymap
 // The chat list: folder tabs over the chats of the chosen list. Typing a search finds chats
 // in every list, and messages in all chats -- or in the open chat, with Ctrl+Shift+F.
 //
-// Keyboard: Ctrl+K or / searches, ↑/↓ or j/k move, Enter opens, [ and ] switch tabs, p pins
-// or unpins, a archives or unarchives, Esc leaves the search, Tab goes to the open chat.
-// Alt+↑/↓ steps through chats from anywhere.
+// Keyboard (every key can be changed in settings): Ctrl+K or / searches, ↑/↓ or j/k move, Enter
+// opens, [ and ] switch tabs, p pins or unpins, a archives or unarchives, m mutes or unmutes, the
+// Menu key opens a chat's menu (so does a right click), Esc leaves the search, Tab goes to the
+// open chat. Alt+↑/↓ steps through chats from anywhere.
 FocusScope {
   id: root
 
@@ -45,6 +46,11 @@ FocusScope {
   signal archiveRequested(real chatId)
   signal toChat()
   signal settingsRequested()
+  signal muteRequested(real chatId)
+  signal readRequested(real chatId)
+
+  property var menuChat: null
+  readonly property bool modalOpen: chatMenu.visible
 
   function buildRows() {
     var out = []
@@ -54,7 +60,7 @@ FocusScope {
     }
     if (!root.scopeChatId) {
       var every = Model.chatsIn(root.allChats, "main").concat(Model.chatsIn(root.allChats, "archive"))
-      var found = Model.filterChats(every, root.query)
+      var found = Model.filterChats(every, root.query, root.app.meId)
       for (var j = 0; j < found.length && j < 50; j++) out.push({ kind: "chat", chat: found[j] })
     }
     if (root.messageResults.length || root.searching)
@@ -110,6 +116,30 @@ FocusScope {
   function cursorChat() {
     var row = root.rows[root.cursor]
     return row && row.kind === "chat" ? row.chat : null
+  }
+
+  function openChatMenu(chat, x, y) {
+    if (!chat) return
+    root.menuChat = chat
+    chatMenu.open(x, y)
+  }
+
+  function openMenuAtCursor() {
+    var chat = root.cursorChat()
+    if (!chat) return
+    var item = listView.itemAtIndex(root.cursor)
+    var at = item ? item.mapToItem(root, Style.space(64), item.height / 2) : Qt.point(Style.space(40), Style.space(120))
+    root.openChatMenu(chat, at.x, at.y)
+  }
+
+  function chatMenuPicked(id) {
+    var chat = root.menuChat
+    if (!chat) return
+    if (id === "open") root.activated(chat.id)
+    else if (id === "read") root.readRequested(chat.id)
+    else if (id === "pin" || id === "unpin") root.pinRequested(chat.id)
+    else if (id === "mute" || id === "unmute") root.muteRequested(chat.id)
+    else if (id === "archive" || id === "unarchive") root.archiveRequested(chat.id)
   }
 
   // From anywhere in the window: open the chat above or below the one that is open.
@@ -371,6 +401,8 @@ FocusScope {
         else if (is("list.nextTab") && !root.searchMode) root.tabStep(1)
         else if (is("list.pin") && !root.searchMode && root.cursorChat()) root.pinRequested(root.cursorChat().id)
         else if (is("list.archive") && root.cursorChat()) root.archiveRequested(root.cursorChat().id)
+        else if (is("list.mute") && root.cursorChat()) root.muteRequested(root.cursorChat().id)
+        else if (is("list.menu") && root.cursorChat()) root.openMenuAtCursor()
         else if (is("list.clearSearch") && search.text !== "") search.text = ""
         else return
         event.accepted = true
@@ -454,7 +486,7 @@ FocusScope {
 
                 Text {
                   Layout.fillWidth: true
-                  text: row.chat.title || "Deleted account"
+                  text: Model.chatTitle(row.chat, app.meId)
                   elide: Text.ElideRight
                   textFormat: Text.PlainText
                   color: app.foreground
@@ -553,7 +585,7 @@ FocusScope {
 
               Text {
                 Layout.fillWidth: true
-                text: messageBlock.found ? messageBlock.found.title : "Chat"
+                text: messageBlock.found ? Model.chatTitle(messageBlock.found, app.meId) : "Chat"
                 textFormat: Text.PlainText
                 elide: Text.ElideRight
                 color: app.foreground
@@ -589,9 +621,15 @@ FocusScope {
           anchors.fill: parent
           hoverEnabled: true
           enabled: row.kind !== "header"
-          onClicked: {
+          acceptedButtons: Qt.LeftButton | Qt.RightButton
+          onClicked: function (mouse) {
             root.cursor = row.index
-            root.openCursor()
+            if (mouse.button !== Qt.RightButton) {
+              root.openCursor()
+            } else if (row.chat) {
+              var at = hover.mapToItem(root, mouse.x, mouse.y)
+              root.openChatMenu(row.chat, at.x, at.y)
+            }
           }
         }
       }
@@ -609,5 +647,14 @@ FocusScope {
         font.pixelSize: Style.font.body
       }
     }
+  }
+
+  ContextMenu {
+    id: chatMenu
+    anchors.fill: parent
+    app: root.app
+    items: Model.chatMenu(root.menuChat ? (Model.findChat(root.allChats, root.menuChat.id) || root.menuChat) : null, root.listKey, root.searchMode)
+    onDismissed: root.focusList()
+    onPicked: function (id) { root.focusList(); root.chatMenuPicked(id) }
   }
 }

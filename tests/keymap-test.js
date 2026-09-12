@@ -88,11 +88,11 @@ test("matching uses overrides, and an empty list switches an action off", () => 
 test("clashes: same scope, or anything against a window-wide shortcut", () => {
   const sameScope = K.withKeys({}, "list.pin", ["A"])
   eq(K.conflicts(sameScope).map(c => [c.sequence, c.ids.slice().sort()]), [["A", ["list.archive", "list.pin"]]])
-  const otherScope = K.withKeys({}, "messages.reply", ["P"])
+  const otherScope = K.withKeys({}, "messages.reply", ["A"])
   eq(K.conflicts(otherScope), [], "the list and the messages never have the keyboard at once")
   const windowWide = K.withKeys({}, "window.stickers", ["J"])
   const found = K.conflictsFor(windowWide, "window.stickers").map(c => c.ids.slice().sort())
-  eq(found, [["list.down", "messages.down", "stickers.down", "window.stickers"]])
+  eq(found, [["list.down", "menu.down", "messages.down", "stickers.down", "window.stickers"]])
 })
 
 test("in a text field, keys that type are text", () => {
@@ -113,6 +113,15 @@ test("combinations for Hyprland", () => {
   assert.strictEqual(K.toHyprland("Ctrl+Shift+PgDown"), "CTRL + SHIFT + PAGE_DOWN")
   assert.strictEqual(K.toHyprland("Alt+F13"), "ALT + F13")
   for (const bad of ["M", "Shift+A", "Meta+F30", "Ctrl++", "nonsense"]) assert.strictEqual(K.toHyprland(bad), "", bad)
+})
+
+test("the Menu key and Shift+F10 open menus", () => {
+  assert.strictEqual(K.fromEvent(0x01000055, 0), "Menu")
+  assert.strictEqual(K.normalize("menu"), "Menu")
+  assert.strictEqual(K.fromEvent(0x01000039, K.SHIFT), "Shift+F10")
+  assert.ok(K.matches({}, "messages.menu", { key: 0x01000055, modifiers: 0 }))
+  assert.ok(K.matches({}, "list.menu", { key: 0x01000039, modifiers: K.SHIFT }))
+  assert.strictEqual(K.toHyprland("Ctrl+Menu"), "", "not a key Hyprland binds")
 })
 
 test("labels for people", () => {

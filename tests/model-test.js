@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets }", box)
 const M = box.M
 const plain = v => JSON.parse(JSON.stringify(v))
 const eq = (a, b, msg) => assert.deepStrictEqual(plain(a), plain(b), msg)
@@ -250,6 +250,74 @@ test("the bot keyboard in effect is set or removed by the newest message that sa
   assert.strictEqual(M.latestKeyboard([msg(1, { markup: keyboard }), msg(2, { markup: { type: "remove" } })]), null)
   assert.strictEqual(M.latestKeyboard([msg(1, { markup: { type: "inline", rows: [] } })]), null)
   assert.strictEqual(M.latestKeyboard(null), null)
+})
+
+test("a message's menu offers only what Telegram allows", () => {
+  const text = msg(5, { content: { kind: "text", text: "hi" } })
+  eq(M.messageMenu(text, null).map(i => i.id), ["reply", "copy", "select"], "before Telegram has answered")
+  const all = { canReply: true, canSave: true, canGetLink: true, canEdit: true, canForward: true, canPin: true,
+                canDeleteForAll: true, canDeleteForMe: true }
+  eq(M.messageMenu(text, all).map(i => i.id), ["reply", "copy", "link", "edit", "forward", "pin", "select", "deleteAll", "deleteMe"])
+  eq(M.messageMenu(Object.assign({}, text, { pinned: true }), { canPin: true }).map(i => i.id), ["copy", "unpin", "select"])
+  const photo = msg(6, { content: { kind: "photo", text: "", media: { file: { id: 3 } } } })
+  eq(M.messageMenu(photo, { canReply: true, canSave: true }).map(i => i.id), ["reply", "select", "open", "save"])
+  eq(M.messageMenu(photo, { canReply: true, canSave: false }).map(i => i.id), ["reply", "select"], "protected content stays in Telegram")
+  assert.strictEqual(M.messageMenu(photo, { canEdit: true }).find(i => i.id === "edit").label, "Edit caption")
+  assert.ok(M.messageMenu(msg(7, { content: { kind: "poll", text: "Q", poll: { voted: true, closed: false, quiz: false } } }), null)
+    .some(i => i.id === "retract"))
+  assert.ok(!M.messageMenu(msg(8, { content: { kind: "poll", text: "Q", poll: { voted: true, quiz: true } } }), null)
+    .some(i => i.id === "retract"), "a quiz answer is final")
+  eq(M.messageMenu(text, all).filter(i => i.danger).map(i => i.id), ["deleteAll", "deleteMe"])
+  eq(M.messageMenu(null, all), [])
+})
+
+test("mute and chat menus", () => {
+  eq(M.muteMenu({ muted: true }).map(i => i.id), ["unmute"])
+  eq(M.muteMenu({ muted: false }).map(i => M.muteSeconds(i.id)), [3600, 28800, 172800, M.MUTE_FOREVER])
+  assert.strictEqual(M.muteSeconds("unmute"), 0)
+  for (const bad of ["mute:", "mute:-5", "mute:0", "mute:9999999999", "junk", null]) assert.strictEqual(M.muteSeconds(bad), -1, String(bad))
+  const c = { id: 1, unread: 2, mentions: 0, muted: false, archived: false, positions: { main: { order: "5", pinned: true } } }
+  eq(M.chatMenu(c, "main", false).map(i => i.id), ["open", "read", "unpin", "mute", "archive"])
+  eq(M.chatMenu(Object.assign({}, c, { unread: 0, muted: true, archived: true }), "main", true).map(i => i.id), ["open", "unmute", "unarchive"])
+})
+
+test("albums act as one, selections toggle and copy like Telegram", () => {
+  const list = [msg(1), msg(2, { albumId: "9", outgoing: true, content: { kind: "photo", text: "cap" } }),
+                msg(3, { albumId: "9", content: { kind: "photo", text: "" } }), msg(4, { senderName: "Ann" })]
+  eq(M.albumIds(list, list[1]), [2, 3])
+  eq(M.albumIds(list, list[0]), [1])
+  let selection = M.toggleSelection({}, [2, 3])
+  eq(M.selectedIds(list, selection), [2, 3])
+  selection = M.toggleSelection(selection, [4])
+  eq(M.selectedIds(list, selection), [2, 3, 4])
+  eq(M.selectedIds(list, M.toggleSelection(selection, [2, 3])), [4])
+  eq(M.selectedIds(list, M.toggleSelection({ 3: true }, [2, 3])), [2, 3], "a partly selected album becomes selected")
+  eq(M.selectedIds(list, { 99: true }), [], "only loaded messages")
+  const copied = M.selectionText(list, M.toggleSelection({}, [2, 4]))
+  assert.ok(/^You, \[\d\d:\d\d\]\ncap\n\nAnn, \[\d\d:\d\d\]\nm4$/.test(copied), copied)
+  assert.ok(M.reactionChosen(msg(1, { reactions: [{ emoji: "👍", chosen: true }] }), "👍"))
+  assert.ok(!M.reactionChosen(msg(1, { reactions: [{ emoji: "👍", chosen: false }] }), "👍"))
+})
+
+test("files that could run code ask first, and saved files get sensible names", () => {
+  for (const name of ["run.sh", "x.DESKTOP", "setup.exe", "noextension", "", "page.html", "tool.AppImage"]) assert.ok(M.riskyFile(name), name)
+  for (const name of ["report.pdf", "photo.JPG", "song.mp3", "archive.tar.gz", "voice.oga"]) assert.ok(!M.riskyFile(name), name)
+  assert.strictEqual(M.saveName(msg(1, { content: { kind: "file", fileName: "a.pdf", media: { fileName: "a.pdf" } } })), "a.pdf")
+  const at = new Date(2026, 8, 12, 9, 5, 7).getTime() / 1000
+  assert.strictEqual(M.saveName(msg(1, { date: at, content: { kind: "photo", media: {} } })), "photo_2026-09-12_09-05-07.jpg")
+  assert.strictEqual(M.saveName(msg(1, { date: at, content: { kind: "voice", media: {} } })), "voice_2026-09-12_09-05-07.ogg")
+})
+
+test("Saved Messages is called that, comes first when forwarding, and is found by name", () => {
+  const me = { id: 10, kind: "private", userId: 77, title: "Me Myself", positions: { main: { order: "1" } } }
+  const club = { id: 11, kind: "group", title: "Club", positions: { main: { order: "9" } } }
+  const news = { id: 12, kind: "channel", title: "News", positions: { archive: { order: "3" } } }
+  assert.strictEqual(M.chatTitle(me, 77), "Saved Messages")
+  assert.strictEqual(M.chatTitle(me, 0), "Me Myself")
+  assert.strictEqual(M.chatTitle({ id: 1, title: "" }, 77), "Deleted account")
+  eq(M.forwardTargets([club, news, me], "", 77).map(c => c.id), [10, 11, 12])
+  eq(M.forwardTargets([club, news, me], "saved", 77).map(c => c.id), [10])
+  eq(M.filterChats([club, me], "club", 77).map(c => c.id), [11])
 })
 
 for (const f of failures) console.log("FAIL " + f)
