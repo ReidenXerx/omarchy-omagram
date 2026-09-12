@@ -61,6 +61,7 @@ FocusScope {
   property bool blocked: false        // a dialog over the whole window, such as choosing where to forward
   property bool confirmDeleteRevoke: true
   property var pinnedMessage: null
+  property bool infoOpen: false
 
   // Telegram keeps drafts, so they follow you to your other devices; while you type, the chat
   // sees "typing…" as it would from any Telegram app.
@@ -175,6 +176,7 @@ FocusScope {
     enabled: root.shortcutsOn && !!root.pinnedMessage
     onActivated: root.jumpTo(root.pinnedMessage.id)
   }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.chatInfo"); enabled: root.shortcutsOn; onActivated: root.toggleInfo() }
 
   // ---------------------------------------------------------------- voice messages
 
@@ -646,6 +648,56 @@ FocusScope {
     app.loadHistory(root.chat.id, 0)
   }
 
+  // ---------------------------------------------------------------- the chat's info
+
+  function openInfo() {
+    if (!root.chat) return
+    root.infoOpen = true
+    Qt.callLater(function () { infoPanel.forceActiveFocus() })
+  }
+
+  function closeInfo() {
+    root.infoOpen = false
+    root.focusComposer()
+  }
+
+  function toggleInfo() {
+    if (root.infoOpen) root.closeInfo()
+    else root.openInfo()
+  }
+
+  function infoAction(id) {
+    if (!root.chat) return
+    if (id === "mute") app.toggleMute(root.chat.id)
+    else if (id === "search") root.searchInChatRequested()
+    else if (id === "leave") root.askLeaveChat(root.chat)
+    else if (id === "clear" || id === "delete") root.askClearChat(root.chat, id === "delete")
+  }
+
+  function askLeaveChat(chat) {
+    if (!chat) return
+    var chatId = chat.id
+    root.prompt = { text: "Leave “" + Model.chatTitle(chat, app.meId) + "”?", action: "Leave",
+                    run: function () {
+                      client.request("chat.leave", { chatId: chatId }, function (answer) { if (!answer.ok) root.flash(answer.error || "Could not leave") })
+                      root.infoOpen = false
+                    } }
+  }
+
+  // Your copy only: the other side keeps theirs, as when you clear a chat in any Telegram app.
+  function askClearChat(chat, removeFromList) {
+    if (!chat) return
+    var chatId = chat.id
+    root.prompt = { text: (removeFromList ? "Delete the chat with “" : "Clear the history of “") + Model.chatTitle(chat, app.meId) + "” for you?",
+                    action: removeFromList ? "Delete" : "Clear",
+                    run: function () {
+                      client.request("chat.clearHistory", { chatId: chatId, removeFromList: removeFromList, revoke: false }, function (answer) {
+                        if (!answer.ok) root.flash(answer.error || "Could not clear the history")
+                      })
+                      if (removeFromList) root.infoOpen = false
+                    } }
+  }
+
   // Omarchy's emoji picker types the emoji into whatever has the keyboard: the message box.
   function openEmoji() {
     if (!root.chat) return
@@ -820,7 +872,10 @@ FocusScope {
   }
 
   ColumnLayout {
-    anchors.fill: parent
+    anchors.left: parent.left
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    anchors.right: infoPanel.visible ? infoPanel.left : parent.right
     spacing: 0
     visible: !!root.chat
 
@@ -882,10 +937,12 @@ FocusScope {
         anchors.verticalCenter: parent.verticalCenter
 
         Repeater {
-          // md-magnify U+F0349; md-bell-outline U+F009C, md-bell-off U+F009B
+          // md-magnify U+F0349; md-bell-outline U+F009C, md-bell-off U+F009B; md-information-outline U+F02FD
           model: [
             { glyph: String.fromCodePoint(0xF0349), action: "search",
               hint: "Search in this chat   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.searchInChat")[0] || "") },
+            { glyph: String.fromCodePoint(0xF02FD), action: "info",
+              hint: "The chat's info   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.chatInfo")[0] || "") },
             { glyph: String.fromCodePoint(root.chat && root.chat.muted ? 0xF009B : 0xF009C), action: "mute",
               hint: (root.chat && root.chat.muted ? "Muted" : "Notifications are on") + "   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.mute")[0] || "") }
           ]
@@ -907,7 +964,12 @@ FocusScope {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: headerButton.modelData.action === "search" ? root.searchInChatRequested() : root.openMuteMenu(headerButton)
+              onClicked: {
+                var action = headerButton.modelData.action
+                if (action === "search") root.searchInChatRequested()
+                else if (action === "info") root.toggleInfo()
+                else root.openMuteMenu(headerButton)
+              }
               onContainsMouseChanged: if (containsMouse) root.flash(headerButton.modelData.hint)
             }
           }
@@ -1492,6 +1554,26 @@ FocusScope {
         }
       }
     }
+  }
+
+  // ------------------------------------------------ the chat's info
+  ChatInfo {
+    id: infoPanel
+    anchors.right: parent.right
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    width: Math.min(Style.space(380), Math.max(Style.space(300), root.width * 0.38))
+    visible: root.infoOpen && !!root.chat
+    app: root.app
+    client: root.client
+    chat: root.chat
+    nowMs: root.nowMs
+    onClosed: root.closeInfo()
+    onOpenUser: function (userId) { root.openUser(userId) }
+    onOpenMessage: function (messageId) { root.jumpTo(messageId) }
+    onLinkActivated: function (link) { root.openLink(link, null) }
+    onActionRequested: function (id) { root.infoAction(id) }
+    onCopyRequested: function (text, done) { root.copyText(text, done) }
   }
 
   // ------------------------------------------------ video messages

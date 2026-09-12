@@ -30,6 +30,7 @@ var SECTIONS = [
   { id: "menu", title: "Menus", scope: "menu", app: "window" },
   { id: "picker", title: "Choosing a chat to forward to", scope: "picker", app: "window" },
   { id: "prompt", title: "Questions above the message box", scope: "prompt", app: "window" },
+  { id: "info", title: "Chat info", scope: "info", app: "window" },
   { id: "panel", title: "Bar panel", scope: "panel", app: "shell" },
   { id: "quick", title: "Quick reply: finding a chat", scope: "quick", app: "shell" },
   { id: "quickMessage", title: "Quick reply: writing", scope: "quickMessage", app: "shell" }
@@ -55,6 +56,7 @@ var ACTIONS = [
   { id: "window.nextMention", label: "Jump to the next mention of you", keys: ["Ctrl+M"] },
   { id: "window.mute", label: "Mute or unmute the open chat", keys: ["Ctrl+Shift+M"] },
   { id: "window.pinnedMessage", label: "Go to the pinned message", keys: ["Ctrl+Shift+P"] },
+  { id: "window.chatInfo", label: "Show or hide the chat's info", keys: ["Ctrl+I"] },
 
   { id: "list.down", label: "Next chat", keys: ["Down", "J"] },
   { id: "list.up", label: "Previous chat", keys: ["Up", "K"] },
@@ -128,6 +130,13 @@ var ACTIONS = [
 
   { id: "prompt.accept", label: "Yes", keys: ["Return", "Enter"] },
   { id: "prompt.cancel", label: "No", keys: ["Esc"] },
+
+  { id: "info.down", label: "Next", keys: ["Down", "J"] },
+  { id: "info.up", label: "Previous", keys: ["Up", "K"] },
+  { id: "info.open", label: "Open the member or the message", keys: ["Return", "Enter"] },
+  { id: "info.nextTab", label: "Next tab", keys: ["Tab", "]"] },
+  { id: "info.previousTab", label: "Previous tab", keys: ["Shift+Tab", "["] },
+  { id: "info.close", label: "Close", keys: ["Esc"] },
 
   { id: "panel.reply", label: "Reply to the chat", keys: ["R"] },
   { id: "panel.openInWindow", label: "Open it in the window", keys: ["O"] },

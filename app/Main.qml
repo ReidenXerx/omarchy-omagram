@@ -569,6 +569,12 @@ Scope {
           onMuteRequested: function (chatId) { omagram.toggleMute(chatId) }
           onReadRequested: function (chatId) { omagram.markChatRead(chatId) }
           onUnreadRequested: function (chatId) { omagram.markChatUnread(chatId) }
+          onInfoRequested: function (chatId) {
+            omagram.openChatById(chatId, false)
+            Qt.callLater(function () { chatView.openInfo() })
+          }
+          onLeaveRequested: function (chatId) { chatView.askLeaveChat(Model.findChat(omagram.chats, chatId)) }
+          onClearRequested: function (chatId, removeFromList) { chatView.askClearChat(Model.findChat(omagram.chats, chatId), removeFromList) }
           onActivated: function (chatId) {
             omagram.openChatById(chatId, false)
             chatView.focusComposer()

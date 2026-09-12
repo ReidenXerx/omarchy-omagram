@@ -92,7 +92,7 @@ test("clashes: same scope, or anything against a window-wide shortcut", () => {
   eq(K.conflicts(otherScope), [], "the list and the messages never have the keyboard at once")
   const windowWide = K.withKeys({}, "window.stickers", ["J"])
   const found = K.conflictsFor(windowWide, "window.stickers").map(c => c.ids.slice().sort())
-  eq(found, [["list.down", "menu.down", "messages.down", "stickers.down", "window.stickers"]])
+  eq(found, [["info.down", "list.down", "menu.down", "messages.down", "stickers.down", "window.stickers"]])
 })
 
 test("in a text field, keys that type are text", () => {

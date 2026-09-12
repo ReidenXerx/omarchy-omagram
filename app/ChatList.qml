@@ -49,6 +49,9 @@ FocusScope {
   signal muteRequested(real chatId)
   signal readRequested(real chatId)
   signal unreadRequested(real chatId)
+  signal infoRequested(real chatId)
+  signal leaveRequested(real chatId)
+  signal clearRequested(real chatId, bool removeFromList)
 
   property var menuChat: null
   readonly property bool modalOpen: chatMenu.visible
@@ -139,6 +142,9 @@ FocusScope {
     if (id === "open") root.activated(chat.id)
     else if (id === "read") root.readRequested(chat.id)
     else if (id === "unread") root.unreadRequested(chat.id)
+    else if (id === "info") root.infoRequested(chat.id)
+    else if (id === "leave") root.leaveRequested(chat.id)
+    else if (id === "clear" || id === "delete") root.clearRequested(chat.id, id === "delete")
     else if (id === "pin" || id === "unpin") root.pinRequested(chat.id)
     else if (id === "mute" || id === "unmute") root.muteRequested(chat.id)
     else if (id === "archive" || id === "unarchive") root.archiveRequested(chat.id)

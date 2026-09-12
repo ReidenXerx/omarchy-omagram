@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail }", box)
 const M = box.M
 const plain = v => JSON.parse(JSON.stringify(v))
 const eq = (a, b, msg) => assert.deepStrictEqual(plain(a), plain(b), msg)
@@ -277,10 +277,55 @@ test("mute and chat menus", () => {
   assert.strictEqual(M.muteSeconds("unmute"), 0)
   for (const bad of ["mute:", "mute:-5", "mute:0", "mute:9999999999", "junk", null]) assert.strictEqual(M.muteSeconds(bad), -1, String(bad))
   const c = { id: 1, unread: 2, mentions: 0, muted: false, archived: false, positions: { main: { order: "5", pinned: true } } }
-  eq(M.chatMenu(c, "main", false).map(i => i.id), ["open", "read", "unpin", "mute", "archive"])
+  eq(M.chatMenu(c, "main", false).map(i => i.id), ["open", "info", "read", "unpin", "mute", "archive"])
   eq(M.chatMenu(Object.assign({}, c, { unread: 0, muted: true, archived: true }), "main", true).map(i => i.id),
-     ["open", "unread", "unmute", "unarchive"])
-  eq(M.chatMenu(Object.assign({}, c, { unread: 0, markedUnread: true }), "main", true).map(i => i.id), ["open", "read", "mute", "archive"])
+     ["open", "info", "unread", "unmute", "unarchive"])
+  eq(M.chatMenu(Object.assign({}, c, { unread: 0, markedUnread: true }), "main", true).map(i => i.id), ["open", "info", "read", "mute", "archive"])
+  eq(M.chatMenu(Object.assign({}, c, { kind: "private" }), "main", true).map(i => i.id),
+     ["open", "info", "read", "mute", "archive", "clear", "delete"])
+  eq(M.chatMenu(Object.assign({}, c, { kind: "group", myStatus: "member" }), "main", true).map(i => i.id).slice(-1), ["leave"])
+})
+
+test("a chat's info: subtitle, details, actions and tabs", () => {
+  const now = Date.UTC(2026, 8, 12, 15, 0, 0)
+  const person = { id: 7, kind: "private", userId: 7, muted: false, status: { state: "online" } }
+  const group = { id: -5, kind: "group", memberCount: 3, myStatus: "member", muted: true }
+  const channel = { id: -100, kind: "channel", memberCount: 0, myStatus: "left", username: "news" }
+  assert.strictEqual(M.infoSubtitle(person, null, {}, now), "online")
+  assert.strictEqual(M.infoSubtitle(person, null, { 7: { state: "recently" } }, now), "last seen recently")
+  assert.strictEqual(M.infoSubtitle(Object.assign({}, person, { bot: true }), null, {}, now), "bot")
+  assert.strictEqual(M.infoSubtitle(group, { memberCount: 12 }, {}, now), "12 members")
+  assert.strictEqual(M.infoSubtitle(Object.assign({}, channel, { memberCount: 1 }), null, {}, now), "1 subscriber")
+  assert.strictEqual(M.infoSubtitle(channel, null, {}, now), "Channel")
+  eq(M.infoDetails(person, { username: "ann", phone: "380671234567", bio: { text: "hi", entities: [] }, commonGroups: 2 })
+       .map(d => [d.label, d.value, d.copy || ""]),
+     [["Username", "@ann", "https://t.me/ann"], ["Phone", "+380671234567", "+380671234567"], ["Bio", "hi", ""], ["Groups in common", "2", ""]])
+  eq(M.infoDetails(channel, { description: "daily", inviteLink: "" }).map(d => d.label), ["Username", "About the channel"])
+  eq(M.infoDetails(person, null), [])
+  eq(M.infoActions(person).map(a => a.id), ["mute", "search", "clear", "delete"])
+  eq(M.infoActions(group).map(a => [a.id, a.label]), [["mute", "Unmute"], ["search", "Search"], ["leave", "Leave group"]])
+  eq(M.infoActions(channel).map(a => a.id), ["mute", "search"], "nothing to leave once left")
+  eq(M.infoTabs(group, { canGetMembers: true, memberCount: 3 }, null).map(t => t.key), ["members", "photos", "files", "links", "voice", "music", "gifs"])
+  eq(M.infoTabs(group, { canGetMembers: true, memberCount: 3 }, { photos: 4, files: 0, links: 2, voice: 0, music: 0, gifs: 0 })
+       .map(t => [t.key, t.count]), [["members", 3], ["photos", 4], ["links", 2]])
+  eq(M.infoTabs(person, { canGetMembers: true }, { photos: 0, files: 0, links: 0, voice: 0, music: 0, gifs: 0 }), [],
+     "a person has no member list, and nothing was shared")
+})
+
+test("shared files, links, voice and members as rows", () => {
+  const now = new Date(2026, 8, 12, 15, 0).getTime()
+  const at = new Date(2026, 8, 12, 9, 5).getTime() / 1000
+  const file = msg(1, { date: at, senderName: "Ann", content: { kind: "file", text: "", media: { fileName: "plan.pdf", file: { id: 1, size: 2048 } } } })
+  eq(M.sharedRow(file, "files", now), { title: "plan.pdf", detail: "2.0 KB · Ann · 09:05" })
+  const link = msg(2, { date: at, outgoing: true, content: { kind: "text", text: "see example.com/a now", entities: [{ type: "url", offset: 4, length: 13 }] } })
+  eq(M.sharedRow(link, "links", now), { title: "https://example.com/a", detail: "see example.com/a now · You · 09:05" })
+  const hidden = msg(3, { date: at, content: { kind: "text", text: "docs", entities: [{ type: "textUrl", offset: 0, length: 4, url: "javascript:alert(1)" }] } })
+  assert.strictEqual(M.sharedRow(hidden, "links", now).title, "docs", "an unsafe link is never offered")
+  assert.strictEqual(M.sharedRow(msg(4, { date: at, content: { kind: "voice", text: "", media: { duration: 14 } } }), "voice", now).title,
+                     "Voice message, 0:14")
+  assert.strictEqual(M.memberDetail({ status: "owner", userStatus: { state: "online" } }, now), "owner · online")
+  assert.strictEqual(M.memberDetail({ status: "member", bot: true }, now), "bot")
+  assert.strictEqual(M.memberDetail(null, now), "")
 })
 
 test("devices and storage in words", () => {

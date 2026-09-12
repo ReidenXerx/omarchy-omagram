@@ -562,13 +562,120 @@ function muteSeconds(id) {
 
 function chatMenu(chat, listKey, searchMode) {
   if (!isObject(chat)) return []
-  var out = [{ id: "open", label: "Open" }]
+  var out = [{ id: "open", label: "Open" }, { id: "info", label: "Info" }]
   if (chat.unread > 0 || chat.mentions > 0 || chat.markedUnread) out.push({ id: "read", label: "Mark as read" })
   else out.push({ id: "unread", label: "Mark as unread" })
   if (!searchMode) out.push(pinnedIn(chat, listKey) ? { id: "unpin", label: "Unpin" } : { id: "pin", label: "Pin" })
   out.push(chat.muted ? { id: "unmute", label: "Unmute" } : { id: "mute", label: "Mute" })
   out.push(chat.archived ? { id: "unarchive", label: "Move out of the archive" } : { id: "archive", label: "Archive" })
+  return out.concat(leaveActions(chat))
+}
+
+// Leaving a group or channel; clearing or deleting a chat with a person (your copy only).
+function leaveActions(chat) {
+  if (!isObject(chat)) return []
+  if (chat.kind === "private" || chat.kind === "secret")
+    return [{ id: "clear", label: "Clear history", danger: true }, { id: "delete", label: "Delete chat", danger: true }]
+  if ((chat.kind === "group" || chat.kind === "channel") && chat.myStatus !== "left" && chat.myStatus !== "banned")
+    return [{ id: "leave", label: chat.kind === "channel" ? "Leave channel" : "Leave group", danger: true }]
+  return []
+}
+
+// ---------------------------------------------------------------- a chat's info
+
+function memberCountText(count, channel) {
+  var n = Math.max(0, Number(count) | 0)
+  if (!n) return channel ? "Channel" : "Group"
+  return n + (channel ? (n === 1 ? " subscriber" : " subscribers") : (n === 1 ? " member" : " members"))
+}
+
+// Under the name: a person's last seen, a group's size.
+function infoSubtitle(chat, details, statuses, nowMs) {
+  if (!isObject(chat)) return ""
+  if (chat.kind === "private" || chat.kind === "secret") {
+    if (chat.bot) return "bot"
+    return statusText(isObject(statuses) && statuses[chat.userId] ? statuses[chat.userId] : chat.status, nowMs)
+  }
+  var count = isObject(details) && details.memberCount > 0 ? details.memberCount : chat.memberCount
+  return memberCountText(count, chat.kind === "channel")
+}
+
+// What a chat's info shows: username, phone, bio or description, invite link.
+function infoDetails(chat, details) {
+  if (!isObject(chat) || !isObject(details)) return []
+  var out = []
+  var username = String(details.username || chat.username || "")
+  if (username) out.push({ label: "Username", value: "@" + username, copy: "https://t.me/" + username })
+  var phone = String(details.phone || "").replace(/^\+/, "")
+  if (phone) out.push({ label: "Phone", value: "+" + phone, copy: "+" + phone })
+  if (isObject(details.bio) && details.bio.text)
+    out.push({ label: "Bio", value: String(details.bio.text), entities: Array.isArray(details.bio.entities) ? details.bio.entities : [] })
+  if (details.botDescription) out.push({ label: "About", value: String(details.botDescription) })
+  if (details.description) out.push({ label: chat.kind === "channel" ? "About the channel" : "About the group", value: String(details.description) })
+  if (details.inviteLink) out.push({ label: "Invite link", value: String(details.inviteLink), copy: String(details.inviteLink) })
+  if (details.commonGroups > 0) out.push({ label: "Groups in common", value: String(details.commonGroups) })
   return out
+}
+
+function infoActions(chat) {
+  if (!isObject(chat)) return []
+  return [{ id: "mute", label: chat.muted ? "Unmute" : "Mute" }, { id: "search", label: "Search" }].concat(leaveActions(chat))
+}
+
+var INFO_TABS = [
+  { key: "photos", label: "Photos and videos" }, { key: "files", label: "Files" }, { key: "links", label: "Links" },
+  { key: "voice", label: "Voice" }, { key: "music", label: "Music" }, { key: "gifs", label: "GIFs" }
+]
+
+// A chat info's tabs: members where they can be listed, then each kind of shared media there is
+// -- all of them until the counts are known.
+function infoTabs(chat, details, counts) {
+  if (!isObject(chat)) return []
+  var out = []
+  if ((chat.kind === "group" || chat.kind === "channel") && isObject(details) && details.canGetMembers)
+    out.push({ key: "members", label: chat.kind === "channel" ? "Subscribers" : "Members", count: Math.max(0, details.memberCount | 0) })
+  INFO_TABS.forEach(function (tab) {
+    var count = isObject(counts) ? counts[tab.key] : undefined
+    if (count === undefined || count > 0) out.push({ key: tab.key, label: tab.label, count: count === undefined ? -1 : count })
+  })
+  return out
+}
+
+// The first link a message leads to, if it is one that may be followed.
+function firstLink(content) {
+  if (!isObject(content)) return ""
+  var text = String(content.text || "")
+  var entities = Array.isArray(content.entities) ? content.entities : []
+  for (var i = 0; i < entities.length; i++) {
+    var e = entities[i]
+    if (!isObject(e)) continue
+    var url = e.type === "textUrl" ? safeUrl(e.url) : (e.type === "url" ? safeUrl(text.substr(e.offset, e.length)) : "")
+    if (url) return url
+  }
+  return isObject(content.linkPreview) ? safeUrl(content.linkPreview.url) : ""
+}
+
+// A shared file, link, voice or music message as a row: a title, and a line under it.
+function sharedRow(message, kind, nowMs) {
+  if (!isObject(message) || !isObject(message.content)) return { title: "", detail: "" }
+  var c = message.content
+  var media = isObject(c.media) ? c.media : {}
+  var who = message.outgoing ? "You" : String(message.senderName || "")
+  var when = listTime(message.date, nowMs)
+  var line = function (first) { return [first, who, when].filter(function (part) { return !!part }).join(" · ") }
+  if (kind === "files") return { title: String(media.fileName || c.fileName || "File"), detail: line(formatSize(isObject(media.file) ? media.file.size : 0)) }
+  if (kind === "music")
+    return { title: media.title ? (media.performer ? media.performer + " — " : "") + media.title : String(media.fileName || "Audio"),
+             detail: line(formatDuration(media.duration)) }
+  if (kind === "voice") return { title: (c.kind === "videoNote" ? "Video message, " : "Voice message, ") + formatDuration(media.duration), detail: line("") }
+  if (kind === "links") return { title: firstLink(c) || previewOf(message), detail: line(previewOf(message)) }
+  return { title: previewOf(message), detail: line("") }
+}
+
+function memberDetail(member, nowMs) {
+  if (!isObject(member)) return ""
+  var role = ({ owner: "owner", admin: "admin", restricted: "restricted", banned: "removed", left: "left" })[member.status] || ""
+  return [role, member.bot ? "bot" : statusText(member.userStatus, nowMs)].filter(function (part) { return !!part }).join(" · ")
 }
 
 // The messages one bubble stands for: every message of an album, or just the one.
