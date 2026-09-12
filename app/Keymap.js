@@ -99,6 +99,8 @@ var ACTIONS = [
 
   { id: "composer.send", label: "Send", keys: ["Return", "Enter"] },
   { id: "composer.newLine", label: "New line", keys: ["Shift+Return", "Shift+Enter"] },
+  { id: "composer.sendSilent", label: "Send without sound", keys: ["Ctrl+Shift+Return", "Ctrl+Shift+Enter"] },
+  { id: "composer.later", label: "Send later, quietly or when online", keys: ["Ctrl+Alt+Return", "Ctrl+Alt+Enter"] },
   { id: "composer.cancel", label: "Cancel a reply or edit", keys: ["Esc"] },
   { id: "composer.editLast", label: "Edit your last message (empty box)", keys: ["Up"] },
   { id: "composer.toMessages", label: "Go to the messages", keys: ["Tab"] },

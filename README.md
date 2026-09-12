@@ -26,7 +26,8 @@ overlay on a key, and desktop notifications you can answer without leaving what 
 - **Messages** — send, reply, edit, forward, pin, react and delete (for you or for everyone),
   or select several and act on them at once. Read ticks, "typing…", last seen and the pinned
   message above the chat, with read state kept in sync with your other devices. Right-click a
-  message (or press `m`) for everything Telegram allows on it.
+  message (or press `m`) for everything Telegram allows on it, translation included. Send without
+  sound, at a time you pick or once the other person is online (`Ctrl+Alt+Enter`).
 - **Rich messages** — formatting, links, mentions and hashtags, spoilers, link previews, polls
   you can vote in, places, contacts, albums, service messages ("Ann joined the group"), and
   bots' buttons and keyboards. Web links open in your browser; Telegram links open in Omagram.
@@ -37,8 +38,11 @@ overlay on a key, and desktop notifications you can answer without leaving what 
 - **Emoji** — Omarchy's emoji picker, from the message box (`Ctrl+;`).
 - **Account** — Settings shows how much Omagram keeps on this computer (and clears the cache),
   every device signed in to your account (sign any of them out), and signs you out here.
-- **Stickers** — static, animated (TGS) and video (WebM) stickers, and a sticker picker with
-  your recent stickers and installed sets.
+- **Secret chats** — start one from a person's info. Like every Telegram secret chat it lives on
+  this computer only; its info shows the encryption key to compare with the other device.
+- **Stickers and GIFs** — static, animated (TGS) and video (WebM) stickers, custom emoji, and a
+  picker with your recent stickers, your GIFs (or GIFs found through Telegram's @gif, as its own
+  apps search them) and your installed sets.
 - **Search** — chats in every list, and messages in all chats or in the open one.
 - **Notifications** — one per chat, replaced as messages arrive and withdrawn when you read
   them anywhere. **Open** opens the chat; **Reply** opens the quick-reply overlay on it.
@@ -47,7 +51,9 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   click opens a panel of recent chats where you can reply inline; right click opens the window.
 - **Quick reply** — an overlay to find a chat by typing, read its latest messages and answer.
 
-Not supported yet: secret chats, calls and stories.
+Calls cannot be taken in Omagram: TDLib carries a call's signalling but no voice engine. An
+incoming call is shown so you can decline it or answer in another Telegram app. Stories are not
+supported yet.
 
 ## Requirements
 
@@ -155,6 +161,8 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | key | action |
 |---|---|
 | `Enter` / `Shift+Enter` | send / new line |
+| `Ctrl+Shift+Enter` | send without sound |
+| `Ctrl+Alt+Enter` | send later or when they are online; scheduled messages are listed there too |
 | `↑` in an empty composer | edit your last message |
 | `Esc` | cancel a reply or edit |
 | `Ctrl+O` / `Ctrl+Shift+O` | attach photos / send files uncompressed |

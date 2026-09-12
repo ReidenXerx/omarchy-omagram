@@ -355,7 +355,29 @@ function linkFor(entity, piece) {
 // A message's text and formatting as the Rich Text a Text element shows. Everything that
 // comes from Telegram is escaped; links lead only to checked web or mail addresses or to
 // omagram: actions the window handles; a spoiler stays hidden until `revealed`.
-function richText(text, entities, revealed, codeBackground) {
+var EMOJI_PX = 20
+
+// What a sticker can be drawn from as a still image: a WebP sticker itself, or the still thumbnail
+// of an animated one; null when there is neither.
+function stillStickerFile(sticker) {
+  if (!isObject(sticker)) return null
+  if (sticker.format === "webp" && isObject(sticker.file)) return sticker.file
+  var thumb = sticker.thumb
+  return isObject(thumb) && isObject(thumb.file) && ["webp", "png", "jpeg"].indexOf(thumb.format) >= 0 ? thumb.file : null
+}
+
+// The custom emoji a message uses, by id, for asking the service for their stickers.
+function customEmojiIds(entities) {
+  var out = []
+  var list = Array.isArray(entities) ? entities : []
+  for (var i = 0; i < list.length && out.length < 50; i++) {
+    var id = isObject(list[i]) && list[i].type === "customEmoji" ? String(list[i].customEmojiId || "") : ""
+    if (/^-?[0-9]{1,19}$/.test(id) && out.indexOf(id) < 0) out.push(id)
+  }
+  return out
+}
+
+function richText(text, entities, revealed, codeBackground, emojiImages) {
   var s = String(text || "")
   var list = (Array.isArray(entities) ? entities : []).filter(function (e) {
     return isObject(e) && typeof e.type === "string" && typeof e.offset === "number" && typeof e.length === "number"
@@ -374,7 +396,13 @@ function richText(text, entities, revealed, codeBackground) {
       out += '<a href="omagram:spoiler">' + piece.replace(/[^\s]/g, "▒") + "</a>"
       continue
     }
-    var html = escapeHtml(piece)
+    // A custom emoji is its sticker once that is on this computer (a local file, never a remote
+    // image), and the emoji it stands in for until then.
+    var custom = on.filter(function (e) { return e.type === "customEmoji" })[0]
+    var image = custom && isObject(emojiImages) ? String(emojiImages[custom.customEmojiId] || "") : ""
+    var html = image.indexOf("file:///") === 0
+      ? '<img src="' + escapeHtml(image) + '" width="' + EMOJI_PX + '" height="' + EMOJI_PX + '">'
+      : escapeHtml(piece)
     if (types.indexOf("code") >= 0 || types.indexOf("pre") >= 0 || types.indexOf("preCode") >= 0)
       html = '<code style="background-color:' + escapeHtml(codeBackground || "transparent") + '">' + html + "</code>"
     if (types.indexOf("bold") >= 0) html = "<b>" + html + "</b>"
@@ -523,13 +551,23 @@ function chatTitle(chat, meId) {
 
 // What a message's menu offers. `properties` is what Telegram allows for the message, null until
 // it has answered: until then only what needs no permission is there.
-function messageMenu(message, properties) {
+function messageMenu(message, properties, translated, chat) {
   if (!isObject(message) || !isObject(message.content)) return []
   var p = isObject(properties) ? properties : null
   var c = message.content
+  if (message.sendAt) {   // a scheduled message
+    var later = [{ id: "sendNow", label: "Send now" }, { id: "reschedule", label: "Change when it is sent" }]
+    if (c.kind === "text") later.push({ id: "edit", label: "Edit" })
+    if (c.text) later.push({ id: "copy", label: "Copy text" })
+    later.push({ id: "deleteAll", label: "Delete", danger: true })
+    return later
+  }
   var out = []
   if (!p || p.canReply) out.push({ id: "reply", label: "Reply" })
   if (c.text && (!p || p.canSave !== false)) out.push({ id: "copy", label: "Copy text" })
+  // Telegram translates on its servers, which never see a secret chat's messages.
+  if (c.text && !(isObject(chat) && chat.kind === "secret"))
+    out.push(translated ? { id: "untranslate", label: "Hide the translation" } : { id: "translate", label: "Translate" })
   if (p && p.canGetLink) out.push({ id: "link", label: "Copy link" })
   if (p && p.canEdit) out.push({ id: "edit", label: c.kind === "text" ? "Edit" : "Edit caption" })
   if (p && p.canForward) out.push({ id: "forward", label: "Forward" })
@@ -614,12 +652,113 @@ function infoDetails(chat, details) {
   if (details.description) out.push({ label: chat.kind === "channel" ? "About the channel" : "About the group", value: String(details.description) })
   if (details.inviteLink) out.push({ label: "Invite link", value: String(details.inviteLink), copy: String(details.inviteLink) })
   if (details.commonGroups > 0) out.push({ label: "Groups in common", value: String(details.commonGroups) })
+  if (details.keyHash) out.push({ label: "Encryption key: the other device shows the same", value: String(details.keyHash) })
   return out
 }
 
-function infoActions(chat) {
+function infoActions(chat, meId) {
   if (!isObject(chat)) return []
-  return [{ id: "mute", label: chat.muted ? "Unmute" : "Mute" }, { id: "search", label: "Search" }].concat(leaveActions(chat))
+  var out = [{ id: "mute", label: chat.muted ? "Unmute" : "Mute" }, { id: "search", label: "Search" }]
+  if (chat.kind === "private" && !chat.bot && chat.userId && chat.userId !== meId) out.push({ id: "secret", label: "Start a secret chat" })
+  if (chat.kind === "secret" && isObject(chat.secret) && chat.secret.state !== "closed")
+    out.push({ id: "endSecret", label: "End the secret chat", danger: true })
+  return out.concat(leaveActions(chat))
+}
+
+function secretStateText(chat) {
+  if (!isObject(chat) || !isObject(chat.secret)) return ""
+  if (chat.secret.state === "ready") return "end-to-end encrypted"
+  if (chat.secret.state === "closed") return "the secret chat has ended"
+  return chat.secret.outbound ? "waiting for the other side to accept" : "setting up the secret chat"
+}
+
+// ---------------------------------------------------------------- sending later, quietly
+
+// The times offered: in an hour, this evening at 21:00 (tomorrow's once that is near or past),
+// and tomorrow at 9:00. In seconds.
+function schedulePresets(nowMs) {
+  var now = new Date(nowMs)
+  var evening = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 21, 0, 0)
+  if (evening.getTime() <= nowMs + 10 * 60 * 1000) evening.setDate(evening.getDate() + 1)
+  var morning = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0)
+  return { hour: Math.floor(nowMs / 1000) + 3600, evening: Math.floor(evening.getTime() / 1000), morning: Math.floor(morning.getTime() / 1000) }
+}
+
+// "today", "tomorrow", "Wednesday", "3 October" (with its year when that is another), "when online".
+function scheduleDay(sendAt, nowMs) {
+  if (sendAt === -1) return "when online"
+  if (!(sendAt > 0)) return ""
+  var days = daysBetween(Math.floor(nowMs / 1000), sendAt * 1000)
+  var d = new Date(sendAt * 1000)
+  if (days <= 0) return "today"
+  if (days === 1) return "tomorrow"
+  if (days < 7) return WEEKDAYS_LONG[d.getDay()]
+  return d.getDate() + " " + MONTHS_LONG[d.getMonth()] + (d.getFullYear() !== new Date(nowMs).getFullYear() ? " " + d.getFullYear() : "")
+}
+
+// "today at 21:00", "tomorrow at 09:00", "Wednesday at 09:00", "3 October at 09:00", "when online".
+function scheduleText(sendAt, nowMs) {
+  return sendAt > 0 ? scheduleDay(sendAt, nowMs) + " at " + clock(sendAt) : scheduleDay(sendAt, nowMs)
+}
+
+// Whether a message starts a day in the list: the day it was sent, or for a scheduled message the
+// day it will be (TDLib gives those no date), those waiting for the other person to be online together.
+function startsDay(previous, message) {
+  if (!isObject(previous)) return true
+  if (previous.sendAt === -1 || message.sendAt === -1) return previous.sendAt !== message.sendAt
+  return !sameDay(previous.sendAt > 0 ? previous.sendAt : previous.date, message.sendAt > 0 ? message.sendAt : message.date)
+}
+
+// The heading over a day's messages: "Today", "Yesterday", ...; over scheduled ones "Will be sent tomorrow".
+function dayHeading(message, nowMs) {
+  if (!(message.sendAt > 0) && message.sendAt !== -1) return dayLabel(message.date, nowMs)
+  var day = scheduleDay(message.sendAt, nowMs)
+  return "Will be sent " + (["today", "tomorrow", "when online"].indexOf(day) >= 0 ? day : "on " + day)
+}
+
+// The other ways to send what is typed: quietly, later, or once the other person is online.
+function sendMenu(chat, meId, nowMs, hasText) {
+  if (!isObject(chat)) return []
+  var out = []
+  if (hasText) {
+    out.push({ id: "silent", label: "Send without sound" })
+    if (chat.kind !== "secret") {   // a secret chat cannot schedule
+      var p = schedulePresets(nowMs)
+      out.push({ id: "at:" + p.hour, label: "Send in an hour" },
+               { id: "at:" + p.evening, label: "Send " + scheduleText(p.evening, nowMs) },
+               { id: "at:" + p.morning, label: "Send " + scheduleText(p.morning, nowMs) })
+      if (chat.kind === "private" && !chat.bot && chat.userId !== meId) out.push({ id: "online", label: "Send when they are online" })
+    }
+  }
+  if (chat.hasScheduled) out.push({ id: "scheduled", label: "Scheduled messages" })
+  return out
+}
+
+function rescheduleMenu(chat, meId, nowMs) {
+  if (!isObject(chat)) return []
+  var p = schedulePresets(nowMs)
+  var capital = function (s) { return s.charAt(0).toUpperCase() + s.slice(1) }
+  var out = [{ id: "now", label: "Send now" }, { id: "at:" + p.hour, label: "In an hour" },
+             { id: "at:" + p.evening, label: capital(scheduleText(p.evening, nowMs)) },
+             { id: "at:" + p.morning, label: capital(scheduleText(p.morning, nowMs)) }]
+  if (chat.kind === "private" && !chat.bot && chat.userId !== meId) out.push({ id: "online", label: "When they are online" })
+  return out
+}
+
+// What a send or reschedule menu item asks for: { silent } or { sendAt }; null for anything else.
+function sendChoice(id) {
+  if (id === "silent") return { silent: true }
+  if (id === "online") return { sendAt: -1 }
+  if (id === "now") return { sendAt: 0 }
+  var m = /^at:([1-9][0-9]{0,10})$/.exec(String(id))
+  return m ? { sendAt: Number(m[1]) } : null
+}
+
+// Scheduled messages in the order they go out: by the time set, those waiting for the other person
+// to be online last.
+function scheduledOrder(messages) {
+  var at = function (m) { return m.sendAt > 0 ? m.sendAt : Infinity }
+  return (Array.isArray(messages) ? messages : []).filter(isObject).sort(function (a, b) { return at(a) - at(b) || a.id - b.id })
 }
 
 var INFO_TABS = [

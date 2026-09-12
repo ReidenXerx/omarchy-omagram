@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading }", box)
 const M = box.M
 const plain = v => JSON.parse(JSON.stringify(v))
 const eq = (a, b, msg) => assert.deepStrictEqual(plain(a), plain(b), msg)
@@ -254,11 +254,16 @@ test("the bot keyboard in effect is set or removed by the newest message that sa
 
 test("a message's menu offers only what Telegram allows", () => {
   const text = msg(5, { content: { kind: "text", text: "hi" } })
-  eq(M.messageMenu(text, null).map(i => i.id), ["reply", "copy", "select"], "before Telegram has answered")
+  eq(M.messageMenu(text, null).map(i => i.id), ["reply", "copy", "translate", "select"], "before Telegram has answered")
+  eq(M.messageMenu(text, null, false, { kind: "secret" }).map(i => i.id), ["reply", "copy", "select"], "a secret chat's messages are not sent to be translated")
   const all = { canReply: true, canSave: true, canGetLink: true, canEdit: true, canForward: true, canPin: true,
                 canDeleteForAll: true, canDeleteForMe: true }
-  eq(M.messageMenu(text, all).map(i => i.id), ["reply", "copy", "link", "edit", "forward", "pin", "select", "deleteAll", "deleteMe"])
-  eq(M.messageMenu(Object.assign({}, text, { pinned: true }), { canPin: true }).map(i => i.id), ["copy", "unpin", "select"])
+  eq(M.messageMenu(text, all).map(i => i.id),
+     ["reply", "copy", "translate", "link", "edit", "forward", "pin", "select", "deleteAll", "deleteMe"])
+  eq(M.messageMenu(text, all, true).map(i => i.id).slice(1, 3), ["copy", "untranslate"])
+  eq(M.messageMenu(Object.assign({}, text, { pinned: true }), { canPin: true }).map(i => i.id), ["copy", "translate", "unpin", "select"])
+  eq(M.messageMenu(Object.assign({}, text, { sendAt: 1789999999 }), all).map(i => i.id), ["sendNow", "reschedule", "edit", "copy", "deleteAll"],
+     "a scheduled message")
   const photo = msg(6, { content: { kind: "photo", text: "", media: { file: { id: 3 } } } })
   eq(M.messageMenu(photo, { canReply: true, canSave: true }).map(i => i.id), ["reply", "select", "open", "save"])
   eq(M.messageMenu(photo, { canReply: true, canSave: false }).map(i => i.id), ["reply", "select"], "protected content stays in Telegram")
@@ -302,7 +307,14 @@ test("a chat's info: subtitle, details, actions and tabs", () => {
      [["Username", "@ann", "https://t.me/ann"], ["Phone", "+380671234567", "+380671234567"], ["Bio", "hi", ""], ["Groups in common", "2", ""]])
   eq(M.infoDetails(channel, { description: "daily", inviteLink: "" }).map(d => d.label), ["Username", "About the channel"])
   eq(M.infoDetails(person, null), [])
-  eq(M.infoActions(person).map(a => a.id), ["mute", "search", "clear", "delete"])
+  eq(M.infoActions(person, 1).map(a => a.id), ["mute", "search", "secret", "clear", "delete"])
+  eq(M.infoActions(person, 7).map(a => a.id), ["mute", "search", "clear", "delete"], "no secret chat with yourself")
+  eq(M.infoActions({ id: -9, kind: "secret", userId: 7, secret: { state: "ready" } }, 1).map(a => a.id),
+     ["mute", "search", "endSecret", "clear", "delete"])
+  eq(M.infoDetails({ kind: "secret" }, { keyHash: "00010203 04050607" }).map(d => d.value), ["00010203 04050607"])
+  assert.strictEqual(M.secretStateText({ secret: { state: "pending", outbound: true } }), "waiting for the other side to accept")
+  assert.strictEqual(M.secretStateText({ secret: { state: "ready" } }), "end-to-end encrypted")
+  assert.strictEqual(M.secretStateText({}), "")
   eq(M.infoActions(group).map(a => [a.id, a.label]), [["mute", "Unmute"], ["search", "Search"], ["leave", "Leave group"]])
   eq(M.infoActions(channel).map(a => a.id), ["mute", "search"], "nothing to leave once left")
   eq(M.infoTabs(group, { canGetMembers: true, memberCount: 3 }, null).map(t => t.key), ["members", "photos", "files", "links", "voice", "music", "gifs"])
@@ -340,6 +352,61 @@ test("starting a chat: contacts, usernames, and people for a new group", () => {
   for (const bad of ["@ab", "1abc", "has space", "x".repeat(40), "@name!"]) assert.strictEqual(M.usernameQuery(bad), "", bad)
   assert.strictEqual(M.usernameQuery(" @Some_bot "), "Some_bot")
   assert.strictEqual(M.contactDetail({ username: "ann", status: { state: "online" } }, Date.now()), "@ann · online")
+})
+
+test("custom emoji are drawn from their stickers once here, and only from local files", () => {
+  const entities = [{ type: "customEmoji", offset: 3, length: 2, customEmojiId: "536" }]
+  assert.ok(M.richText("hi 😀", entities, false, "", {}).includes("😀"), "the emoji itself until its sticker is here")
+  const html = M.richText("hi 😀", entities, false, "", { "536": "file:///home/u/.local/share/omagram/database/stickers/a.webp" })
+  assert.ok(html.includes('<img src="file:///home/u/.local/share/omagram/database/stickers/a.webp" width="20" height="20">') && !html.includes("😀"))
+  assert.ok(!M.richText("hi 😀", entities, false, "", { "536": "https://tracker.example/x.png" }).includes("<img"), "never a remote image")
+  eq(M.customEmojiIds([entities[0], entities[0], { type: "customEmoji", customEmojiId: "x" }, { type: "bold" }]), ["536"])
+  eq(M.stillStickerFile({ format: "webp", file: { id: 1 } }), { id: 1 })
+  eq(M.stillStickerFile({ format: "tgs", file: { id: 1 }, thumb: { format: "webp", file: { id: 2 } } }), { id: 2 })
+  assert.strictEqual(M.stillStickerFile({ format: "tgs", file: { id: 1 }, thumb: { format: "tgs", file: { id: 2 } } }), null)
+  assert.strictEqual(M.stillStickerFile(null), null)
+})
+
+test("sending later: presets, words and choices", () => {
+  const now = new Date(2026, 8, 12, 15, 0).getTime()
+  const p = M.schedulePresets(now)
+  assert.strictEqual(p.hour, now / 1000 + 3600)
+  assert.strictEqual(p.evening, new Date(2026, 8, 12, 21, 0).getTime() / 1000)
+  assert.strictEqual(p.morning, new Date(2026, 8, 13, 9, 0).getTime() / 1000)
+  assert.strictEqual(M.schedulePresets(new Date(2026, 8, 12, 20, 55).getTime()).evening, new Date(2026, 8, 13, 21, 0).getTime() / 1000,
+                     "too late for tonight")
+  assert.strictEqual(M.scheduleText(p.evening, now), "today at 21:00")
+  assert.strictEqual(M.scheduleText(p.morning, now), "tomorrow at 09:00")
+  assert.strictEqual(M.scheduleText(new Date(2026, 8, 16, 9, 0).getTime() / 1000, now), "Wednesday at 09:00")
+  assert.strictEqual(M.scheduleText(new Date(2026, 9, 3, 9, 0).getTime() / 1000, now), "3 October at 09:00")
+  assert.strictEqual(M.scheduleText(-1, now), "when online")
+  const person = { id: 7, kind: "private", userId: 7, hasScheduled: true }
+  eq(M.sendMenu(person, 1, now, true).map(i => i.id.split(":")[0]), ["silent", "at", "at", "at", "online", "scheduled"])
+  eq(M.sendMenu({ id: 1, kind: "private", userId: 1 }, 1, now, true).map(i => i.id.split(":")[0]), ["silent", "at", "at", "at"],
+     "no waiting for yourself to come online")
+  eq(M.sendMenu(person, 1, now, false).map(i => i.id), ["scheduled"])
+  eq(M.rescheduleMenu(person, 1, now).map(i => i.id.split(":")[0]), ["now", "at", "at", "at", "online"])
+  eq(M.sendChoice("silent"), { silent: true })
+  eq(M.sendChoice("online"), { sendAt: -1 })
+  eq(M.sendChoice("now"), { sendAt: 0 })
+  eq(M.sendChoice("at:1789999999"), { sendAt: 1789999999 })
+  assert.strictEqual(M.sendChoice("at:soon"), null)
+  eq(M.sendMenu({ id: -5, kind: "secret", userId: 7 }, 1, now, true).map(i => i.id), ["silent"], "a secret chat cannot schedule")
+})
+
+test("scheduled messages: their order and day headings", () => {
+  const now = new Date(2026, 8, 12, 15, 0).getTime()
+  const p = M.schedulePresets(now)
+  assert.strictEqual(M.scheduleDay(p.morning, now), "tomorrow")
+  const list = [msg(3, { date: 0, sendAt: p.evening }), msg(4, { date: 0, sendAt: p.evening + 60 }), msg(5, { date: 0, sendAt: p.morning }),
+                msg(6, { date: 0, sendAt: -1 })]
+  eq(M.scheduledOrder([list[3], list[2], list[1], list[0]]).map(m => m.id), [3, 4, 5, 6], "by when they go out, online ones last")
+  eq(M.scheduledOrder([msg(9, { sendAt: -1 }), msg(8, { sendAt: -1 })]).map(m => m.id), [8, 9])
+  eq(list.map((m, i) => M.startsDay(list[i - 1], m)), [true, false, true, true])
+  eq(list.map(m => M.dayHeading(m, now)), ["Will be sent today", "Will be sent today", "Will be sent tomorrow", "Will be sent when online"])
+  assert.strictEqual(M.dayHeading(msg(7, { date: 0, sendAt: new Date(2026, 8, 16, 9, 0).getTime() / 1000 }), now), "Will be sent on Wednesday")
+  assert.strictEqual(M.dayHeading(msg(8, { date: now / 1000 - 86400 }), now), "Yesterday")
+  assert.strictEqual(M.startsDay(msg(1, { date: now / 1000 - 60 }), msg(2, { date: now / 1000 })), false)
 })
 
 test("forum topics: where their messages are kept, their order and icons", () => {

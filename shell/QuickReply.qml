@@ -202,6 +202,7 @@ Item {
 
     function onMessageEvent(name, e) {
       if (!overlay.opened || !overlay.historyChatId) return
+      if (e.message && e.message.sendAt) return   // scheduled: part of no history until it goes out
       if (name === "message" && e.message.chatId === overlay.historyChatId) {
         overlay.history = Model.mergeMessages(overlay.history, [e.message])
         Qt.callLater(function () { messageList.positionViewAtEnd() })

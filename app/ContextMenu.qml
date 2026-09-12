@@ -16,6 +16,7 @@ FocusScope {
   property var chosen: []        // reactions that are already yours
   property real menuX: 0
   property real menuY: 0
+  property bool upward: false    // opened from something at the bottom: the card ends at menuY
   property int cursor: 0
 
   signal picked(string id)
@@ -84,7 +85,7 @@ FocusScope {
     width: Math.min(Style.space(260), menu.width - Style.space(16))
     height: cardColumn.implicitHeight + Style.space(12)
     x: Math.max(Style.space(8), Math.min(menu.width - width - Style.space(8), menu.menuX))
-    y: Math.max(Style.space(8), Math.min(menu.height - height - Style.space(8), menu.menuY))
+    y: Math.max(Style.space(8), Math.min(menu.height - height - Style.space(8), menu.upward ? menu.menuY - height : menu.menuY))
     radius: Style.cornerRadius
     color: menu.app.background
     border.width: 1

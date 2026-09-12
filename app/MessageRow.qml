@@ -24,7 +24,7 @@ Item {
   readonly property bool service: row.content.kind === "service"
   readonly property bool hiddenInAlbum: Model.inAlbumAfterFirst(row.messages, row.index)
   readonly property var album: Model.albumStart(row.messages, row.index)
-  readonly property bool newDay: !row.previous || !Model.sameDay(row.previous.date, row.message.date)
+  readonly property bool newDay: Model.startsDay(row.previous, row.message)
   readonly property bool runStart: row.newDay || !Model.sameRun(row.previous, row.message)
   readonly property bool showName: !row.message.outgoing && !!row.view.chat && row.view.chat.kind !== "private" && row.runStart && !row.service
   readonly property var quoted: row.message.replyTo ? Model.findMessage(row.messages, row.message.replyTo.messageId) : null
@@ -57,7 +57,7 @@ Item {
     visible: row.newDay && !row.hiddenInAlbum
     anchors.horizontalCenter: parent.horizontalCenter
     y: Style.space(4)
-    text: Model.dayLabel(row.message.date, row.view.nowMs)
+    text: Model.dayHeading(row.message, row.view.nowMs)
     color: row.app.muted
     font.family: row.app.fontFamily
     font.pixelSize: Style.font.caption
@@ -110,6 +110,7 @@ Item {
                                        place.visible ? place.implicitWidth : 0,
                                        person.visible ? person.implicitWidth : 0,
                                        reactionsFlow.visible ? reactionsFlow.wantedWidth : 0,
+                                       translation.visible ? translation.wantedWidth : 0,
                                        buttons.visible ? buttons.wantedWidth : 0) + Style.space(24))
     height: column.implicitHeight + Style.space(16)
     radius: Style.cornerRadius * 1.5
@@ -231,9 +232,13 @@ Item {
       Text {
         id: body
         readonly property string source: row.textSource.content.text || ""
+        readonly property var emojiIds: Model.customEmojiIds(row.textSource.content.entities)
         visible: source !== "" && !row.cardKind
         width: Math.min(implicitWidth, bubble.inner)
-        text: visible ? Model.richText(source, row.textSource.content.entities, row.revealed, row.codeBackground) : ""
+        text: visible ? Model.richText(source, row.textSource.content.entities, row.revealed, row.codeBackground,
+                                       body.emojiIds.length ? row.app.customEmojiImages(body.emojiIds) : null) : ""
+        onEmojiIdsChanged: if (emojiIds.length) row.app.requestCustomEmoji(emojiIds)
+        Component.onCompleted: if (emojiIds.length) row.app.requestCustomEmoji(emojiIds)
         textFormat: Text.RichText
         wrapMode: Text.Wrap
         color: row.app.foreground
@@ -243,6 +248,39 @@ Item {
         onLinkActivated: function (link) { row.view.openLink(link, row.message) }
 
         HoverHandler { cursorShape: body.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor }
+      }
+
+      // ---------------------------------------------- a translation, under the original
+      Column {
+        id: translation
+        // undefined: none asked for; null: on its way; otherwise { text, entities }
+        readonly property var result: row.view.translations ? row.view.translations[row.textSource.id] : undefined
+        readonly property real wantedWidth: Math.min(bubble.inner, Math.max(translationLabel.implicitWidth, translationText.implicitWidth))
+        visible: translation.result !== undefined
+        width: parent.width
+        spacing: Style.space(2)
+
+        Text {
+          id: translationLabel
+          text: translation.result ? "Translation" : "Translating…"
+          color: row.app.accent
+          font.family: row.app.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
+        Text {
+          id: translationText
+          visible: !!translation.result
+          width: Math.min(implicitWidth, bubble.inner)
+          wrapMode: Text.Wrap
+          text: translation.result ? Model.richText(translation.result.text, translation.result.entities, true, row.codeBackground) : ""
+          textFormat: Text.RichText
+          color: row.app.foreground
+          linkColor: row.app.accent
+          font.family: row.app.fontFamily
+          font.pixelSize: Style.font.body
+          onLinkActivated: function (link) { row.view.openLink(link, row.message) }
+        }
       }
 
       // ---------------------------------------------- link preview
@@ -649,10 +687,12 @@ Item {
       Text {
         id: meta
         anchors.right: parent.right
-        text: (row.message.views > 0 ? row.message.views + " views  ·  " : "")
-          + (row.message.editDate > 0 ? "edited  " : "") + Model.clock(row.message.date)
-          + (row.receipt === "read" ? "  ✓✓" : (row.receipt === "sent" ? "  ✓" : ""))
-          + (row.receipt === "sending" ? "  ·  sending" : (row.receipt === "failed" ? "  ·  failed" : ""))
+        // A scheduled message is under the heading of the day it goes out: its time is enough.
+        text: row.message.sendAt ? (row.message.sendAt > 0 ? "scheduled  " + Model.clock(row.message.sendAt) : "scheduled")
+          : (row.message.views > 0 ? row.message.views + " views  ·  " : "")
+            + (row.message.editDate > 0 ? "edited  " : "") + Model.clock(row.message.date)
+            + (row.receipt === "read" ? "  ✓✓" : (row.receipt === "sent" ? "  ✓" : ""))
+            + (row.receipt === "sending" ? "  ·  sending" : (row.receipt === "failed" ? "  ·  failed" : ""))
         color: row.receipt === "failed" ? row.app.urgent : (row.receipt === "read" ? row.app.accent : row.app.muted)
         font.family: row.app.fontFamily
         font.pixelSize: Style.font.caption

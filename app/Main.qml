@@ -45,6 +45,22 @@ Scope {
 
   // The topic open in a forum group, as topics.list describes it; null shows the forum's topics.
   property var openTopic: null
+  signal scheduledChanged(real chatId)
+
+  // Calls cannot be answered in Omagram -- TDLib brings no voice engine -- so an incoming one is
+  // shown to be declined, or taken in another Telegram app. Call id -> the call.
+  property var calls: ({})
+  readonly property var incomingCall: {
+    for (var id in omagram.calls) {
+      var call = omagram.calls[id]
+      if (!call.outgoing && call.state === "pending") return call
+    }
+    return null
+  }
+
+  // Custom emoji: id -> the sticker that draws it (null while it is being asked for).
+  property var customEmoji: ({})
+  property int customEmojiRevision: 0
 
   Timer {
     interval: 1000
@@ -139,6 +155,43 @@ Scope {
     })
   }
 
+  // The images of custom emoji, by id: a file:// URL for each whose sticker is downloaded and can
+  // be drawn still (a WebP sticker, or the still thumbnail of an animated one).
+  function customEmojiImages(ids) {
+    omagram.customEmojiRevision
+    omagram.filesRevision
+    var images = {}
+    for (var i = 0; i < ids.length; i++) {
+      var still = Model.stillStickerFile(omagram.customEmoji[ids[i]])
+      var file = still ? omagram.fileState(still) : null
+      if (file && file.path) images[ids[i]] = Model.fileUrl(file.path)
+    }
+    return images
+  }
+
+  function requestCustomEmoji(ids) {
+    if (omagram.auth.state !== "ready") return
+    if (Object.keys(omagram.customEmoji).length > 3000) omagram.customEmoji = ({})
+    var missing = ids.filter(function (id) { return !(id in omagram.customEmoji) }).slice(0, 200)
+    if (!missing.length) return
+    missing.forEach(function (id) { omagram.customEmoji[id] = null })
+    service.request("customEmoji.get", { ids: missing }, function (answer) {
+      var stickers = answer.ok ? answer.result.emoji || [] : []
+      stickers.forEach(function (sticker) {
+        omagram.customEmoji[sticker.id] = sticker
+        var still = Model.stillStickerFile(sticker)
+        if (still && !still.path) omagram.download(still.id, 1)
+      })
+      omagram.customEmojiRevision++
+    })
+  }
+
+  function declineCall(callId) {
+    service.request("call.decline", { callId: callId }, function (answer) {
+      if (!answer.ok && screen.item && screen.item.notify) screen.item.notify(answer.error || "Could not decline the call")
+    })
+  }
+
   // Histories are kept by Model.historyKey: a chat's id, or "chat:topic" for a topic of a forum.
   readonly property string openKey: Model.historyKey(omagram.openChatId, omagram.openTopic ? omagram.openTopic.id : 0)
 
@@ -195,6 +248,10 @@ Scope {
       omagram.auth = result.auth || { state: "starting" }
       omagram.meId = result.meId || 0
       omagram.applySettings(result)
+      var known = {}
+      var ringing = result.calls || []
+      for (var c = 0; c < ringing.length; c++) known[ringing[c].id] = ringing[c]
+      omagram.calls = known
       omagram.chats = result.allChats || result.chats || []
       omagram.folders = result.folders || []
       omagram.mainPosition = result.mainPosition || 0
@@ -240,6 +297,10 @@ Scope {
       omagram.chats = Model.upsertKnown(omagram.chats, e.chat)
     } else if (name === "message") {
       var m = e.message
+      if (m.sendAt) {   // scheduled: part of no history until it goes out
+        omagram.scheduledChanged(m.chatId)
+        return
+      }
       var key = Model.historyKey(m.chatId, m.topicId)
       if (omagram.messages[key]) {
         omagram.setMessages(key, Model.mergeMessages(omagram.messages[key], [m]))
@@ -248,6 +309,10 @@ Scope {
       if (m.topicId) omagram.topicsChanged(m.chatId)
     } else if (name === "messageSent" || name === "messageFailed") {
       var sent = e.message
+      if (sent.sendAt) {
+        omagram.scheduledChanged(sent.chatId)
+        return
+      }
       var sentKey = Model.historyKey(sent.chatId, sent.topicId)
       if (omagram.messages[sentKey]) omagram.setMessages(sentKey, Model.replaceMessage(omagram.messages[sentKey], e.oldMessageId, sent))
     } else if (name === "messageContent") {
@@ -288,6 +353,12 @@ Scope {
       omagram.recording = e
     } else if (name === "messagesDeleted") {
       omagram.historiesOf(e.chatId).forEach(function (k) { omagram.setMessages(k, Model.removeMessages(omagram.messages[k], e.messageIds)) })
+      omagram.scheduledChanged(e.chatId)   // a scheduled message that went out, or was deleted
+    } else if (name === "call") {
+      var calls = {}
+      for (var callId in omagram.calls) if (Number(callId) !== e.call.id) calls[callId] = omagram.calls[callId]
+      if (e.call.state !== "ended" && e.call.state !== "failed") calls[e.call.id] = e.call
+      omagram.calls = calls
     }
   }
 
@@ -623,8 +694,23 @@ Scope {
 
       Component.onCompleted: chatList.focusList()
 
+      // An incoming call: shown so it can be declined, or answered in another Telegram app.
+      CallBar {
+        id: callBar
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: visible ? implicitHeight : 0
+        app: omagram
+        call: omagram.incomingCall
+        onDeclined: function (callId) { omagram.declineCall(callId) }
+      }
+
       RowLayout {
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: callBar.bottom
+        anchors.bottom: parent.bottom
         spacing: 0
 
         ChatList {
@@ -674,9 +760,9 @@ Scope {
           Layout.fillWidth: true
           Layout.fillHeight: true
           chat: omagram.openChat
-          messages: omagram.openChat ? omagram.messagesFor(omagram.openChatId) : []
+          history: omagram.openChat ? omagram.messagesFor(omagram.openChatId) : []
           nowMs: omagram.nowMs
-          onLoadOlder: if (omagram.openChatId) omagram.loadHistory(omagram.openChatId, Model.oldestId(omagram.messagesFor(omagram.openChatId)))
+          onLoadOlder: if (omagram.openChatId && !chatView.scheduledOpen) omagram.loadHistory(omagram.openChatId, Model.oldestId(omagram.messagesFor(omagram.openChatId)))
           blocked: forwardPicker.visible || chatList.modalOpen || newChat.visible
           onSearchRequested: function (text) { chatList.searchFor(text) }
           onSearchInChatRequested: chatList.searchInChat(omagram.openChatId, Model.chatTitle(omagram.openChat, omagram.meId))

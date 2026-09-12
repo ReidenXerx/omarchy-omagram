@@ -513,6 +513,15 @@ FocusScope {
                 Layout.fillWidth: true
                 spacing: Style.space(6)
 
+                // md-lock U+F033E: a secret chat
+                Text {
+                  visible: row.chat.kind === "secret"
+                  text: String.fromCodePoint(0xF033E)
+                  color: app.accent
+                  font.family: app.glyphFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+
                 Text {
                   Layout.fillWidth: true
                   text: Model.chatTitle(row.chat, app.meId)
