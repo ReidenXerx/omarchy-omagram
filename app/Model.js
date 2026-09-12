@@ -19,8 +19,19 @@ var KIND_LABELS = {
   service: "Service message", unsupported: "Unsupported message"
 }
 
+// A list that reaches QML through a model's modelData is a QML sequence: an instance of Array, with
+// its methods, for which Array.isArray is false -- and which concat does not spread.
+function isList(value) {
+  return Array.isArray(value) || value instanceof Array
+}
+
+// A list as a JS array, for what needs one (concat); [] for anything else.
+function toList(value) {
+  return Array.isArray(value) ? value : (value instanceof Array ? Array.prototype.slice.call(value) : [])
+}
+
 function isObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
+  return value !== null && typeof value === "object" && !isList(value)
 }
 
 // ---------------------------------------------------------------- chats
@@ -39,7 +50,7 @@ function orderIn(chat, listKey) {
   var key = listKey || "main"
   if (!isObject(chat)) return "0"
   if (isObject(chat.positions)) return isObject(chat.positions[key]) ? String(chat.positions[key].order) : "0"
-  return key === "main" && Array.isArray(chat.lists) && chat.lists.indexOf("main") >= 0 ? String(chat.order) : "0"
+  return key === "main" && isList(chat.lists) && chat.lists.indexOf("main") >= 0 ? String(chat.order) : "0"
 }
 
 function pinnedIn(chat, listKey) {
@@ -50,7 +61,7 @@ function pinnedIn(chat, listKey) {
 
 function sortChats(chats, listKey) {
   var key = listKey || "main"
-  var list = Array.isArray(chats) ? chats.filter(function (c) { return isObject(c) && typeof c.id === "number" }) : []
+  var list = toList(chats).filter(function (c) { return isObject(c) && typeof c.id === "number" })
   return list.sort(function (x, y) { return compareOrder(orderIn(y, key), orderIn(x, key)) || (x.id - y.id) }).slice(0, CHATS_MAX)
 }
 
@@ -73,13 +84,13 @@ function upsertKnown(chats, chat) {
 
 function chatsIn(chats, listKey) {
   var key = listKey || "main"
-  return sortChats((Array.isArray(chats) ? chats : []).filter(function (c) { return compareOrder(orderIn(c, key), "0") > 0 }), key)
+  return sortChats(toList(chats).filter(function (c) { return compareOrder(orderIn(c, key), "0") > 0 }), key)
 }
 
 // The tabs above the chat list: folders in Telegram's order with "All" where Telegram puts
 // the main list, and the archive last.
 function listTabs(folders, mainPosition) {
-  var list = Array.isArray(folders) ? folders.filter(function (f) { return isObject(f) && typeof f.id === "number" && f.id > 0 }) : []
+  var list = toList(folders).filter(function (f) { return isObject(f) && typeof f.id === "number" && f.id > 0 })
   var at = Math.max(0, Math.min(list.length, mainPosition | 0))
   var tabs = []
   for (var i = 0; i <= list.length; i++) {
@@ -116,7 +127,7 @@ function unreadTotal(chats) {
 
 function mergeMessages(existing, incoming) {
   var byId = {}
-  var all = (existing || []).concat(incoming || [])
+  var all = toList(existing).concat(toList(incoming))
   for (var i = 0; i < all.length; i++) {
     var m = all[i]
     if (isObject(m) && typeof m.id === "number" && m.id > 0) byId[m.id] = m   // later wins
@@ -369,7 +380,7 @@ function stillStickerFile(sticker) {
 // The custom emoji a message uses, by id, for asking the service for their stickers.
 function customEmojiIds(entities) {
   var out = []
-  var list = Array.isArray(entities) ? entities : []
+  var list = toList(entities)
   for (var i = 0; i < list.length && out.length < 50; i++) {
     var id = isObject(list[i]) && list[i].type === "customEmoji" ? String(list[i].customEmojiId || "") : ""
     if (/^-?[0-9]{1,19}$/.test(id) && out.indexOf(id) < 0) out.push(id)
@@ -379,7 +390,7 @@ function customEmojiIds(entities) {
 
 function richText(text, entities, revealed, codeBackground, emojiImages) {
   var s = String(text || "")
-  var list = (Array.isArray(entities) ? entities : []).filter(function (e) {
+  var list = toList(entities).filter(function (e) {
     return isObject(e) && typeof e.type === "string" && typeof e.offset === "number" && typeof e.length === "number"
         && e.offset >= 0 && e.length > 0 && e.offset + e.length <= s.length
   })
@@ -465,7 +476,7 @@ function activeActions(actions, chatId, nowMs) {
 
 // "typing…" in a private chat; "Ann is typing…", "Ann and Bob are typing…" in a group.
 function actionText(list, privateChat) {
-  var active = (Array.isArray(list) ? list : []).filter(function (a) { return isObject(a) && ACTION_WORDS[a.action] })
+  var active = toList(list).filter(function (a) { return isObject(a) && ACTION_WORDS[a.action] })
   if (!active.length) return ""
   var word = ACTION_WORDS[active[0].action]
   var same = active.every(function (a) { return a.action === active[0].action })
@@ -486,7 +497,7 @@ function receipt(message, chat) {
 }
 
 function updatePoll(messages, poll) {
-  if (!Array.isArray(messages) || !isObject(poll)) return messages
+  if (!isList(messages) || !isObject(poll)) return messages
   var changed = false
   var out = messages.map(function (m) {
     if (isObject(m) && isObject(m.content) && isObject(m.content.poll) && m.content.poll.id === poll.id) {
@@ -522,7 +533,7 @@ function inAlbumAfterFirst(messages, index) {
 
 // The bot keyboard for the message box: the newest message that sets or removes one decides.
 function latestKeyboard(messages) {
-  if (!Array.isArray(messages)) return null
+  if (!isList(messages)) return null
   for (var i = messages.length - 1; i >= 0; i--) {
     var markup = isObject(messages[i]) ? messages[i].markup : null
     if (!isObject(markup)) continue
@@ -647,7 +658,7 @@ function infoDetails(chat, details) {
   var phone = String(details.phone || "").replace(/^\+/, "")
   if (phone) out.push({ label: "Phone", value: "+" + phone, copy: "+" + phone })
   if (isObject(details.bio) && details.bio.text)
-    out.push({ label: "Bio", value: String(details.bio.text), entities: Array.isArray(details.bio.entities) ? details.bio.entities : [] })
+    out.push({ label: "Bio", value: String(details.bio.text), entities: toList(details.bio.entities) })
   if (details.botDescription) out.push({ label: "About", value: String(details.botDescription) })
   if (details.description) out.push({ label: chat.kind === "channel" ? "About the channel" : "About the group", value: String(details.description) })
   if (details.inviteLink) out.push({ label: "Invite link", value: String(details.inviteLink), copy: String(details.inviteLink) })
@@ -758,7 +769,7 @@ function sendChoice(id) {
 // to be online last.
 function scheduledOrder(messages) {
   var at = function (m) { return m.sendAt > 0 ? m.sendAt : Infinity }
-  return (Array.isArray(messages) ? messages : []).filter(isObject).sort(function (a, b) { return at(a) - at(b) || a.id - b.id })
+  return toList(messages).filter(isObject).sort(function (a, b) { return at(a) - at(b) || a.id - b.id })
 }
 
 var INFO_TABS = [
@@ -784,7 +795,7 @@ function infoTabs(chat, details, counts) {
 function firstLink(content) {
   if (!isObject(content)) return ""
   var text = String(content.text || "")
-  var entities = Array.isArray(content.entities) ? content.entities : []
+  var entities = toList(content.entities)
   for (var i = 0; i < entities.length; i++) {
     var e = entities[i]
     if (!isObject(e)) continue
@@ -832,7 +843,7 @@ function isHistoryOf(key, chatId) {
 // Topics as their list shows them: pinned first, then Telegram's order (an int64, as text).
 function mergeTopics(existing, incoming) {
   var byId = {}
-  var all = (Array.isArray(existing) ? existing : []).concat(Array.isArray(incoming) ? incoming : [])
+  var all = toList(existing).concat(toList(incoming))
   all.forEach(function (topic) {
     if (isObject(topic) && typeof topic.id === "number" && topic.id > 0) byId[topic.id] = topic   // later wins
   })
@@ -860,7 +871,7 @@ function topicLetter(topic) {
 // ---------------------------------------------------------------- starting a chat
 
 function sortContacts(contacts) {
-  return (Array.isArray(contacts) ? contacts.filter(isObject) : []).slice()
+  return toList(contacts).filter(isObject)
     .sort(function (a, b) { return String(a.name || "").localeCompare(String(b.name || "")) })
 }
 
@@ -875,7 +886,7 @@ function usernameQuery(query) {
 // contacts matching what is typed (with whether each is chosen for a new group).
 function newChatRows(mode, contacts, query, selected) {
   var q = String(query || "").trim().toLowerCase().replace(/^@/, "")
-  var found = (Array.isArray(contacts) ? contacts : []).filter(function (c) {
+  var found = toList(contacts).filter(function (c) {
     return isObject(c) && (!q || String(c.name || "").toLowerCase().indexOf(q) >= 0 || String(c.username || "").toLowerCase().indexOf(q) >= 0)
   })
   var out = []
@@ -900,7 +911,7 @@ function contactDetail(contact, nowMs) {
 // The messages one bubble stands for: every message of an album, or just the one.
 function albumIds(messages, message) {
   if (!isObject(message)) return []
-  if (!message.albumId || !Array.isArray(messages)) return [message.id]
+  if (!message.albumId || !isList(messages)) return [message.id]
   var ids = messages.filter(function (m) { return isObject(m) && m.albumId === message.albumId }).map(function (m) { return m.id })
   return ids.length ? ids : [message.id]
 }
@@ -909,7 +920,7 @@ function albumIds(messages, message) {
 function toggleSelection(selection, ids) {
   var next = {}
   for (var k in selection || {}) next[k] = selection[k]
-  var list = Array.isArray(ids) ? ids : []
+  var list = toList(ids)
   var all = list.length > 0 && list.every(function (id) { return next[id] === true })
   list.forEach(function (id) { if (all) delete next[id]; else next[id] = true })
   return next
@@ -917,13 +928,13 @@ function toggleSelection(selection, ids) {
 
 // Selected messages that are still loaded, oldest first.
 function selectedIds(messages, selection) {
-  if (!Array.isArray(messages) || !isObject(selection)) return []
+  if (!isList(messages) || !isObject(selection)) return []
   return messages.filter(function (m) { return isObject(m) && selection[m.id] === true }).map(function (m) { return m.id })
 }
 
 // Selected messages as text for the clipboard, the way Telegram copies them.
 function selectionText(messages, selection) {
-  if (!Array.isArray(messages) || !isObject(selection)) return ""
+  if (!isList(messages) || !isObject(selection)) return ""
   return messages.filter(function (m) { return isObject(m) && selection[m.id] === true }).map(function (m) {
     var body = isObject(m.content) && m.content.text ? String(m.content.text) : previewOf(m)
     return (m.outgoing ? "You" : (m.senderName || "Unknown")) + ", [" + clock(m.date) + "]\n" + body
@@ -931,7 +942,7 @@ function selectionText(messages, selection) {
 }
 
 function reactionChosen(message, emoji) {
-  return isObject(message) && Array.isArray(message.reactions)
+  return isObject(message) && isList(message.reactions)
     && message.reactions.some(function (r) { return isObject(r) && r.emoji === emoji && r.chosen === true })
 }
 

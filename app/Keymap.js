@@ -289,7 +289,7 @@ function defaultsFor(id) {
 // off), otherwise the defaults.
 function keysFor(overrides, id) {
   var own = overrides && Object.prototype.hasOwnProperty.call(overrides, id) ? overrides[id] : null
-  return Array.isArray(own) ? uniqueNormalized(own) : defaultsFor(id)
+  return Array.isArray(own) || own instanceof Array ? uniqueNormalized(own) : defaultsFor(id)   // also a QML sequence
 }
 
 function matches(overrides, id, event) {

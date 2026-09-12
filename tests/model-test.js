@@ -10,6 +10,10 @@ const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "u
 const box = {}
 vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading }", box)
 const M = box.M
+// A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
+// does not recognise and concat does not spread. Made inside the context, whose Array is its own.
+const seq = vm.runInContext("(function (items) { var s = Object.create(Array.prototype); " +
+                            "items.forEach(function (x, i) { s[i] = x }); s.length = items.length; return s })", box)
 const plain = v => JSON.parse(JSON.stringify(v))
 const eq = (a, b, msg) => assert.deepStrictEqual(plain(a), plain(b), msg)
 
@@ -407,6 +411,17 @@ test("scheduled messages: their order and day headings", () => {
   assert.strictEqual(M.dayHeading(msg(7, { date: 0, sendAt: new Date(2026, 8, 16, 9, 0).getTime() / 1000 }), now), "Will be sent on Wednesday")
   assert.strictEqual(M.dayHeading(msg(8, { date: now / 1000 - 86400 }), now), "Yesterday")
   assert.strictEqual(M.startsDay(msg(1, { date: now / 1000 - 60 }), msg(2, { date: now / 1000 })), false)
+})
+
+test("lists that reach a delegate as QML sequences", () => {
+  const entities = seq([{ type: "bold", offset: 0, length: 7 }, { type: "customEmoji", offset: 8, length: 2, customEmojiId: "536" }])
+  assert.strictEqual(Array.isArray(entities), false)
+  eq(M.customEmojiIds(entities), ["536"])
+  assert.ok(M.richText("Shipped 😀 at last", entities, false, "", { "536": "file:///tmp/a.webp" }).includes("<b>Shipped</b> <img"),
+            "formatting and custom emoji survive")
+  assert.strictEqual(M.reactionChosen({ reactions: seq([{ emoji: "👍", count: 1, chosen: true }]) }, "👍"), true)
+  eq(M.mergeMessages(seq([msg(1)]), seq([msg(2)])).map(m => m.id).sort(), [1, 2], "concat needs arrays")
+  eq(M.selectedIds(seq([msg(1), msg(2)]), { 2: true }), [2])
 })
 
 test("forum topics: where their messages are kept, their order and icons", () => {
