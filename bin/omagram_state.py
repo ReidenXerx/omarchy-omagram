@@ -32,6 +32,10 @@ SECRET_STATES = {"secretChatStatePending": "pending", "secretChatStateReady": "r
 CALL_STATES = {"callStatePending": "pending", "callStateExchangingKeys": "connecting", "callStateReady": "ready",
                "callStateHangingUp": "ending", "callStateDiscarded": "ended", "callStateError": "failed"}
 CALLS_MAX = 16
+STORY_CHATS_MAX = 500
+STORIES_PER_CHAT_MAX = 100
+STORY_ID_MAX = 2 ** 31 - 1
+STORY_LISTS = {"storyListMain": "main", "storyListArchive": "archive"}
 
 ENTITY_TYPES = {
     "textEntityTypeBold": "bold",
@@ -699,6 +703,7 @@ class State:
         self.supergroups = {}      # supergroup id -> {"memberCount", "status", "username", "forum"}
         self.secret_chats = {}     # secret chat id -> {"state", "outbound", "userId", "keyHash"}
         self.calls = {}            # call id -> the call as the "call" event shows it, while it lasts
+        self.active_stories = {}   # chat id -> its active stories, as the "stories" event shows them
         self.me_id = 0
         self.folders = []          # [{"id", "name", "icon"}] in Telegram's order
         self.main_position = 0     # where "All chats" sits among the folders
@@ -1152,6 +1157,66 @@ class State:
             while len(self.calls) > CALLS_MAX:
                 del self.calls[next(iter(self.calls))]
         return [{"event": "call", "call": view}]
+
+    # -------------------------------------------------- stories
+
+    def _on_updateChatActiveStories(self, u):
+        a = _obj(u.get("active_stories"), "chatActiveStories")
+        chat_id = _int(a.get("chat_id"))
+        if not chat_id:
+            return []
+        stories = []
+        for raw in _list(a.get("stories"), STORIES_PER_CHAT_MAX):
+            info = _obj(raw, "storyInfo")
+            sid = _int(info.get("story_id"))
+            if 0 < sid <= STORY_ID_MAX:
+                stories.append({"id": sid, "date": _int(info.get("date")), "closeFriends": info.get("is_for_close_friends") is True,
+                                "live": info.get("is_live") is True})
+        chat = self.chats.get(chat_id)
+        view = {"chatId": chat_id, "list": STORY_LISTS.get(_obj(a.get("list")).get("@type"), ""),
+                "order": str(max(0, _int(a.get("order")))), "maxReadId": max(0, _int(a.get("max_read_story_id"))),
+                "title": chat["title"] if chat else "", "stories": stories}
+        self.active_stories.pop(chat_id, None)
+        if stories:
+            self.active_stories[chat_id] = view
+            while len(self.active_stories) > STORY_CHATS_MAX:
+                del self.active_stories[next(iter(self.active_stories))]
+        return [{"event": "stories", "stories": view}]
+
+    def story_list(self):
+        return list(self.active_stories.values())
+
+    def story_view(self, value):
+        """A story to show: its photo or video as the window's media views describe them, and its
+        caption. Live and other stories are named by kind only."""
+        s = _obj(value, "story")
+        sid, chat_id = _int(s.get("id")), _int(s.get("poster_chat_id"))
+        if not 0 < sid <= STORY_ID_MAX or not chat_id:
+            return None
+        content = _obj(s.get("content"))
+        t = content.get("@type")
+        kind, media = "unsupported", None
+        if t == "storyContentPhoto":
+            media = media_for("photo", {"photo": content.get("photo")}, self.files_root)
+            kind = "photo" if media else "unsupported"
+        elif t == "storyContentVideo":
+            v = _obj(content.get("video"), "storyVideo")
+            view = file_view(v.get("video"), self.files_root)
+            if view is not None:
+                d = v.get("duration")
+                duration = int(d) if isinstance(d, (int, float)) and not isinstance(d, bool) and 0 <= d <= 86400 else 0
+                media = {"file": view, "width": max(0, _int(v.get("width"))), "height": max(0, _int(v.get("height"))),
+                         "duration": duration, "thumb": thumbnail(v.get("thumbnail"), self.files_root),
+                         "mini": minithumbnail(v.get("minithumbnail"))}
+                kind = "video"
+        elif t == "storyContentLive":
+            kind = "live"
+        text, entities = formatted(s.get("caption"))
+        chat = self.chats.get(chat_id)
+        return {"id": sid, "chatId": chat_id, "date": _int(s.get("date")), "kind": kind, "media": media,
+                "caption": {"text": text, "entities": entities}, "title": chat["title"] if chat else "",
+                "protected": s.get("can_be_forwarded") is not True,
+                "views": max(0, _int(_obj(s.get("interaction_info")).get("view_count")))}
 
     def _on_updateChatFolders(self, u):
         folders = []

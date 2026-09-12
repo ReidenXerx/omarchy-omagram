@@ -27,6 +27,7 @@ var SECTIONS = [
   { id: "videoNote", title: "Recording a video message", scope: "videoNote", app: "window" },
   { id: "stickers", title: "Stickers", scope: "stickers", app: "window" },
   { id: "photo", title: "Photo viewer", scope: "photo", app: "window" },
+  { id: "story", title: "Stories", scope: "story", app: "window" },
   { id: "menu", title: "Menus", scope: "menu", app: "window" },
   { id: "picker", title: "Choosing a chat to forward to", scope: "picker", app: "window" },
   { id: "prompt", title: "Questions above the message box", scope: "prompt", app: "window" },
@@ -61,6 +62,7 @@ var ACTIONS = [
   { id: "window.chatInfo", label: "Show or hide the chat's info", keys: ["Ctrl+I"] },
   { id: "window.newChat", label: "Start a chat, a group or a channel", keys: ["Ctrl+Shift+N"] },
   { id: "window.topicList", label: "Back to a forum's topics", keys: ["Alt+Left"] },
+  { id: "window.stories", label: "Watch stories", keys: ["Ctrl+Shift+S"] },
 
   { id: "list.down", label: "Next chat", keys: ["Down", "J"] },
   { id: "list.up", label: "Previous chat", keys: ["Up", "K"] },
@@ -123,6 +125,11 @@ var ACTIONS = [
   { id: "photo.previous", label: "Previous photo", keys: ["Left", "H"] },
   { id: "photo.next", label: "Next photo", keys: ["Right", "L"] },
   { id: "photo.close", label: "Close", keys: ["Esc", "Q"] },
+
+  { id: "story.previous", label: "Previous story", keys: ["Left", "H"] },
+  { id: "story.next", label: "Next story", keys: ["Right", "L"] },
+  { id: "story.pause", label: "Pause or play", keys: ["Space"] },
+  { id: "story.close", label: "Close", keys: ["Esc", "Q"] },
 
   { id: "menu.down", label: "Next item", keys: ["Down", "J"] },
   { id: "menu.up", label: "Previous item", keys: ["Up", "K"] },

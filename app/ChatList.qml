@@ -17,6 +17,7 @@ FocusScope {
   property var app
   property var chats: []        // the chosen tab's chats, in order
   property var allChats: []     // every known chat, for search and tab counts
+  property var stories: []      // chats with active stories, in the order shown
   property var tabs: []
   property string listKey: "main"
   property real openChatId: 0
@@ -53,6 +54,7 @@ FocusScope {
   signal leaveRequested(real chatId)
   signal clearRequested(real chatId, bool removeFromList)
   signal newChatRequested()
+  signal storiesRequested(real chatId)
 
   property var menuChat: null
   readonly property bool modalOpen: chatMenu.visible
@@ -332,6 +334,70 @@ FocusScope {
             cursorShape: Qt.PointingHandCursor
             onClicked: root.settingsRequested()
           }
+        }
+      }
+    }
+
+    // ------------------------------------------------ stories
+    ListView {
+      id: storyStrip
+      Layout.fillWidth: true
+      Layout.preferredHeight: visible ? Style.space(86) : 0
+      visible: root.stories.length > 0 && !root.searchMode
+      orientation: ListView.Horizontal
+      leftMargin: Style.space(6)
+      rightMargin: Style.space(6)
+      spacing: Style.space(4)
+      clip: true
+      boundsBehavior: Flickable.StopAtBounds
+      model: root.stories
+
+      delegate: Item {
+        id: storyItem
+        required property var modelData
+        readonly property var known: Model.findChat(root.allChats, storyItem.modelData.chatId)
+        readonly property bool unread: Model.storiesUnread(storyItem.modelData)
+        width: Style.space(64)
+        height: storyStrip.height
+
+        // A ring round the photo, in the accent while something is unseen.
+        Rectangle {
+          id: ring
+          anchors.horizontalCenter: parent.horizontalCenter
+          y: Style.space(6)
+          width: Style.space(54)
+          height: width
+          radius: width / 2
+          color: "transparent"
+          border.width: Math.max(1, Style.space(storyItem.unread ? 2.5 : 1.5))
+          border.color: storyItem.unread ? root.app.accent : Qt.rgba(root.app.foreground.r, root.app.foreground.g, root.app.foreground.b, 0.25)
+
+          Avatar {
+            anchors.centerIn: parent
+            app: root.app
+            // Your own stories show your photo, not Saved Messages' bookmark.
+            chat: ({ id: storyItem.modelData.chatId, kind: "story", photo: storyItem.known ? storyItem.known.photo : null,
+                     title: storyItem.known ? storyItem.known.title : storyItem.modelData.title })
+            size: Style.space(46)
+          }
+        }
+        Text {
+          anchors.top: ring.bottom
+          anchors.topMargin: Style.space(4)
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
+          elide: Text.ElideRight
+          textFormat: Text.PlainText
+          text: storyItem.modelData.chatId === root.app.meId ? "You"
+              : (storyItem.known ? Model.chatTitle(storyItem.known, root.app.meId) : storyItem.modelData.title)
+          color: storyItem.unread ? root.app.foreground : root.app.muted
+          font.family: root.app.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.storiesRequested(storyItem.modelData.chatId)
         }
       }
     }

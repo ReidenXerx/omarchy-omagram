@@ -62,6 +62,14 @@ Scope {
   property var customEmoji: ({})
   property int customEmojiRevision: 0
 
+  // Chats with active stories: chat id -> what the "stories" event said; and in the order shown.
+  property var activeStories: ({})
+  readonly property var storyChats: {
+    var list = []
+    for (var id in omagram.activeStories) list.push(omagram.activeStories[id])
+    return Model.storyChats(list)
+  }
+
   Timer {
     interval: 1000
     repeat: true
@@ -192,6 +200,14 @@ Scope {
     })
   }
 
+  // A chat's stories from its first unread one; with no chat given, the first chat with unread
+  // stories, or the first with any.
+  function openStories(chatId) {
+    var list = omagram.storyChats
+    var active = chatId ? Model.findStories(list, chatId) : (list.filter(Model.storiesUnread)[0] || list[0])
+    if (active) storyViewer.show(active.chatId, Model.firstStoryId(active))
+  }
+
   // Histories are kept by Model.historyKey: a chat's id, or "chat:topic" for a topic of a forum.
   readonly property string openKey: Model.historyKey(omagram.openChatId, omagram.openTopic ? omagram.openTopic.id : 0)
 
@@ -252,6 +268,10 @@ Scope {
       var ringing = result.calls || []
       for (var c = 0; c < ringing.length; c++) known[ringing[c].id] = ringing[c]
       omagram.calls = known
+      var stories = {}
+      var withStories = result.stories || []
+      for (var st = 0; st < withStories.length; st++) stories[withStories[st].chatId] = withStories[st]
+      omagram.activeStories = stories
       omagram.chats = result.allChats || result.chats || []
       omagram.folders = result.folders || []
       omagram.mainPosition = result.mainPosition || 0
@@ -278,6 +298,7 @@ Scope {
       if (e.auth.state !== "ready") {
         omagram.chats = []
         omagram.messages = ({})
+        omagram.activeStories = ({})
         omagram.openTopic = null
         omagram.openChatId = 0
         omagram.folders = []
@@ -359,6 +380,12 @@ Scope {
       for (var callId in omagram.calls) if (Number(callId) !== e.call.id) calls[callId] = omagram.calls[callId]
       if (e.call.state !== "ended" && e.call.state !== "failed") calls[e.call.id] = e.call
       omagram.calls = calls
+    } else if (name === "stories") {
+      var active = {}
+      for (var storyChat in omagram.activeStories)
+        if (Number(storyChat) !== e.stories.chatId) active[storyChat] = omagram.activeStories[storyChat]
+      if (e.stories.stories.length) active[e.stories.chatId] = e.stories
+      omagram.activeStories = active
     }
   }
 
@@ -609,6 +636,28 @@ Scope {
     }
   }
 
+  // Stories too: over the whole screen the window is on, with the keyboard.
+  PanelWindow {
+    id: storyWindow
+    visible: storyViewer.chatId !== 0
+    screen: window.screen
+    anchors { top: true; bottom: true; left: true; right: true }
+    color: "transparent"
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "omagram-story"
+    WlrLayershell.layer: WlrLayer.Overlay
+    WlrLayershell.keyboardFocus: visible ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+
+    StoryViewer {
+      id: storyViewer
+      anchors.fill: parent
+      app: omagram
+      client: service
+      chats: omagram.storyChats
+      onClosed: if (screen.item && screen.item.focusList) screen.item.focusList()
+    }
+  }
+
   Component {
     id: statusView
     Item {
@@ -665,6 +714,7 @@ Scope {
       id: mainScope
 
       function focusComposer() { chatView.focusComposer() }
+      function focusList() { chatList.focusList() }
       function focusMessages() { chatView.focusMessages() }
       function focusMessage(id) { return chatView.focusMessage(id) }
       function notify(text) { chatView.flash(text) }
@@ -690,6 +740,11 @@ Scope {
         sequences: Keymap.keysFor(omagram.shortcuts, "window.newChat")
         enabled: !omagram.settingsOpen && !mainScope.modal
         onActivated: newChat.open()
+      }
+      Shortcut {
+        sequences: Keymap.keysFor(omagram.shortcuts, "window.stories")
+        enabled: !omagram.settingsOpen && !mainScope.modal && omagram.storyChats.length > 0
+        onActivated: omagram.openStories(0)
       }
 
       Component.onCompleted: chatList.focusList()
@@ -724,6 +779,8 @@ Scope {
           listKey: omagram.listKey
           openChatId: omagram.openChatId
           nowMs: omagram.nowMs
+          stories: omagram.storyChats
+          onStoriesRequested: function (chatId) { omagram.openStories(chatId) }
           onListSelected: function (key) { omagram.selectList(key) }
           onMessageActivated: function (chatId, messageId) { omagram.openChatAt(chatId, messageId) }
           onPinRequested: function (chatId) { omagram.togglePin(chatId) }

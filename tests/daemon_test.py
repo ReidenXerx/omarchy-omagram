@@ -1116,6 +1116,25 @@ class Extras(Harness):
         q, _ = self.call(51, "call.decline", "discardCall", {"@type": "ok"}, callId=3)
         self.assertEqual((q["call_id"], q["is_video"], q["duration"]), (3, True, 0))
 
+    def test_stories_are_listed_fetched_opened_and_closed(self):
+        self.td_event({"@type": "updateChatActiveStories", "@client_id": 1, "active_stories": {
+            "@type": "chatActiveStories", "chat_id": 500, "list": {"@type": "storyListMain"}, "order": 9, "max_read_story_id": 0,
+            "stories": [{"@type": "storyInfo", "story_id": 3, "date": 1789000000}]}})
+        stories = self.read(self.conn, lambda v: v.get("event") == "stories")["stories"]
+        self.assertEqual((stories["chatId"], [x["id"] for x in stories["stories"]]), (500, [3]))
+        self.assertEqual([a["chatId"] for a in self.request(self.conn, 60, "hello", window=True)["result"]["stories"]], [500],
+                         "a window opened now sees them")
+        story = {"@type": "story", "id": 3, "poster_chat_id": 500, "date": 1789000000, "can_be_forwarded": True,
+                 "caption": {"@type": "formattedText", "text": "", "entities": []}, "content": {"@type": "storyContentUnsupported"}}
+        q, r = self.call(61, "story.get", "getStory", story, chatId=500, storyId=3)
+        self.assertEqual((q["story_poster_chat_id"], q["story_id"], q["only_local"], r["result"]["story"]["kind"]), (500, 3, False, "unsupported"))
+        q, _ = self.call(62, "story.open", "openStory", {"@type": "ok"}, chatId=500, storyId=3)
+        self.assertEqual((q["story_poster_chat_id"], q["story_id"]), (500, 3))
+        q, _ = self.call(63, "story.close", "closeStory", {"@type": "ok"}, chatId=500, storyId=3)
+        self.assertEqual((q["story_poster_chat_id"], q["story_id"]), (500, 3))
+        for rid, bad in enumerate(({"chatId": 500}, {"chatId": 500, "storyId": 0}, {"chatId": 500, "storyId": 2 ** 31}), start=64):
+            self.assertFalse(self.request(self.conn, rid, "story.open", **bad)["ok"], bad)
+
 
 class Recording(Harness):
     """Voice and video messages with the recorder and converter faked: no microphone,

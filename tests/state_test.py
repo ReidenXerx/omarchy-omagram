@@ -523,6 +523,35 @@ class Extras(unittest.TestCase):
         self.assertEqual((ended[0]["call"]["state"], 4 in s.calls), ("ended", False))
         self.assertEqual(s.apply({"@type": "updateCall", "call": "junk"}), [])
 
+    def test_active_stories_and_story_views(self):
+        s = model.State()
+        s.apply({"@type": "updateNewChat", "chat": chat(7, "Ann")})
+        events = s.apply({"@type": "updateChatActiveStories", "active_stories": {
+            "@type": "chatActiveStories", "chat_id": 7, "list": {"@type": "storyListMain"}, "order": 5000, "max_read_story_id": 10,
+            "stories": [{"@type": "storyInfo", "story_id": 10, "date": 1789000000},
+                        {"@type": "storyInfo", "story_id": 11, "date": 1789000100, "is_for_close_friends": True},
+                        {"@type": "storyInfo", "story_id": -1}, "junk"]}})
+        view = events[0]["stories"]
+        self.assertEqual((view["chatId"], view["list"], view["order"], view["maxReadId"], view["title"], [x["id"] for x in view["stories"]]),
+                         (7, "main", "5000", 10, "Ann", [10, 11]))
+        self.assertEqual((view["stories"][0]["closeFriends"], view["stories"][1]["closeFriends"]), (False, True))
+        self.assertEqual(s.story_list(), [view])
+        gone = s.apply({"@type": "updateChatActiveStories", "active_stories": {"@type": "chatActiveStories", "chat_id": 7, "stories": []}})
+        self.assertEqual((gone[0]["stories"]["stories"], s.story_list()), ([], []), "a chat whose stories expired leaves the list")
+        self.assertEqual(s.apply({"@type": "updateChatActiveStories", "active_stories": "junk"}), [])
+        video = s.story_view({"@type": "story", "id": 11, "poster_chat_id": 7, "date": 1789000100, "can_be_forwarded": False,
+                              "caption": {"@type": "formattedText", "text": "hi", "entities": []},
+                              "content": {"@type": "storyContentVideo", "video": {
+                                  "@type": "storyVideo", "duration": 12.5, "width": 720, "height": 1280,
+                                  "video": {"@type": "file", "id": 5, "size": 100, "local": {}}}}})
+        self.assertEqual((video["kind"], video["media"]["file"]["id"], video["media"]["duration"], video["caption"]["text"],
+                          video["protected"], video["title"]), ("video", 5, 12, "hi", True, "Ann"))
+        live = s.story_view({"@type": "story", "id": 12, "poster_chat_id": 7, "content": {"@type": "storyContentLive"}})
+        odd = s.story_view({"@type": "story", "id": 13, "poster_chat_id": 7, "content": {"@type": "storyContentVideo", "video": "junk"}})
+        self.assertEqual((live["kind"], live["media"], odd["kind"]), ("live", None, "unsupported"))
+        self.assertIsNone(s.story_view({"@type": "story", "id": 0, "poster_chat_id": 7}))
+        self.assertIsNone(s.story_view("junk"))
+
 
 class Bounds(unittest.TestCase):
     def test_users_are_capped_but_never_someone_a_chat_is_with(self):

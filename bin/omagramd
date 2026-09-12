@@ -200,6 +200,7 @@ NOTIFICATION_GROUPS = 10
 QUERY_MAX = 256
 OFFSET_MAX = 512
 INT32_MAX = 2 ** 31 - 1
+STORY_PAGES = 20            # loadActiveStories pages asked for at sign-in; TDLib answers 404 once all are in
 INT64_MAX = 2 ** 63 - 1
 HELPER_TIMEOUT = 10.0   # seconds a short helper (omarchy-shell) may run before it is killed
 JOBS_MAX = 2            # voice and video messages being prepared at once
@@ -580,6 +581,12 @@ class Daemon:
         elif call["state"] in ("ended", "failed"):
             self.notifier.withdraw(call["userId"])
 
+    def load_stories(self, page=0):
+        """The chats with active stories in the main list arrive as updates, a page per call."""
+        if page < STORY_PAGES:
+            self.td_send({"@type": "loadActiveStories", "story_list": {"@type": "storyListMain"}},
+                         transform=lambda _event: self.load_stories(page + 1), failed=lambda _event=None: None)
+
     def on_auth(self, value):
         kind = model._obj(value).get("@type")
         if kind == "authorizationStateWaitTdlibParameters":
@@ -588,6 +595,7 @@ class Daemon:
             self.set_auth({"state": "ready"})
             self.td_send({"@type": "loadChats", "chat_list": {"@type": "chatListMain"}, "limit": 100})
             self.td_send({"@type": "getMe"}, transform=self.on_me)
+            self.load_stories()
             # TDLib's notification groups: it applies mutes, exceptions and mentions itself,
             # and removes a notification once its messages are read on any device.
             self.td_send({"@type": "setOption", "name": "notification_group_count_max",
@@ -908,6 +916,7 @@ class Daemon:
                   "settings": self.prefs, "globalStatus": self.global_status, "calls": list(self.state.calls.values())}
         if client.window:
             answer["allChats"] = self.state.all_chats()   # the window's tabs need every list
+            answer["stories"] = self.state.story_list()
         self.respond(client, rid, answer)
 
     def found_messages(self, event):
@@ -1579,6 +1588,25 @@ class Daemon:
         self.td_send({"@type": "discardCall", "call_id": call_id, "is_disconnected": False, "invite_link": "", "duration": 0,
                       "is_video": self.state.calls.get(call_id, {}).get("video", False), "connection_id": 0}, client, rid)
 
+    # ---------------------------------------------------------------- stories
+
+    def story_args(self, args):
+        return arg_int(args, "chatId"), arg_int(args, "storyId", 1, INT32_MAX)
+
+    def cmd_story_get(self, client, rid, args):
+        chat_id, story_id = self.story_args(args)
+        self.td_send({"@type": "getStory", "story_poster_chat_id": chat_id, "story_id": story_id, "only_local": False},
+                     client, rid, lambda event: {"story": self.state.story_view(event)})
+
+    def cmd_story_open(self, client, rid, args):
+        """The story is being viewed: Telegram counts the view, and its poster sees you among its viewers."""
+        chat_id, story_id = self.story_args(args)
+        self.td_send({"@type": "openStory", "story_poster_chat_id": chat_id, "story_id": story_id}, client, rid)
+
+    def cmd_story_close(self, client, rid, args):
+        chat_id, story_id = self.story_args(args)
+        self.td_send({"@type": "closeStory", "story_poster_chat_id": chat_id, "story_id": story_id}, client, rid)
+
     # ---------------------------------------------------------------- voice and video messages
 
     def reply_args(self, args):
@@ -2037,6 +2065,9 @@ COMMANDS = {
     "secret.create": ("cmd_secret_create", True),
     "secret.close": ("cmd_secret_close", True),
     "call.decline": ("cmd_call_decline", True),
+    "story.get": ("cmd_story_get", True),
+    "story.open": ("cmd_story_open", True),
+    "story.close": ("cmd_story_close", True),
     "settings.set": ("cmd_settings_set", False),
     "shortcuts.apply": ("cmd_shortcuts_apply", False),
     "voice.start": ("cmd_voice_start", True),

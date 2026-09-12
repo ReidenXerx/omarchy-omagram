@@ -772,6 +772,50 @@ function scheduledOrder(messages) {
   return toList(messages).filter(isObject).sort(function (a, b) { return at(a) - at(b) || a.id - b.id })
 }
 
+// ---------------------------------------------------------------- stories
+
+// The chats with active stories in the main list, as Telegram orders them: by order, then chat id,
+// both descending.
+function storyChats(active) {
+  return toList(active).filter(function (a) {
+    return isObject(a) && a.list === "main" && compareOrder(String(a.order), "0") > 0 && toList(a.stories).length > 0
+  }).sort(function (a, b) { return compareOrder(String(b.order), String(a.order)) || b.chatId - a.chatId })
+}
+
+function findStories(chats, chatId) {
+  return toList(chats).filter(function (a) { return isObject(a) && a.chatId === chatId })[0] || null
+}
+
+function storiesUnread(active) {
+  return isObject(active) && toList(active.stories).some(function (s) { return s.id > (active.maxReadId || 0) })
+}
+
+// Where a chat's stories start: at its first unread one, or at the first.
+function firstStoryId(active) {
+  var list = isObject(active) ? toList(active.stories) : []
+  for (var i = 0; i < list.length; i++) if (list[i].id > (active.maxReadId || 0)) return list[i].id
+  return list.length ? list[0].id : 0
+}
+
+// The story after (delta 1) or before (-1) one, across chats: { chatId, storyId }, or null past
+// either end. Forward into a chat starts at its first unread story; back, at its last.
+function storyStep(chats, chatId, storyId, delta) {
+  var list = toList(chats)
+  for (var c = 0; c < list.length; c++) {
+    if (list[c].chatId !== chatId) continue
+    var stories = toList(list[c].stories)
+    var at = -1
+    for (var i = 0; i < stories.length; i++) if (stories[i].id === storyId) at = i
+    var next = at + delta
+    if (next >= 0 && next < stories.length) return { chatId: chatId, storyId: stories[next].id }
+    var other = list[c + (delta > 0 ? 1 : -1)]
+    var theirs = other ? toList(other.stories) : []
+    if (!theirs.length) return null
+    return { chatId: other.chatId, storyId: delta > 0 ? firstStoryId(other) : theirs[theirs.length - 1].id }
+  }
+  return null
+}
+
 var INFO_TABS = [
   { key: "photos", label: "Photos and videos" }, { key: "files", label: "Files" }, { key: "links", label: "Links" },
   { key: "voice", label: "Voice" }, { key: "music", label: "Music" }, { key: "gifs", label: "GIFs" }

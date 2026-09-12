@@ -40,6 +40,9 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   every device signed in to your account (sign any of them out), and signs you out here.
 - **Secret chats** — start one from a person's info. Like every Telegram secret chat it lives on
   this computer only; its info shows the encryption key to compare with the other device.
+- **Stories** — the stories of the people and channels you follow, above the chat list
+  (`Ctrl+Shift+S`): photos and videos one after another. Watching one shows you among its
+  viewers, as in any Telegram app. Posting stories needs an official app.
 - **Stickers and GIFs** — static, animated (TGS) and video (WebM) stickers, custom emoji, and a
   picker with your recent stickers, your GIFs (or GIFs found through Telegram's @gif, as its own
   apps search them) and your installed sets.
@@ -52,8 +55,7 @@ overlay on a key, and desktop notifications you can answer without leaving what 
 - **Quick reply** — an overlay to find a chat by typing, read its latest messages and answer.
 
 Calls cannot be taken in Omagram: TDLib carries a call's signalling but no voice engine. An
-incoming call is shown so you can decline it or answer in another Telegram app. Stories are not
-supported yet.
+incoming call is shown so you can decline it or answer in another Telegram app.
 
 ## Requirements
 

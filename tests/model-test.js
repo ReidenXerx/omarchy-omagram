@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -422,6 +422,25 @@ test("lists that reach a delegate as QML sequences", () => {
   assert.strictEqual(M.reactionChosen({ reactions: seq([{ emoji: "👍", count: 1, chosen: true }]) }, "👍"), true)
   eq(M.mergeMessages(seq([msg(1)]), seq([msg(2)])).map(m => m.id).sort(), [1, 2], "concat needs arrays")
   eq(M.selectedIds(seq([msg(1), msg(2)]), { 2: true }), [2])
+})
+
+test("stories: their order, what is unread and stepping across chats", () => {
+  const a = { chatId: 1, list: "main", order: "30", maxReadId: 5, stories: [{ id: 5 }, { id: 6 }] }
+  const b = { chatId: 2, list: "main", order: "20", maxReadId: 9, stories: [{ id: 8 }, { id: 9 }] }
+  const archived = { chatId: 3, list: "archive", order: "50", maxReadId: 0, stories: [{ id: 1 }] }
+  const hidden = { chatId: 4, list: "main", order: "0", maxReadId: 0, stories: [{ id: 1 }] }
+  const chats = M.storyChats([b, archived, a, hidden, { chatId: 5, list: "main", order: "10", stories: [] }, "junk"])
+  eq(chats.map(c => c.chatId), [1, 2])
+  eq(M.storyChats([{ chatId: 7, list: "main", order: "20", stories: [{ id: 1 }] }, b]).map(c => c.chatId), [7, 2], "equal order: higher chat id first")
+  eq([M.storiesUnread(a), M.storiesUnread(b), M.storiesUnread(null)], [true, false, false])
+  eq([M.firstStoryId(a), M.firstStoryId(b), M.firstStoryId({ stories: [] })], [6, 8, 0])
+  eq(M.storyStep(chats, 1, 5, 1), { chatId: 1, storyId: 6 })
+  eq(M.storyStep(chats, 1, 6, 1), { chatId: 2, storyId: 8 }, "into the next chat at its first unread story, or its first")
+  eq(M.storyStep(chats, 2, 8, -1), { chatId: 1, storyId: 6 }, "back into the chat before at its last story")
+  eq([M.storyStep(chats, 2, 9, 1), M.storyStep(chats, 1, 5, -1), M.storyStep(chats, 9, 1, 1)], [null, null, null])
+  eq(M.storyStep(chats, 1, 77, 1), { chatId: 1, storyId: 5 }, "a story that is gone steps to the chat's first")
+  eq([M.findStories(chats, 2).chatId, M.findStories(chats, 7)], [2, null])
+  eq(M.storyChats(seq([a])).map(c => c.chatId), [1], "a QML sequence")
 })
 
 test("forum topics: where their messages are kept, their order and icons", () => {
