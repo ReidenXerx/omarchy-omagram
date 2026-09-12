@@ -43,7 +43,9 @@ Scope {
   signal pinnedChanged(real chatId)
   signal topicsChanged(real chatId)
 
-  // The topic open in a forum group, as topics.list describes it; null shows the forum's topics.
+  // The topic open in a forum group, as topics.list describes it; null shows the forum's topics. Or
+  // a thread open in its chat -- comments under a post, replies to a message -- as { thread: true, id,
+  // chatId, name, subtitle, draft, root: the messages it starts from, from: { chatId, messageId } }.
   property var openTopic: null
   signal scheduledChanged(real chatId)
 
@@ -208,8 +210,10 @@ Scope {
     if (active) storyViewer.show(active.chatId, Model.firstStoryId(active))
   }
 
-  // Histories are kept by Model.historyKey: a chat's id, or "chat:topic" for a topic of a forum.
-  readonly property string openKey: Model.historyKey(omagram.openChatId, omagram.openTopic ? omagram.openTopic.id : 0)
+  // Histories are kept by Model.historyKey: a chat's id, "chat:topic" for a topic of a forum, and
+  // "chat:t<thread>" for a thread.
+  readonly property string openKey: Model.historyKey(omagram.openChatId, omagram.openTopic ? omagram.openTopic.id : 0,
+                                                     !!omagram.openTopic && omagram.openTopic.thread === true)
 
   function messagesFor(chatId) {
     omagram.messagesRevision
@@ -327,6 +331,12 @@ Scope {
         omagram.setMessages(key, Model.mergeMessages(omagram.messages[key], [m]))
         if (key === omagram.openKey && !m.outgoing && omagram.windowFocused) omagram.markRead(m.chatId, [m.id], m.topicId)
       }
+      // A comment, or a reply in a thread, is in the thread's history as well as its chat's.
+      var threadKey = m.threadId ? Model.historyKey(m.chatId, m.threadId, true) : ""
+      if (threadKey && omagram.messages[threadKey]) {
+        omagram.setMessages(threadKey, Model.mergeMessages(omagram.messages[threadKey], [m]))
+        if (threadKey === omagram.openKey && !m.outgoing && omagram.windowFocused) omagram.markRead(m.chatId, [m.id], m.threadId, true)
+      }
       if (m.topicId) omagram.topicsChanged(m.chatId)
     } else if (name === "messageSent" || name === "messageFailed") {
       var sent = e.message
@@ -336,12 +346,15 @@ Scope {
       }
       var sentKey = Model.historyKey(sent.chatId, sent.topicId)
       if (omagram.messages[sentKey]) omagram.setMessages(sentKey, Model.replaceMessage(omagram.messages[sentKey], e.oldMessageId, sent))
+      var sentThread = sent.threadId ? Model.historyKey(sent.chatId, sent.threadId, true) : ""
+      if (sentThread && omagram.messages[sentThread])
+        omagram.setMessages(sentThread, Model.replaceMessage(omagram.messages[sentThread], e.oldMessageId, sent))
     } else if (name === "messageContent") {
       omagram.patchEverywhere(e.chatId, e.messageId, { content: e.content })
     } else if (name === "messageEdited") {
       omagram.patchEverywhere(e.chatId, e.messageId, { editDate: e.editDate })
     } else if (name === "messageInteraction") {
-      omagram.patchEverywhere(e.chatId, e.messageId, { reactions: e.reactions, views: e.views })
+      omagram.patchEverywhere(e.chatId, e.messageId, { reactions: e.reactions, views: e.views, replies: e.replies || null })
     } else if (name === "messagePinned") {
       omagram.patchEverywhere(e.chatId, e.messageId, { pinned: e.pinned })
       omagram.pinnedChanged(e.chatId)
@@ -393,9 +406,10 @@ Scope {
     service.request(cmd, args, callback)
   }
 
-  // What the window sends into the open chat goes into its open topic, when a forum's topic is open.
+  // What the window sends into the open chat goes into its open topic or thread, when one is open.
   function intoTopic(chatId, args) {
-    if (omagram.openTopic && chatId === omagram.openChatId && omagram.openTopic.chatId === chatId) args.topicId = omagram.openTopic.id
+    var topic = omagram.openTopic
+    if (topic && chatId === omagram.openChatId && topic.chatId === chatId) args[topic.thread ? "threadId" : "topicId"] = topic.id
     return args
   }
 
@@ -478,10 +492,9 @@ Scope {
   // A message found by search: open its chat, load the messages around it, put the cursor on it.
   function openChatAt(chatId, messageId) {
     omagram.openChatById(chatId, false)
-    var topic = omagram.openTopic && omagram.openTopic.chatId === chatId ? omagram.openTopic.id : 0
+    var topic = omagram.openTopic && omagram.openTopic.chatId === chatId ? omagram.openTopic : null
     var args = { chatId: chatId, fromMessageId: messageId, offset: -20, limit: 40 }
-    if (topic) args.topicId = topic
-    service.request(topic ? "topic.history" : "chat.history", args, function (answer) {
+    service.request(omagram.historyCommand(topic, args), args, function (answer) {
       if (!answer.ok || chatId !== omagram.openChatId) return
       var found = (answer.result.messages || []).filter(function (m) { return m.id === messageId })[0]
       var chat = Model.findChat(omagram.chats, chatId)
@@ -491,7 +504,7 @@ Scope {
         omagram.openChatAt(chatId, messageId)
         return
       }
-      var key = Model.historyKey(chatId, topic)
+      var key = Model.historyKey(chatId, topic ? topic.id : 0, !!topic && topic.thread === true)
       if (key !== omagram.openKey) return
       omagram.setMessages(key, Model.mergeMessages(omagram.messages[key] || [], answer.result.messages || []))
       Qt.callLater(function () { if (screen.item && screen.item.focusMessage) screen.item.focusMessage(messageId) })
@@ -505,8 +518,46 @@ Scope {
     omagram.loadHistory(topic.chatId, 0)
   }
 
+  // The comments under a channel post, or the replies to a message: they open as a thread of the
+  // chat they live in (a channel's discussion group), and the way back leads to the message.
+  function openThread(chatId, messageId) {
+    service.request("thread.open", { chatId: chatId, messageId: messageId }, function (answer) {
+      if (!answer.ok) {
+        if (screen.item && screen.item.notify) screen.item.notify(answer.error || "Could not open the comments")
+        return
+      }
+      var t = answer.result
+      if (t.chat) omagram.knowChat(t.chat)
+      var from = Model.findChat(omagram.chats, chatId)
+      var channel = !!from && from.kind === "channel"
+      omagram.openChatById(t.chatId, false, {
+        thread: true, id: t.threadId, chatId: t.chatId, name: channel ? "Comments" : "Replies",
+        subtitle: from ? Model.chatTitle(from, omagram.meId) : "", draft: t.draft || "", root: t.messages || [],
+        from: { chatId: chatId, messageId: messageId }
+      })
+    })
+  }
+
+  // Which command loads a history, with what it needs: a chat's own, a forum topic's, a thread's.
+  function historyCommand(topic, args) {
+    if (!topic) return "chat.history"
+    if (topic.thread) {
+      args.threadId = topic.id
+      return "thread.history"
+    }
+    args.topicId = topic.id
+    return "topic.history"
+  }
+
   function closeTopic() {
+    var topic = omagram.openTopic
     omagram.openTopic = null
+    // From comments back to the post they are under, from replies back to the message.
+    if (topic && topic.thread && topic.from) {
+      if (topic.from.chatId === omagram.openChatId) omagram.keepMessagesOf(omagram.openKey)
+      omagram.openChatAt(topic.from.chatId, topic.from.messageId)
+      return
+    }
     Qt.callLater(function () { if (screen.item && screen.item.focusMessages) screen.item.focusMessages() })
   }
 
@@ -516,10 +567,11 @@ Scope {
     if (message && message.id) omagram.viewerMessageId = message.id
   }
 
-  function openChatById(chatId, force) {
-    if (!chatId || (chatId === omagram.openChatId && !force)) return
+  // `topic`: a forum's topic or a thread to open the chat at.
+  function openChatById(chatId, force, topic) {
+    if (!chatId || (chatId === omagram.openChatId && !force && !topic)) return
     omagram.viewerMessageId = 0
-    if (chatId !== omagram.openChatId) omagram.openTopic = null
+    if (chatId !== omagram.openChatId || topic) omagram.openTopic = topic || null
     if (omagram.openChatId && omagram.openChatId !== chatId) service.request("chat.close", { chatId: omagram.openChatId })
     omagram.openChatId = chatId
     service.request("chat.open", { chatId: chatId }, function (answer) {
@@ -532,38 +584,45 @@ Scope {
   }
 
   function loadHistory(chatId, fromMessageId) {
-    var topic = chatId === omagram.openChatId && omagram.openTopic ? omagram.openTopic.id : 0
-    var key = Model.historyKey(chatId, topic)
+    var topic = chatId === omagram.openChatId && omagram.openTopic && omagram.openTopic.chatId === chatId ? omagram.openTopic : null
+    var thread = !!topic && topic.thread === true
+    var key = Model.historyKey(chatId, topic ? topic.id : 0, thread)
     if (fromMessageId && (omagram.loadingOlder || omagram.noOlder[key])) return
     if (fromMessageId) omagram.loadingOlder = true
     var args = { chatId: chatId, fromMessageId: fromMessageId, limit: 50 }
-    if (topic) args.topicId = topic
-    service.request(topic ? "topic.history" : "chat.history", args, function (answer) {
+    service.request(omagram.historyCommand(topic, args), args, function (answer) {
       if (fromMessageId) omagram.loadingOlder = false
       if (!answer.ok) return
       var incoming = answer.result.messages || []
       var before = (omagram.messages[key] || []).length
       var merged = Model.mergeMessages(omagram.messages[key] || [], incoming)
+      // Nothing older came: the history is whole. A thread starts from its post or message, on top.
+      var whole = fromMessageId ? merged.length === before : thread && incoming.length === 0
+      if (whole && thread) merged = Model.mergeMessages(merged, topic.root || [])
       omagram.setMessages(key, merged)
-      if (fromMessageId && merged.length === before) omagram.noOlder[key] = true
+      if (whole) omagram.noOlder[key] = true
       if (key !== omagram.openKey) return
-      // TDLib answers the first page from its local cache, which may be short.
-      if (!fromMessageId && merged.length > 0 && merged.length < 20) omagram.loadHistory(chatId, Model.oldestId(merged))
+      // TDLib answers the first page from its local cache, which may be short; a thread's first page
+      // is asked to go on to its start, so the post it is about shows above a few comments.
+      if (!fromMessageId && merged.length > 0 && merged.length < (thread ? 50 : 20)) omagram.loadHistory(chatId, Model.oldestId(merged))
       omagram.markOpenChatRead()
     })
   }
 
   // Only while you can see it: a chat opened from a notification is read once the window has focus.
+  // A thread's comments do not count in its chat's unread: what a thread shows is read.
   function markOpenChatRead() {
     var chat = omagram.openChat
-    if (chat && chat.unread > 0 && omagram.windowFocused)
-      omagram.markRead(chat.id, Model.incomingIds(omagram.messages[omagram.openKey] || [], 100), omagram.openTopic ? omagram.openTopic.id : 0)
+    var topic = chat && omagram.openTopic && omagram.openTopic.chatId === chat.id ? omagram.openTopic : null
+    var thread = !!topic && topic.thread === true
+    if (!chat || !omagram.windowFocused || !(chat.unread > 0 || thread)) return
+    omagram.markRead(chat.id, Model.incomingIds(omagram.messages[omagram.openKey] || [], 100), topic ? topic.id : 0, thread)
   }
 
-  function markRead(chatId, ids, topicId) {
+  function markRead(chatId, ids, topicId, thread) {
     if (!ids.length) return
     var args = { chatId: chatId, messageIds: ids }
-    if (topicId) args.topicId = topicId
+    if (topicId) args[thread ? "threadId" : "topicId"] = topicId
     service.request("chat.read", args)
   }
 

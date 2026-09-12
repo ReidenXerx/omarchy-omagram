@@ -799,7 +799,8 @@ class MessageActions(Harness):
                          {"@type": "messageProperties", "can_be_deleted_for_all_users": True, "can_be_edited": False,
                           "can_be_forwarded": True, "can_be_pinned": True}, chatId=42, messageId=7)
         self.assertEqual(r["result"], {"canDeleteForAll": True, "canDeleteForMe": False, "canEdit": False, "canForward": True,
-                                       "canPin": True, "canCopy": False, "canReply": False, "canGetLink": False, "canSave": False})
+                                       "canPin": True, "canCopy": False, "canReply": False, "canGetLink": False, "canSave": False,
+                                       "canGetThread": False})
         q, r = self.call(3, "message.link", "getMessageLink", {"@type": "messageLink", "link": "https://t.me/x/7", "is_public": True},
                          chatId=42, messageId=7)
         self.assertEqual(r["result"], {"link": "https://t.me/x/7", "public": True})
@@ -1110,6 +1111,42 @@ class ChatsAndAccount(Harness):
         q, _ = self.call(86, "chat.readMentions", "readAllForumTopicMentions", {"@type": "ok"}, chatId=-10077, topicId=5)
         self.assertEqual(q["forum_topic_id"], 5)
 
+
+    def test_comments_and_reply_threads(self):
+        reply_info = {"@type": "messageReplyInfo", "reply_count": 2, "recent_replier_ids": [],
+                      "last_read_inbox_message_id": 4, "last_read_outbox_message_id": 0, "last_message_id": 6}
+        root = {"@type": "message", "id": 3, "chat_id": -10077, "topic_id": {"@type": "messageTopicThread", "message_thread_id": 3},
+                "content": {"@type": "messageText", "text": {"text": "the post"}},
+                "interaction_info": {"@type": "messageInteractionInfo", "view_count": 5, "reply_info": reply_info}}
+        draft = {"@type": "draftMessage", "content": {"@type": "draftMessageContentText",
+                                                      "text": {"@type": "formattedText", "text": "so", "entities": []}}}
+        q, r = self.call(140, "thread.open", "getMessageThread", {
+            "@type": "messageThreadInfo", "chat_id": -10077, "message_thread_id": 3, "reply_info": reply_info,
+            "unread_message_count": 1, "messages": [root], "draft_message": draft}, chatId=-1000500, messageId=900)
+        t = r["result"]
+        self.assertEqual((q["chat_id"], q["message_id"]), (-1000500, 900))
+        self.assertEqual((t["chatId"], t["threadId"], t["fromChatId"], t["fromMessageId"], t["unread"], t["draft"], t["chat"]["id"]),
+                         (-10077, 3, -1000500, 900, 1, "so", -10077))
+        self.assertEqual((t["replies"], [(m["id"], m["threadId"], m["replies"]["count"]) for m in t["messages"]]),
+                         ({"count": 2, "unread": True}, [(3, 3, 2)]))
+        _, r = self.call(141, "thread.open", "getMessageThread", {"@type": "messageThreadInfo", "chat_id": 0}, chatId=-10077, messageId=8)
+        self.assertFalse(r["ok"], "a message with no thread")
+
+        q, r = self.call(142, "thread.history", "getMessageThreadHistory", {"@type": "messages", "messages": [dict(root, id=6, interaction_info=None)]},
+                         chatId=-10077, threadId=3, fromMessageId=6, offset=-10, limit=20)
+        self.assertEqual((q["chat_id"], q["message_id"], q["from_message_id"], q["offset"], q["limit"]), (-10077, 3, 6, -10, 20))
+        self.assertEqual((r["result"]["threadId"], [(m["id"], m["replies"]) for m in r["result"]["messages"]]), (3, [(6, None)]))
+
+        q, _ = self.call(143, "message.send", "sendMessage", {"@type": "message", "id": 7, "chat_id": -10077},
+                         chatId=-10077, text="me too", threadId=3)
+        self.assertEqual(q["topic_id"], {"@type": "messageTopicThread", "message_thread_id": 3})
+        q, _ = self.call(144, "chat.read", "viewMessages", {"@type": "ok"}, chatId=-10077, messageIds=[6], threadId=3)
+        self.assertEqual(q["source"], {"@type": "messageSourceMessageThreadHistory"})
+        q, _ = self.call(145, "chat.draft", "setChatDraftMessage", {"@type": "ok"}, chatId=-10077, text="later", threadId=3)
+        self.assertEqual(q["topic_id"], {"@type": "messageTopicThread", "message_thread_id": 3})
+        self.assertFalse(self.request(self.conn, 146, "message.send", chatId=-10077, text="x", threadId=3, topicId=5)["ok"], "not both")
+        self.assertFalse(self.request(self.conn, 147, "chat.readMentions", chatId=-10077, threadId=3)["ok"])
+        self.assertFalse(self.request(self.conn, 148, "thread.history", chatId=-10077, threadId=0)["ok"])
 
     def test_mention_and_command_suggestions(self):
         def member(uid):

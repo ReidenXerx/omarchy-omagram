@@ -77,6 +77,19 @@ class RichMessages(unittest.TestCase):
         self.assertEqual(m["views"], 42)
         plain = self.msg(txt("x"))
         self.assertEqual((plain["albumId"], plain["reactions"], plain["views"], plain["markup"]), ("", [], 0, None))
+        self.assertEqual((plain["replies"], plain["threadId"]), (None, 0))
+
+    def test_comments_and_replies(self):
+        post = self.msg(txt("x"), interaction_info={"@type": "messageInteractionInfo", "reply_info": {
+            "@type": "messageReplyInfo", "reply_count": 4, "last_read_inbox_message_id": 90, "last_message_id": 95}})
+        self.assertEqual(post["replies"], {"count": 4, "unread": True})
+        read = self.msg(txt("x"), interaction_info={"@type": "messageInteractionInfo", "reply_info": {
+            "@type": "messageReplyInfo", "reply_count": 0, "last_read_inbox_message_id": 0, "last_message_id": 0}})
+        self.assertEqual(read["replies"], {"count": 0, "unread": False}, "comments are open, and there are none yet")
+        comment = self.msg(txt("x"), topic_id={"@type": "messageTopicThread", "message_thread_id": 77})
+        self.assertEqual((comment["threadId"], comment["topicId"]), (77, 0))
+        in_topic = self.msg(txt("x"), topic_id={"@type": "messageTopicForum", "forum_topic_id": 5})
+        self.assertEqual((in_topic["threadId"], in_topic["topicId"]), (0, 5))
 
     def test_bot_buttons_and_keyboards(self):
         button = lambda text, kind: {"@type": "inlineKeyboardButton", "text": text, "type": kind}   # noqa: E731
@@ -173,7 +186,7 @@ class RichMessages(unittest.TestCase):
             "@type": "messageInteractionInfo", "view_count": 2, "reactions": {"reactions": [
                 {"@type": "messageReaction", "type": {"@type": "reactionTypeEmoji", "emoji": "❤"}, "total_count": 1}]}}})
         self.assertEqual(out, [{"event": "messageInteraction", "chatId": -200, "messageId": 3, "views": 2,
-                                "reactions": [{"emoji": "❤", "count": 1, "chosen": False}]}])
+                                "reactions": [{"emoji": "❤", "count": 1, "chosen": False}], "replies": None}])
         self.assertEqual(s.apply({"@type": "updateMessageIsPinned", "chat_id": -200, "message_id": 3, "is_pinned": True}),
                          [{"event": "messagePinned", "chatId": -200, "messageId": 3, "pinned": True}])
         self.assertEqual(s.apply({"@type": "updatePoll", "poll": {"@type": "poll", "id": "77", "question": {"text": "Q"}, "options": []}})[0]["poll"]["id"],

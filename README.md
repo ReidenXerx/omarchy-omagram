@@ -19,7 +19,8 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   counts (or mark a chat unread), and drafts that follow you to your other devices. Pin (`p`),
   archive (`a`) and mute (`m`) from the keyboard, or right-click a chat. Start a chat with a
   contact or anyone's @username, or create a group or a channel (`Ctrl+Shift+N`, or the pencil).
-  Your chat with yourself is Saved Messages, and a forum group opens on its topics.
+  Your chat with yourself is Saved Messages, and a forum group opens on its topics; a channel
+  post's comments and the replies to a message open the same way (`c`, or the bar under it).
 - **Chat info** — a panel (`Ctrl+I`) with a person's bio, username and phone, or a group's
   description and invite link; its members; and everything shared in it: photos and videos,
   files, links, voice messages, music and GIFs. Leave a group, or clear or delete a chat, from it.
@@ -132,7 +133,7 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Ctrl+Shift+P` | go to the pinned message |
 | `Ctrl+I` | the chat's info (`Tab` switches its tabs, `Enter` opens, `Esc` closes) |
 | `Ctrl+Shift+N` | start a chat, a group or a channel (`Enter` opens or adds, `Ctrl+Enter` goes on) |
-| `Alt+←` | from a forum's topic back to its topics |
+| `Alt+←` | from a forum's topic back to its topics, from comments back to their post |
 | `Ctrl+,` | settings |
 
 **Chat list**
@@ -159,6 +160,7 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `r` / `e` / `y` | reply / edit yours / copy |
 | `f` / `p` / `s` | forward / pin or unpin / save its file to Downloads |
 | `Shift+Y` | copy a link to the message |
+| `c` | the post's comments, or the replies to the message |
 | `x` | select or unselect (so does Ctrl+click); `f`, `y` and `d` then act on everything selected |
 | `m`, `Menu` or `Shift+F10` | the message's menu (so does a right click) |
 | `d` or `Delete` | delete (press again to confirm) |

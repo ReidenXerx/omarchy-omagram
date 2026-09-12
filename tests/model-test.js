@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -546,6 +546,17 @@ test("the message box gives way where you cannot write", () => {
   eq(M.joinText("joined", false), "You joined the group")
 })
 
+test("comments under a post and replies to a message", () => {
+  eq([null, { count: 0 }, { count: 1 }, { count: 12 }].map(r => M.repliesText(r, true)), ["", "Leave a comment", "1 comment", "12 comments"])
+  eq([null, { count: 0 }, { count: 1 }, { count: 3 }].map(r => M.repliesText(r, false)), ["", "", "1 reply", "3 replies"])
+  const post = { id: 5, chatId: -100, content: { kind: "text", text: "news", entities: [] } }
+  const threadItems = (props, chat) => M.messageMenu(post, props, false, chat).filter(i => i.id === "thread").map(i => i.label)
+  eq(threadItems({ canGetThread: true }, { kind: "channel" }), ["Comments"])
+  eq(threadItems({ canGetThread: true }, { kind: "group" }), ["Replies"])
+  eq(threadItems({ canGetThread: false }, { kind: "channel" }), [])
+  eq(threadItems(null, { kind: "channel" }), [])
+})
+
 test("public chats are looked up by name from four characters", () => {
   eq(["abc", "abcd", "@abc", "@abcd", "  news  ", "", "дом", "дома"].map(q => M.publicQuery(q)),
      [false, true, false, true, true, false, false, true])
@@ -557,6 +568,8 @@ test("public chats are looked up by name from four characters", () => {
 test("forum topics: where their messages are kept, their order and icons", () => {
   assert.strictEqual(M.historyKey(-100, 0), "-100")
   assert.strictEqual(M.historyKey(-100, 5), "-100:5")
+  assert.strictEqual(M.historyKey(-100, 77, true), "-100:t77")
+  assert.ok(M.isHistoryOf("-100:t77", -100) && !M.isHistoryOf("-100:t77", -1))
   assert.ok(M.isHistoryOf("-100:5", -100) && M.isHistoryOf("-100", -100))
   assert.ok(!M.isHistoryOf("-1001:5", -100) && !M.isHistoryOf("-10012", -1001))
   const topics = M.mergeTopics([{ id: 1, order: "5", pinned: false, name: "Old" }, { id: 2, order: "9" }],

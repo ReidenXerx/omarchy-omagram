@@ -249,6 +249,15 @@ function composerBlock(chat) {
   return ""
 }
 
+// Under a channel post: its comments, or the way to leave the first; under a message in a
+// discussion group: its replies, once there are any.
+function repliesText(replies, channel) {
+  if (!isObject(replies)) return ""
+  var n = Math.max(0, Number(replies.count) | 0)
+  if (channel) return n ? n + (n === 1 ? " comment" : " comments") : "Leave a comment"
+  return n ? n + (n === 1 ? " reply" : " replies") : ""
+}
+
 // Telegram looks public chats up by name from four characters (five with an @ in front).
 function publicQuery(query) {
   var q = String(query || "").trim()
@@ -755,6 +764,7 @@ function messageMenu(message, properties, translated, chat) {
   }
   var out = []
   if (!p || p.canReply) out.push({ id: "reply", label: "Reply" })
+  if (p && p.canGetThread) out.push({ id: "thread", label: isObject(chat) && chat.kind === "channel" ? "Comments" : "Replies" })
   if (c.text && (!p || p.canSave !== false)) out.push({ id: "copy", label: "Copy text" })
   // Telegram translates on its servers, which never see a secret chat's messages.
   if (c.text && !(isObject(chat) && chat.kind === "secret"))
@@ -1055,8 +1065,9 @@ function memberDetail(member, nowMs) {
 // ---------------------------------------------------------------- forum topics
 
 // Where the window keeps a history: a chat's id, or "chat:topic" for a topic of a forum.
-function historyKey(chatId, topicId) {
-  return topicId > 0 ? chatId + ":" + topicId : String(chatId)
+function historyKey(chatId, topicId, thread) {
+  if (!(topicId > 0)) return String(chatId)
+  return chatId + ":" + (thread ? "t" : "") + topicId
 }
 
 function isHistoryOf(key, chatId) {

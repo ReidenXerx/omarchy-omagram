@@ -224,7 +224,7 @@ SEND_ACTIONS = {"typing": "chatActionTyping", "recordingVoice": "chatActionRecor
 PROPERTIES = {"can_be_deleted_for_all_users": "canDeleteForAll", "can_be_deleted_only_for_self": "canDeleteForMe",
               "can_be_edited": "canEdit", "can_be_forwarded": "canForward", "can_be_pinned": "canPin",
               "can_be_copied": "canCopy", "can_be_replied": "canReply", "can_get_link": "canGetLink",
-              "can_be_saved": "canSave"}
+              "can_be_saved": "canSave", "can_get_message_thread": "canGetThread"}
 DEFERRED = object()   # a command that answers later, from background work
 PLUGIN_ID = "reidenxerx.omagram"
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
@@ -1189,9 +1189,11 @@ class Daemon:
         topic = self.topic_of(args)
         if topic is None:
             self.td_send({"@type": "readAllChatMentions", "chat_id": arg_int(args, "chatId")}, client, rid)
-        else:
+        elif topic["@type"] == "messageTopicForum":
             self.td_send({"@type": "readAllForumTopicMentions", "chat_id": arg_int(args, "chatId"),
                           "forum_topic_id": topic["forum_topic_id"]}, client, rid)
+        else:
+            raise BadRequest("Telegram reads mentions for a whole chat or topic, not for one thread")
 
     # ---------------------------------------------------------------- links, people, files
 
@@ -1612,6 +1614,36 @@ class Daemon:
                       "offset": arg_int(args, "offset", -99, 0, 0), "limit": arg_int(args, "limit", 1, 100, 50)},
                      client, rid, messages)
 
+    # ---------------------------------------------------------------- comments and reply threads
+
+    def cmd_thread_open(self, client, rid, args):
+        """The comments under a channel post, or the replies to a message in a group: the chat they
+        live in (a channel's comments are in its discussion group), the thread there, the messages it
+        starts from, and your draft in it."""
+        chat_id, message_id = arg_int(args, "chatId"), arg_int(args, "messageId", 1)
+
+        def opened(event):
+            thread_chat, thread = model._int(event.get("chat_id")), model._int(event.get("message_thread_id"))
+            if not thread_chat or thread <= 0:
+                raise BadRequest("that message has no comments or replies")
+            found = [self.state.message(m) for m in model._list(event.get("messages"), 10)]
+            return {"chatId": thread_chat, "threadId": thread, "fromChatId": chat_id, "fromMessageId": message_id,
+                    "messages": [m for m in found if m], "replies": model.replies_view(event.get("reply_info")),
+                    "unread": max(0, model._int(event.get("unread_message_count"))),
+                    "draft": model.draft_text(event.get("draft_message")), "chat": self.state.chat_view(thread_chat)}
+        self.td_send({"@type": "getMessageThread", "chat_id": chat_id, "message_id": message_id}, client, rid, opened)
+
+    def cmd_thread_history(self, client, rid, args):
+        chat_id, thread = arg_int(args, "chatId"), arg_int(args, "threadId", 1)
+
+        def messages(event):
+            found = [self.state.message(m) for m in model._list(event.get("messages"), 100)]
+            return {"chatId": chat_id, "threadId": thread, "messages": [m for m in found if m]}
+        self.td_send({"@type": "getMessageThreadHistory", "chat_id": chat_id, "message_id": thread,
+                      "from_message_id": arg_int(args, "fromMessageId", 0, None, 0),
+                      "offset": arg_int(args, "offset", -99, 0, 0), "limit": arg_int(args, "limit", 1, 100, 50)},
+                     client, rid, messages)
+
     # ---------------------------------------------------------------- scheduled messages, translation
 
     def cmd_chat_scheduled(self, client, rid, args):
@@ -1761,7 +1793,7 @@ class Daemon:
     # ---------------------------------------------------------------- voice and video messages
 
     def reply_args(self, args):
-        picked = {k: args[k] for k in ("replyToMessageId", "topicId", "silent", "sendAt") if k in args}
+        picked = {k: args[k] for k in ("replyToMessageId", "topicId", "threadId", "silent", "sendAt") if k in args}
         self.reply_to(picked)   # checked now, before any recording is used up
         self.topic_of(picked)
         self.send_options(picked)
@@ -1984,9 +2016,12 @@ class Daemon:
         self.td_send({"@type": "closeChat", "chat_id": arg_int(args, "chatId")}, client, rid)
 
     def cmd_chat_read(self, client, rid, args):
+        topic = self.topic_of(args)
+        source = ("messageSourceChatHistory" if topic is None
+                  else "messageSourceForumTopicHistory" if topic["@type"] == "messageTopicForum"
+                  else "messageSourceMessageThreadHistory")
         self.td_send({"@type": "viewMessages", "chat_id": arg_int(args, "chatId"),
-                      "message_ids": arg_ids(args, "messageIds"),
-                      "source": {"@type": "messageSourceForumTopicHistory" if self.topic_of(args) else "messageSourceChatHistory"},
+                      "message_ids": arg_ids(args, "messageIds"), "source": {"@type": source},
                       "force_read": True}, client, rid)
 
     def reply_to(self, args):
@@ -1996,7 +2031,12 @@ class Daemon:
                 "quote": None, "checklist_task_id": 0, "poll_option_id": ""}
 
     def topic_of(self, args):
-        """The forum topic to send into, or None for the chat itself."""
+        """Where in the chat: a forum topic (topicId), the comments or replies under a message
+        (threadId, the thread's id in the chat it lives in), or None for the chat itself."""
+        if args.get("threadId") is not None:
+            if args.get("topicId") is not None:
+                raise BadRequest("a topic or a thread, not both")
+            return {"@type": "messageTopicThread", "message_thread_id": arg_int(args, "threadId", 1)}
         if args.get("topicId") is None:
             return None
         return {"@type": "messageTopicForum", "forum_topic_id": arg_int(args, "topicId", 1, INT32_MAX)}
@@ -2317,6 +2357,8 @@ COMMANDS = {
     "chat.commands": ("cmd_chat_commands", True),
     "message.sendFiles": ("cmd_message_send_files", True),
     "chat.join": ("cmd_chat_join", True),
+    "thread.open": ("cmd_thread_open", True),
+    "thread.history": ("cmd_thread_history", True),
     "story.get": ("cmd_story_get", True),
     "story.open": ("cmd_story_open", True),
     "story.close": ("cmd_story_close", True),

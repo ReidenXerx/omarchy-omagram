@@ -358,6 +358,16 @@ def reactions_view(value):
     return out, max(0, _int(info.get("view_count")))
 
 
+def replies_view(value):
+    """The comments under a channel post, or the replies to a message in a discussion group: how many,
+    and whether any came after the last one you read. None for a message with no thread."""
+    r = _obj(value, "messageReplyInfo")
+    if not r:
+        return None
+    last = _int(r.get("last_message_id"))
+    return {"count": max(0, _int(r.get("reply_count"))), "unread": last > max(0, _int(r.get("last_read_inbox_message_id")))}
+
+
 USER_STATUSES = {"userStatusRecently": "recently", "userStatusLastWeek": "lastWeek", "userStatusLastMonth": "lastMonth"}
 
 
@@ -385,6 +395,11 @@ def formatted_view(value):
 def topic_id(value):
     """The forum topic a message is in, or 0 when it is not in one."""
     return max(0, _int(_obj(value, "messageTopicForum").get("forum_topic_id")))
+
+
+def thread_id(value):
+    """The thread a message is in (comments under a post, replies to a message), or 0."""
+    return max(0, _int(_obj(value, "messageTopicThread").get("message_thread_id")))
 
 
 def scheduled_at(value):
@@ -761,6 +776,8 @@ class State:
             "views": views,
             "markup": reply_markup(m.get("reply_markup")),
             "topicId": topic_id(m.get("topic_id")),
+            "threadId": thread_id(m.get("topic_id")),
+            "replies": replies_view(_obj(m.get("interaction_info")).get("reply_info")),
             "sendAt": scheduled_at(m.get("scheduling_state")),
         }
         reply = _obj(m.get("reply_to"), "messageReplyToMessage")
@@ -1298,7 +1315,8 @@ class State:
         if not cid or not mid:
             return []
         reactions, views = reactions_view(u.get("interaction_info"))
-        return [{"event": "messageInteraction", "chatId": cid, "messageId": mid, "reactions": reactions, "views": views}]
+        return [{"event": "messageInteraction", "chatId": cid, "messageId": mid, "reactions": reactions, "views": views,
+                 "replies": replies_view(_obj(u.get("interaction_info")).get("reply_info"))}]
 
     def _on_updateMessageIsPinned(self, u):
         cid, mid = _int(u.get("chat_id")), _int(u.get("message_id"))

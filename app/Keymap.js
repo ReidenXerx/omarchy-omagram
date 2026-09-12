@@ -62,7 +62,7 @@ var ACTIONS = [
   { id: "window.pinnedMessage", label: "Go to the pinned message", keys: ["Ctrl+Shift+P"] },
   { id: "window.chatInfo", label: "Show or hide the chat's info", keys: ["Ctrl+I"] },
   { id: "window.newChat", label: "Start a chat, a group or a channel", keys: ["Ctrl+Shift+N"] },
-  { id: "window.topicList", label: "Back to a forum's topics", keys: ["Alt+Left"] },
+  { id: "window.topicList", label: "Back to a forum's topics, or from comments to their post", keys: ["Alt+Left"] },
   { id: "window.stories", label: "Watch stories", keys: ["Ctrl+Shift+S"] },
 
   { id: "list.down", label: "Next chat", keys: ["Down", "J"] },
@@ -99,6 +99,7 @@ var ACTIONS = [
   { id: "messages.pin", label: "Pin or unpin", keys: ["P"] },
   { id: "messages.save", label: "Save the file to Downloads", keys: ["S"] },
   { id: "messages.link", label: "Copy a link to the message", keys: ["Shift+Y"] },
+  { id: "messages.thread", label: "The post's comments, or the replies to the message", keys: ["C"] },
 
   { id: "composer.send", label: "Send", keys: ["Return", "Enter"] },
   { id: "composer.newLine", label: "New line", keys: ["Shift+Return", "Shift+Enter"] },

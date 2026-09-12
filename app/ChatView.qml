@@ -80,12 +80,16 @@ FocusScope {
   readonly property bool secretBlocked: !!root.chat && root.chat.kind === "secret" && (!root.chat.secret || root.chat.secret.state !== "ready")
 
   // A forum group opens on its topics; a topic opened shows its messages, and what is sent goes
-  // there. The composer's text belongs to draftChatId (and draftTopicId) until it is saved.
+  // there. Comments under a channel post, or the replies to a message, open the same way: as a
+  // thread of the chat they live in. The composer's text belongs to draftChatId (and draftTopicId,
+  // a thread's when draftThread) until it is saved.
   readonly property bool forum: !!root.chat && root.chat.forum === true
-  readonly property real topicId: root.forum && app.openTopic && app.openTopic.chatId === root.chat.id ? app.openTopic.id : 0
+  readonly property bool threadOpen: !!root.chat && !!app.openTopic && app.openTopic.thread === true && app.openTopic.chatId === root.chat.id
+  readonly property real topicId: (root.forum || root.threadOpen) && app.openTopic && app.openTopic.chatId === root.chat.id ? app.openTopic.id : 0
   readonly property bool showTopics: root.forum && !root.topicId
   property real draftChatId: 0
   property real draftTopicId: 0
+  property bool draftThread: false
 
   // Telegram keeps drafts, so they follow you to your other devices; while you type, the chat
   // sees "typing…" as it would from any Telegram app.
@@ -181,6 +185,7 @@ FocusScope {
     // The chat's draft, as Telegram keeps it: you continue where you left off, on any device.
     root.draftChatId = root.chat ? root.chat.id : 0
     root.draftTopicId = root.topicId
+    root.draftThread = root.threadOpen
     root.savedDraft = root.topicId ? (app.openTopic.draft || "") : (root.chat && root.chat.draft ? root.chat.draft : "")
     root.setComposerText(root.savedDraft)
     root.loadPinned()
@@ -192,6 +197,7 @@ FocusScope {
     root.leaveChat()
     root.closeScheduled()
     root.draftTopicId = root.topicId
+    root.draftThread = root.threadOpen
     root.replyToId = 0
     root.editingId = 0
     root.editingCaption = false
@@ -447,6 +453,15 @@ FocusScope {
     Quickshell.execDetached(["/usr/bin/xdg-open", safe])
   }
 
+  // The comments under a channel post, or the replies to a message: they open as a thread of the
+  // chat they live in, and Alt+Left leads back here.
+  function openThread(message) {
+    if (!message || !root.chat || message.sendAt || message.sending) return
+    if (root.threadOpen && (message.id === root.topicId || message.threadId === root.topicId)) return   // this thread
+    if (!message.replies && !message.threadId) { root.flash("This message has no comments or replies"); return }
+    app.openThread(message.chatId, message.id)
+  }
+
   function openUsername(username) {
     client.request("username.chat", { username: username }, function (answer) {
       if (answer.ok && answer.result.chatId) app.openChatById(answer.result.chatId, false)
@@ -620,6 +635,7 @@ FocusScope {
     var message = root.menuMessage
     if (!message || !root.chat) return
     if (id === "reply") root.startReply(message)
+    else if (id === "thread") root.openThread(message)
     else if (id === "copy") root.copyText(message.content.text)
     else if (id === "link") root.copyLink(message)
     else if (id === "edit") root.startEdit(root.captionHolder(message), true)
@@ -1014,7 +1030,7 @@ FocusScope {
     if (text === root.savedDraft) return
     root.savedDraft = text
     var args = { chatId: root.draftChatId, text: text }
-    if (root.draftTopicId) args.topicId = root.draftTopicId
+    if (root.draftTopicId) args[root.draftThread ? "threadId" : "topicId"] = root.draftTopicId
     if (root.replyToId && !root.editingId) args.replyToMessageId = root.replyToId
     client.request("chat.draft", args)
   }
@@ -1039,7 +1055,7 @@ FocusScope {
     root.saveDraft()
     if (root.lastTypingMs && root.draftChatId) {
       var args = { chatId: root.draftChatId, action: "cancel" }
-      if (root.draftTopicId) args.topicId = root.draftTopicId
+      if (root.draftTopicId) args[root.draftThread ? "threadId" : "topicId"] = root.draftTopicId
       client.request("chat.action", args)
     }
     root.lastTypingMs = 0
@@ -1052,9 +1068,9 @@ FocusScope {
 
   Timer { id: noticeTimer; interval: 3500; onTriggered: root.notice = "" }
 
-  // What is sent from here goes into the open topic when a forum's topic is open.
+  // What is sent from here goes into the open topic, or the open thread.
   function target(args) {
-    if (root.topicId) args.topicId = root.topicId
+    if (root.topicId) args[root.threadOpen ? "threadId" : "topicId"] = root.topicId
     return args
   }
 
@@ -1334,7 +1350,8 @@ FocusScope {
             root.focusComposer()
           }
           onContainsMouseChanged: if (containsMouse) root.flash(root.scheduledOpen ? "Back to the chat   " + Keymap.label(Keymap.keysFor(app.shortcuts, "messages.toComposer")[0] || "")
-                                                                : "Back to the topics   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.topicList")[0] || ""))
+                                                                : (root.threadOpen ? "Back to the message   " : "Back to the topics   ")
+                                                                  + Keymap.label(Keymap.keysFor(app.shortcuts, "window.topicList")[0] || ""))
         }
       }
 
@@ -1373,7 +1390,8 @@ FocusScope {
           elide: Text.ElideRight
           text: !root.chat ? "" : (activity
               || (root.scheduledOpen ? Model.chatTitle(root.chat, app.meId)
-                  : (root.topicId ? "Topic in " + Model.chatTitle(root.chat, app.meId)
+                  : (root.topicId ? (root.threadOpen ? (app.openTopic.subtitle || Model.chatTitle(root.chat, app.meId))
+                                                     : "Topic in " + Model.chatTitle(root.chat, app.meId))
                      : (root.chat.kind === "private"
                         ? (root.chat.userId === app.meId ? "" : (root.chat.bot ? "bot" : Model.statusText(app.userStatuses[root.chat.userId] || root.chat.status, root.nowMs)))
                         : (root.chat.kind === "secret" ? "Secret chat: " + Model.secretStateText(root.chat)
@@ -1541,7 +1559,7 @@ FocusScope {
           var selected = root.selectedMessage
           function is(id) { return Keymap.matches(keys, id, event) }
           // A scheduled message cannot be replied to, forwarded, selected, pinned or linked yet.
-          if (root.scheduledOpen && ["messages.reply", "messages.forward", "messages.select", "messages.pin", "messages.link"].some(is)) {
+          if (root.scheduledOpen && ["messages.reply", "messages.forward", "messages.select", "messages.pin", "messages.link", "messages.thread"].some(is)) {
             event.accepted = true
             return
           }
@@ -1584,6 +1602,7 @@ FocusScope {
           else if (is("messages.pin")) { if (selected) root.setPinned(selected, !selected.pinned) }
           else if (is("messages.save")) { if (selected) root.saveFile(selected) }
           else if (is("messages.link")) { if (selected) root.copyLink(selected) }
+          else if (is("messages.thread")) root.openThread(selected)
           else return
           event.accepted = true
         }
@@ -2197,7 +2216,8 @@ FocusScope {
               text: root.editing ? (root.editingCaption ? "Caption" : "Edit message")
                   : root.attachments.length ? "A caption for the files, if you like   "
                                               + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.send")[0] || "") + " to send"
-                  : "Message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.send")[0] || "") + " to send, "
+                  : (root.threadOpen ? (app.openTopic.name === "Comments" ? "Comment" : "Reply") : "Message") + "   "
+                    + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.send")[0] || "") + " to send, "
                     + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.newLine")[0] || "") + " for a new line"
               color: app.muted
               opacity: 0.7

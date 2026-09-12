@@ -117,7 +117,8 @@ Item {
                                        person.visible ? person.implicitWidth : 0,
                                        reactionsFlow.visible ? reactionsFlow.wantedWidth : 0,
                                        translation.visible ? translation.wantedWidth : 0,
-                                       buttons.visible ? buttons.wantedWidth : 0) + Style.space(24))
+                                       buttons.visible ? buttons.wantedWidth : 0,
+                                       repliesBar.visible ? repliesBar.wantedWidth : 0) + Style.space(24))
     height: column.implicitHeight + Style.space(16)
     radius: Style.cornerRadius * 1.5
     // Stickers and round video messages float without a bubble, as in Telegram.
@@ -687,6 +688,56 @@ Item {
               }
             }
           }
+        }
+      }
+
+      // ---------------------------------------------- comments under a post, replies to a message
+      Rectangle {
+        id: repliesBar
+        readonly property bool channel: !!row.view.chat && row.view.chat.kind === "channel"
+        readonly property string label: Model.repliesText(row.message.replies, repliesBar.channel)
+        readonly property real wantedWidth: Math.min(bubble.inner, repliesLabel.implicitWidth + Style.space(44))
+        // Not under the message a thread starts from, inside that thread.
+        visible: repliesBar.label !== "" && !row.message.sendAt && !(row.view.threadOpen && row.view.topicId === row.message.id)
+        width: parent.width
+        height: Style.space(30)
+        radius: Style.cornerRadius
+        color: repliesArea.containsMouse ? Qt.rgba(row.app.accent.r, row.app.accent.g, row.app.accent.b, 0.24)
+                                         : Qt.rgba(row.app.accent.r, row.app.accent.g, row.app.accent.b, 0.1)
+
+        // md-comment-outline U+F0182
+        Text {
+          id: repliesGlyph
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+          text: String.fromCodePoint(0xF0182)
+          color: row.app.accent
+          font.family: row.app.glyphFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+        Text {
+          id: repliesLabel
+          anchors.left: repliesGlyph.right
+          anchors.leftMargin: Style.space(8)
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+          elide: Text.ElideRight
+          text: repliesBar.label
+          textFormat: Text.PlainText
+          color: row.app.foreground
+          font.family: row.app.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          // Bold while there are comments you have not read.
+          font.bold: !!row.message.replies && row.message.replies.unread === true && row.message.replies.count > 0
+        }
+        MouseArea {
+          id: repliesArea
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: row.view.openThread(row.message)
         }
       }
 
