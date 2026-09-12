@@ -42,6 +42,7 @@ import plugin_safety as safe  # noqa: E402
 import omagram_state as model  # noqa: E402
 import omagram_td as td  # noqa: E402
 import omagram_notify as notify  # noqa: E402
+import omagram_media as media  # noqa: E402
 
 VERSION = "0.1.0"
 RUN = pathlib.Path(safe.runtime_dir()) / "omagram"
@@ -143,6 +144,7 @@ OFFSET_MAX = 512
 INT32_MAX = 2 ** 31 - 1
 INT64_MAX = 2 ** 63 - 1
 HELPER_TIMEOUT = 10.0   # seconds a short helper (omarchy-shell) may run before it is killed
+JOBS_MAX = 2            # voice and video messages being prepared at once
 PLUGIN_ID = "reidenxerx.omagram"
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
@@ -209,6 +211,9 @@ class Daemon:
         self.notifier = notify.Notifier(None, None)
         self.pending_open = None   # (monotonic time, {"chatId", "reply"}) for the next window
         self.focus_client = None   # the client whose focused chat keeps notifications quiet
+        self.recording = None      # the voice message being recorded: proc, path, chatId, started
+        self.tasks = queue.Queue() # finished background work, run on the loop: (done, result, error)
+        self.jobs = 0
         self.children = {}   # detached helpers still running: pid -> what to do if they fail
         self.state = model.State(td.MEDIA_ROOTS)
         self.td = None
@@ -292,6 +297,11 @@ class Daemon:
     def run(self):
         # Created on the thread that pumps it: Gio delivers bus signals to this context.
         self.notifier = self.notifier_factory(self.on_notification_action)
+        try:
+            media.rec_dir()
+            media.clean_stale()
+        except (safe.UnsafeError, OSError):
+            pass
         self.listen()
         self.start_td()
         while not self.stopping:
@@ -303,11 +313,16 @@ class Daemon:
                 else:
                     self.on_socket(key.data, mask)
             self.process_events()
+            self.run_tasks()
             self.notifier.pump()
             self.reap_children()
         self.shutdown()
 
     def shutdown(self):
+        if self.recording is not None:   # a half-recorded voice message is not kept
+            self.recording["proc"].kill()
+            media.remove(self.recording["path"])
+            self.recording = None
         if self.td is not None and not self.closed.is_set():
             # A clean close lets TDLib flush its database; waiting is bounded.
             self.td.send({"@type": "close"})
@@ -481,16 +496,46 @@ class Daemon:
         """A detached helper: its own session, no terminal, no inherited descriptors (TDLib's
         sockets and database stay here), no loader or Claude variables; an argv list, never a
         shell. `fallback` runs if it cannot start, fails, or outlives `timeout` seconds."""
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("LD_", "PYTHON", "CLAUDE"))}
-        env["PATH"] = safe.SAFE_PATH
-        try:
-            proc = subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
-        except OSError:
+        proc = self.start_helper(argv)
+        if proc is None:
             if fallback:
                 fallback()
             return
         self.children[proc.pid] = (proc, fallback, time.monotonic() + timeout if timeout else None)
+
+    def start_helper(self, argv):
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("LD_", "PYTHON", "CLAUDE"))}
+        env["PATH"] = safe.SAFE_PATH
+        try:
+            return subprocess.Popen(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+        except OSError:
+            return None
+
+    def background(self, work, done):
+        """Slow work (ffmpeg) off the loop; `done(result, error)` then runs back on the loop."""
+        self.jobs += 1
+
+        def run():
+            try:
+                result, error = work(), None
+            except Exception as e:   # handed to `done`, never lost in the thread
+                result, error = None, e
+            self.tasks.put((done, result, error))
+            self.wake()
+        threading.Thread(target=run, daemon=True).start()
+
+    def run_tasks(self):
+        while True:
+            try:
+                done, result, error = self.tasks.get_nowait()
+            except queue.Empty:
+                return
+            self.jobs -= 1
+            try:
+                done(result, error)
+            except Exception:
+                pass
 
     def reap_children(self):
         now = time.monotonic()
@@ -734,6 +779,109 @@ class Daemon:
         self.td_send({"@type": "addChatToList", "chat_id": arg_int(args, "chatId"), "chat_list": target},
                      client, rid, moved)
 
+    # ---------------------------------------------------------------- voice and video messages
+
+    def reply_args(self, args):
+        picked = {k: args[k] for k in ("replyToMessageId",) if k in args}
+        self.reply_to(picked)   # checked now, before any recording is used up
+        return picked
+
+    def cmd_voice_start(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        if self.recording is not None:
+            raise BadRequest("a voice message is already being recorded")
+        try:
+            media.clean_stale()
+            path = media.new_path("voice", ".ogg")
+            argv = media.voice_argv(path)
+        except (safe.UnsafeError, OSError) as e:
+            raise BadRequest(f"cannot record: {e}")
+        proc = self.start_helper(argv)
+        if proc is None:
+            raise BadRequest("cannot start the recorder")
+        started = int(time.time() * 1000)
+        self.recording = {"proc": proc, "path": path, "chatId": chat_id, "started": started}
+        self.respond(client, rid, {"startedAt": started})
+        self.broadcast({"event": "recording", "state": "voice", "chatId": chat_id, "startedAt": started})
+
+    def cmd_voice_stop(self, client, rid, args):
+        rec = self.recording
+        if rec is None:
+            raise BadRequest("nothing is being recorded")
+        send = args.get("send") is True
+        reply = self.reply_args(args) if send else {}
+        self.recording = None
+        self.broadcast({"event": "recording", "state": "idle"})
+        proc, path, chat_id = rec["proc"], rec["path"], rec["chatId"]
+        try:
+            proc.send_signal(signal.SIGINT)   # ffmpeg finishes the file on its first interrupt
+        except OSError:
+            pass
+
+        def work():
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            if not send:
+                media.remove(path)
+                return None
+            return media.prepare_voice(path)
+
+        def done(result, error):
+            if not send:
+                self.respond(client, rid, {})
+                return
+            if error is not None or not result or result[0] < 1:
+                media.remove(path)
+                self.respond_error(client, rid, "that voice message was too short or could not be read")
+                return
+            duration, waveform = result
+            self.send_content(client, rid, chat_id, {
+                "@type": "inputMessageVoiceNote",
+                "voice_note": {"@type": "inputVoiceNote", "voice_note": {"@type": "inputFileLocal", "path": str(path)},
+                               "duration": duration, "waveform": waveform},
+                "caption": None, "self_destruct_type": None}, reply)
+        self.background(work, done)
+
+    def cmd_videonote_send(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        try:
+            source = media.recorded_file(args.get("path"))
+        except (safe.UnsafeError, OSError):
+            raise BadRequest("that is not a recording of Omagram's")
+        reply = self.reply_args(args)
+        if self.jobs >= JOBS_MAX:
+            raise BadRequest("still preparing an earlier message")
+        target = media.new_path("note", ".mp4")
+
+        def work():
+            try:
+                return media.prepare_video_note(source, target)
+            finally:
+                media.remove(source)
+
+        def done(duration, error):
+            if error is not None:
+                media.remove(target)
+                self.respond_error(client, rid, "the video message could not be prepared")
+                return
+            self.send_content(client, rid, chat_id, {
+                "@type": "inputMessageVideoNote",
+                "video_note": {"@type": "inputVideoNote", "video_note": {"@type": "inputFileLocal", "path": str(target)},
+                               "thumbnail": None, "duration": max(1, min(media.NOTE_MAX_SECONDS, int(duration))),
+                               "length": media.NOTE_SIZE},
+                "self_destruct_type": None}, reply)
+        self.background(work, done)
+
+    def cmd_videonote_discard(self, client, rid, args):
+        try:
+            media.remove(media.recorded_file(args.get("path")))
+        except (safe.UnsafeError, OSError):
+            raise BadRequest("that is not a recording of Omagram's")
+        self.respond(client, rid, {})
+
     def cmd_ui_focus(self, client, rid, args):
         chat_id = arg_int(args, "chatId", None, None, 0)
         self.focus_client = client if chat_id else None
@@ -966,6 +1114,10 @@ COMMANDS = {
     "messages.search": ("cmd_messages_search", True),
     "chat.pin": ("cmd_chat_pin", True),
     "chat.archive": ("cmd_chat_archive", True),
+    "voice.start": ("cmd_voice_start", True),
+    "voice.stop": ("cmd_voice_stop", True),
+    "videonote.send": ("cmd_videonote_send", True),
+    "videonote.discard": ("cmd_videonote_discard", True),
 }
 
 

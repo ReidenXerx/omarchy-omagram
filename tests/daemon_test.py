@@ -102,6 +102,9 @@ class Harness(unittest.TestCase):
             patch = mock.patch.object(self.d, name, value)
             patch.start()
             self.addCleanup(patch.stop)
+        patch = mock.patch.object(self.d.media, "REC", self.root / "rec")
+        patch.start()
+        self.addCleanup(patch.stop)
         self.fake = FakeTd()
         self.keyring = FakeKeyring()
         self.daemon = self.d.Daemon(open_client=lambda: self.fake, keyring=self.keyring,
@@ -597,6 +600,84 @@ class ListsAndSearch(Harness):
         self.assertEqual(query["chat_list"], {"@type": "chatListMain"})
         self.assertFalse(self.request(self.conn, 54, "chat.pin", chatId=42, pinned="yes")["ok"])
         self.assertFalse(self.request(self.conn, 55, "chat.archive", chatId=42)["ok"])
+
+
+class Recording(Harness):
+    """Voice and video messages with the recorder and converter faked: no microphone,
+    camera or ffmpeg is used."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn = self.connect()
+        self.sign_in(self.conn)
+        recorder = [sys.executable, "-c",
+                    "import signal, sys, time; signal.signal(signal.SIGINT, lambda *a: sys.exit(0)); time.sleep(30)"]
+
+        def voice_argv(path):
+            pathlib.Path(path).write_bytes(b"OggS")
+            return recorder
+
+        def prepare_video_note(source, target):
+            pathlib.Path(target).write_bytes(b"mp4")
+            return 7.4
+        for name, value in (("voice_argv", voice_argv), ("prepare_voice", lambda path: (3, "AAAA")),
+                            ("prepare_video_note", prepare_video_note)):
+            patch = mock.patch.object(self.d.media, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def sent_after(self, before):
+        self.wait(lambda: self.fake.sent_types().count("sendMessage") > before)
+        return [q for q in self.fake.sent if q.get("@type") == "sendMessage"][-1]
+
+    def test_a_voice_message_is_recorded_and_sent(self):
+        self.assertTrue(self.request(self.conn, 1, "voice.start", chatId=42)["ok"])
+        self.read(self.conn, lambda v: v.get("event") == "recording" and v.get("state") == "voice")
+        self.assertFalse(self.request(self.conn, 2, "voice.start", chatId=42)["ok"])   # one at a time
+        path = str(self.daemon.recording["path"])
+        before = self.fake.sent_types().count("sendMessage")
+        self.send(self.conn, {"id": 3, "cmd": "voice.stop", "args": {"send": True, "replyToMessageId": 9}})
+        query = self.sent_after(before)
+        self.assertEqual(query["chat_id"], 42)
+        self.assertEqual(query["reply_to"]["message_id"], 9)
+        self.assertEqual(query["input_message_content"]["voice_note"],
+                         {"@type": "inputVoiceNote", "voice_note": {"@type": "inputFileLocal", "path": path},
+                          "duration": 3, "waveform": "AAAA"})
+        self.read(self.conn, lambda v: v.get("event") == "recording" and v.get("state") == "idle")
+        self.wait(lambda: self.daemon.recording is None and self.daemon.jobs == 0)
+
+    def test_a_cancelled_voice_message_is_deleted(self):
+        self.assertTrue(self.request(self.conn, 1, "voice.start", chatId=42)["ok"])
+        path = pathlib.Path(self.daemon.recording["path"])
+        self.assertTrue(path.exists())
+        self.assertTrue(self.request(self.conn, 2, "voice.stop", send=False)["ok"])
+        self.assertFalse(path.exists())
+        self.assertNotIn("sendMessage", self.fake.sent_types())
+        self.assertFalse(self.request(self.conn, 3, "voice.stop", send=False)["ok"])   # nothing recording
+        self.assertFalse(self.request(self.conn, 4, "voice.start", chatId="42")["ok"])
+
+    def test_a_video_message_only_from_the_recording_directory(self):
+        rec = self.d.media.rec_dir()
+        source = rec / "note-1.mp4"
+        source.write_bytes(b"recorded")
+        before = self.fake.sent_types().count("sendMessage")
+        self.send(self.conn, {"id": 5, "cmd": "videonote.send", "args": {"chatId": 42, "path": str(source)}})
+        note = self.sent_after(before)["input_message_content"]["video_note"]
+        self.assertEqual((note["duration"], note["length"], note["thumbnail"]), (7, self.d.media.NOTE_SIZE, None))
+        self.assertEqual(os.path.dirname(note["video_note"]["path"]), str(rec))
+        self.wait(lambda: not source.exists())   # the raw recording goes once converted
+        outside = self.root / "elsewhere.mp4"
+        outside.write_bytes(b"x")
+        link = rec / "link.mp4"
+        link.symlink_to(outside)
+        for rid, bad in enumerate((str(outside), str(link), "note-1.mp4", 7), start=6):
+            self.assertFalse(self.request(self.conn, rid, "videonote.send", chatId=42, path=bad)["ok"], bad)
+            self.assertFalse(self.request(self.conn, rid + 100, "videonote.discard", path=bad)["ok"], bad)
+        self.assertTrue(outside.exists())
+        keep = rec / "note-2.mp4"
+        keep.write_bytes(b"x")
+        self.assertTrue(self.request(self.conn, 20, "videonote.discard", path=str(keep))["ok"])
+        self.assertFalse(keep.exists())
 
 
 class FakeNotifierTransport:
