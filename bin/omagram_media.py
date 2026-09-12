@@ -9,6 +9,7 @@ output. Recordings live in a 0700 directory in the runtime directory: the servic
 reads a recording from there, and stale ones are deleted.
 """
 import base64
+import json
 import os
 import pathlib
 import secrets
@@ -140,6 +141,32 @@ def duration_of(path):
         return float(r.text().strip().splitlines()[0])
     except (ValueError, IndexError):
         raise safe.UnsafeError("could not read the recording")
+
+
+def probe_media(path):
+    """(duration in seconds, width, height) of a video or music file for Telegram's player, from
+    ffprobe; zeros for whatever cannot be read, so a file ffprobe does not know still goes."""
+    try:
+        ffprobe = str(safe.tool("ffprobe"))
+        r = safe.run([ffprobe, "-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height",
+                      "-of", "json", str(path)], timeout=PROBE_TIMEOUT, max_output=64 * 1024)
+        info = json.loads(r.text()) if r.ok else {}
+    except (safe.UnsafeError, OSError, ValueError):
+        return 0, 0, 0
+    if not isinstance(info, dict):
+        return 0, 0, 0
+
+    def bounded(value, top):
+        return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= top else 0
+
+    fmt = info.get("format") if isinstance(info.get("format"), dict) else {}
+    try:
+        duration = float(fmt.get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    video = next((s for s in info.get("streams") or [] if isinstance(s, dict) and s.get("codec_type") == "video"), {})
+    return (bounded(round(duration) if 0 <= duration <= 86400 else 0, 86400),
+            bounded(video.get("width"), 16384), bounded(video.get("height"), 16384))
 
 
 def prepare_voice(path):

@@ -35,9 +35,10 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   bots' buttons and keyboards. Web links open in your browser; Telegram links open in Omagram.
   Typing `@` in a group suggests who to mention, and `/` suggests the commands of the chat's bots.
 - **Media** — photos (with a full-size viewer), videos, GIFs, files, round video notes and
-  voice messages with a waveform. Send photos and files with `Ctrl+O`, by dropping them on the
-  chat or by pasting a copied image, and record voice messages (`Ctrl+R`) and round video
-  messages (`Ctrl+Shift+R`). A file's menu opens it with its app or saves it to Downloads.
+  voice messages with a waveform. Send photos, videos, music and files with `Ctrl+O`, by dropping
+  them on the chat or by pasting a copied image: they wait above the message box, which holds their
+  caption, and go as albums of up to ten (`Ctrl+Shift+O` sends them as files). Record voice
+  messages (`Ctrl+R`) and round video messages (`Ctrl+Shift+R`). A file's menu opens it with its app or saves it to Downloads.
 - **Emoji** — Omarchy's emoji picker, from the message box (`Ctrl+;`).
 - **Account** — Settings shows how much Omagram keeps on this computer (and clears the cache),
   every device signed in to your account (sign any of them out), and signs you out here.

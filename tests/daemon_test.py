@@ -629,6 +629,48 @@ class Sending(Harness):
                          "a Markdown link to tg://user?id= is a mention by name")
 
 
+    def test_files_go_as_albums_videos_and_music_with_the_caption_on_the_first(self):
+        d = self.d
+        self.assertEqual(d.album_groups(["photo", "video", "document", "photo", "audio", "document"]), [[0, 1, 3], [2, 5], [4]])
+        self.assertEqual(d.album_groups(["photo"] * 12), [list(range(10)), [10, 11]])
+        cats = [str(self.file(f"cat{i}.jpg", 1000)) for i in range(3)]
+        album = {"@type": "messages", "total_count": 3, "messages": []}
+        q, r = self.call(100, "message.sendFiles", "sendMessageAlbum", album, chatId=42, paths=cats, caption="**all**", replyToMessageId=9)
+        contents = q["input_message_contents"]
+        self.assertEqual([c["@type"] for c in contents], ["inputMessagePhoto"] * 3)
+        self.assertEqual((contents[0]["caption"]["text"], contents[0]["caption"]["entities"][0]["type"]["@type"], contents[1]["caption"]),
+                         ("all", "textEntityTypeBold", None))
+        self.assertEqual((q["reply_to"]["message_id"], r["result"]), (9, {"groups": 1}))
+
+        clip, pdf = str(self.file("clip.mp4", 5000)), str(self.file("report.pdf"))
+        with mock.patch.object(d.media, "probe_media", return_value=(12, 1280, 720)):
+            albums, singles = self.sent_count("sendMessageAlbum"), self.sent_count("sendMessage")
+            self.send(self.conn, {"id": 101, "cmd": "message.sendFiles",
+                                  "args": {"chatId": 42, "paths": [cats[0], pdf, clip], "caption": "mixed", "replyToMessageId": 9}})
+            media_album = self.next_query("sendMessageAlbum", albums)
+            document = self.next_query("sendMessage", singles)
+        self.answer(media_album, album)
+        self.answer(document, {"@type": "message", "id": 3, "chat_id": 42})
+        r = self.read(self.conn, lambda v: v.get("id") == 101)
+        video = media_album["input_message_contents"][1]["video"]
+        self.assertEqual([c["@type"] for c in media_album["input_message_contents"]], ["inputMessagePhoto", "inputMessageVideo"],
+                         "photos and videos share an album; the file goes on its own")
+        self.assertEqual((video["duration"], video["width"], video["height"], video["supports_streaming"]), (12, 1280, 720, True))
+        self.assertEqual((media_album["reply_to"]["message_id"], document["reply_to"], document["input_message_content"]["@type"],
+                          document["input_message_content"]["caption"]), (9, None, "inputMessageDocument", None))
+        self.assertEqual(r["result"], {"groups": 2})
+
+        q, _ = self.call(102, "message.sendFiles", "sendMessageAlbum", album, chatId=42, paths=cats[:2], asMedia=False)
+        self.assertEqual([c["@type"] for c in q["input_message_contents"]], ["inputMessageDocument"] * 2, "as files")
+        song = str(self.file("song.mp3", 3000))
+        with mock.patch.object(d.media, "probe_media", return_value=(200, 0, 0)):
+            q, _ = self.call(103, "message.sendFile", "sendMessage", {"@type": "message", "id": 4, "chat_id": 42}, chatId=42, path=song)
+        self.assertEqual((q["input_message_content"]["@type"], q["input_message_content"]["audio"]["duration"]), ("inputMessageAudio", 200))
+        for rid, bad in enumerate(({"paths": cats * 4}, {"paths": cats, "asMedia": "yes"},
+                                   {"paths": [cats[0], str(self.uploads / "gone.jpg")]}, {"paths": []}), start=104):
+            self.assertFalse(self.request(self.conn, rid, "message.sendFiles", chatId=42, **bad)["ok"], bad)
+
+
 class ListsAndSearch(Harness):
     def setUp(self):
         super().setUp()

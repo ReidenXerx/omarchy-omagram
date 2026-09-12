@@ -149,6 +149,7 @@ FocusScope {
     root.translations = ({})
     root.botCommands = null
     root.suggestions = []
+    root.attachments = []
     root.scheduledOpen = false
     root.scheduledMessages = []
     // The chat's draft, as Telegram keeps it: you continue where you left off, on any device.
@@ -188,15 +189,50 @@ FocusScope {
     return s.indexOf("file://") === 0 ? decodeURIComponent(s.slice(7)) : ""
   }
 
-  function sendPaths(paths, asPhoto) {
-    if (!root.chat) return
-    // Ten at a time at most: a stray drop of a whole folder should not become a flood.
-    for (var i = 0; i < paths.length && i < 10; i++) {
-      app.sendFile(root.chat.id, paths[i], asPhoto, i === 0 ? root.replyToId : 0, function (answer) {
-        if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
-      })
+  // Files wait above the message box until sent, so a caption can go with them: the text in the box.
+  // Ten at most, as many as an album holds; a stray drop of a whole folder does not become a flood.
+  property var attachments: []            // [{ path, name, kind }]
+  property bool attachAsMedia: true
+
+  function addAttachments(paths, asMedia) {
+    if (!root.chat || !paths.length) return
+    if (!root.attachments.length) root.attachAsMedia = asMedia !== false
+    var next = root.attachments.slice()
+    for (var i = 0; i < paths.length; i++) {
+      if (next.some(function (a) { return a.path === paths[i] })) continue
+      if (next.length >= 10) {
+        root.flash("Ten files go at once: the rest were left out")
+        break
+      }
+      next.push({ path: paths[i], name: paths[i].split("/").pop(), kind: Model.attachmentKind(paths[i]) })
     }
-    if (paths.length > 10) root.flash("Sent the first 10 files")
+    root.attachments = next
+    root.focusComposer()
+  }
+
+  function removeAttachment(index) {
+    var next = root.attachments.slice()
+    next.splice(index, 1)
+    root.attachments = next
+  }
+
+  // Photos and videos go as albums, files and music as albums of their own, the caption on the first.
+  function sendAttachments(options) {
+    var caption = composer.text.replace(/\s+$/, "")
+    if (caption.length > 2048) { root.flash("That caption is too long."); return }
+    var args = root.target({ chatId: root.chat.id, paths: root.attachments.map(function (a) { return a.path }),
+                             asMedia: root.attachAsMedia, caption: caption })
+    if (root.replyToId) args.replyToMessageId = root.replyToId
+    if (options && options.silent) args.silent = true
+    if (options && options.sendAt) args.sendAt = options.sendAt
+    client.request("message.sendFiles", args, function (answer) {
+      if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
+    })
+    root.attachments = []
+    draftTimer.stop()
+    root.savedDraft = ""
+    root.lastTypingMs = 0
+    root.setComposerText("")
     root.replyToId = 0
     root.stickToBottom = true
   }
@@ -291,8 +327,7 @@ FocusScope {
         var path = root.urlToPath(selectedFiles[i])
         if (path) paths.push(path)
       }
-      root.sendPaths(paths, asPhoto)
-      root.focusComposer()
+      root.addAttachments(paths, asPhoto)
     }
     onRejected: root.focusComposer()
   }
@@ -302,7 +337,7 @@ FocusScope {
     enabled: !!root.chat
     onDropped: function (drop) {
       if (!drop.hasUrls) return
-      root.sendPaths(drop.urls.map(root.urlToPath).filter(function (p) { return p !== "" }), true)
+      root.addAttachments(drop.urls.map(root.urlToPath).filter(function (p) { return p !== "" }), true)
       drop.accept()
     }
 
@@ -933,8 +968,7 @@ FocusScope {
     var chatId = root.chat.id
     client.request("clipboard.image", {}, function (answer) {
       if (!answer.ok || !answer.result.path || !root.chat || root.chat.id !== chatId) return
-      var path = answer.result.path
-      root.prompt = { text: "Send the image from the clipboard?", action: "Send", run: function () { root.sendPaths([path], true) } }
+      root.addAttachments([answer.result.path], true)   // it waits to be sent, like any file
     })
   }
 
@@ -1014,6 +1048,10 @@ FocusScope {
       })
       root.finishEdit()
       if (scheduled) root.focusMessages()
+      return
+    }
+    if (root.attachments.length) {
+      root.sendAttachments(options)
       return
     }
     if (!text.trim()) return
@@ -1783,6 +1821,149 @@ FocusScope {
       }
     }
 
+    // ------------------------------------------------ files waiting to be sent
+    Rectangle {
+      Layout.fillWidth: true
+      Layout.preferredHeight: visible ? Style.space(82) : 0
+      visible: root.attachments.length > 0 && !root.showTopics
+      color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.03)
+
+      Rectangle { width: parent.width; height: 1; color: app.border; opacity: 0.35 }
+
+      ListView {
+        id: attachmentList
+        anchors.left: parent.left
+        anchors.right: attachmentMode.left
+        anchors.leftMargin: Style.space(10)
+        anchors.rightMargin: Style.space(10)
+        anchors.verticalCenter: parent.verticalCenter
+        height: Style.space(64)
+        orientation: ListView.Horizontal
+        spacing: Style.space(8)
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        model: root.attachments
+
+        delegate: Rectangle {
+          id: attachment
+          required property var modelData
+          required property int index
+          width: Style.space(64)
+          height: Style.space(64)
+          radius: Style.cornerRadius
+          color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.06)
+          clip: true
+
+          Image {
+            id: thumbnail
+            anchors.fill: parent
+            visible: status === Image.Ready
+            source: attachment.modelData.kind === "photo" ? "file://" + attachment.modelData.path : ""
+            sourceSize.width: 128
+            sourceSize.height: 128
+            asynchronous: true
+            fillMode: Image.PreserveAspectCrop
+          }
+          // What has no picture shows what it is: md-video U+F0567, md-music-note U+F0387, md-file-outline U+F0224
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: Style.space(10)
+            visible: !thumbnail.visible
+            text: String.fromCodePoint(attachment.modelData.kind === "video" ? 0xF0567 : (attachment.modelData.kind === "audio" ? 0xF0387 : 0xF0224))
+            color: app.accent
+            font.family: app.glyphFamily
+            font.pixelSize: Style.font.title
+          }
+          Text {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.margins: Style.space(4)
+            visible: !thumbnail.visible
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideMiddle
+            text: attachment.modelData.name
+            textFormat: Text.PlainText
+            color: app.muted
+            font.family: app.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          // md-close U+F0156: leave this one out
+          Rectangle {
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.margins: Style.space(3)
+            width: Style.space(18)
+            height: width
+            radius: width / 2
+            color: Qt.rgba(0, 0, 0, removeArea.containsMouse ? 0.8 : 0.55)
+            Text {
+              anchors.centerIn: parent
+              text: String.fromCodePoint(0xF0156)
+              color: "white"
+              font.family: app.glyphFamily
+              font.pixelSize: Style.font.caption
+            }
+            MouseArea {
+              id: removeArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.removeAttachment(attachment.index)
+            }
+          }
+        }
+      }
+
+      Column {
+        id: attachmentMode
+        anchors.right: parent.right
+        anchors.rightMargin: Style.space(14)
+        anchors.verticalCenter: parent.verticalCenter
+        width: Style.space(250)
+        spacing: Style.space(4)
+
+        // Photos and videos as themselves, or everything as files.
+        Rectangle {
+          width: parent.width
+          height: Style.space(28)
+          radius: Style.cornerRadius
+          color: Qt.rgba(app.accent.r, app.accent.g, app.accent.b, modeArea.containsMouse ? 0.28 : 0.14)
+          Text {
+            anchors.centerIn: parent
+            width: parent.width - Style.space(12)
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
+            text: root.attachAsMedia ? "As photos and videos" : "As files"
+            textFormat: Text.PlainText
+            color: app.foreground
+            font.family: app.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          MouseArea {
+            id: modeArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.attachAsMedia = !root.attachAsMedia
+            onContainsMouseChanged: if (containsMouse) root.flash(root.attachAsMedia ? "Click to send them as files, as they are"
+                                                                                   : "Click to send photos and videos as themselves")
+          }
+        }
+        Text {
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
+          elide: Text.ElideRight
+          text: (root.attachments.length === 1 ? "1 file" : root.attachments.length + " files") + "   "
+                + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.cancel")[0] || "") + " takes them away"
+          textFormat: Text.PlainText
+          color: app.muted
+          font.family: app.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+    }
+
     // ------------------------------------------------ suggestions while typing
     Rectangle {
       Layout.fillWidth: true
@@ -1935,6 +2116,7 @@ FocusScope {
                   if (root.scheduledOpen) root.focusMessages()
                 }
                 else if (root.replyToId) root.replyToId = 0
+                else if (root.attachments.length) root.attachments = []
                 else if (root.selecting) root.clearSelection()
                 else root.focusMessages()
               }
@@ -1947,6 +2129,8 @@ FocusScope {
             Text {
               visible: composer.text === ""
               text: root.editing ? (root.editingCaption ? "Caption" : "Edit message")
+                  : root.attachments.length ? "A caption for the files, if you like   "
+                                              + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.send")[0] || "") + " to send"
                   : "Message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.send")[0] || "") + " to send, "
                     + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.newLine")[0] || "") + " for a new line"
               color: app.muted

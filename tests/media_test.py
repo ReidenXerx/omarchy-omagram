@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """python3 tests/media_test.py -- omagram_media without a microphone, camera or ffmpeg run."""
 import base64
+import json
 import os
 import pathlib
 import shutil
@@ -8,6 +9,7 @@ import struct
 import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -36,6 +38,28 @@ class Waveform(unittest.TestCase):
         self.assertEqual(media.levels_from_pcm(b"", samples=10), [])
         self.assertEqual(len(media.levels_from_pcm(quiet, samples=100)), 100)
         self.assertEqual(media.levels_from_pcm(struct.pack("<3h", 0, 0, 0), samples=100), [0, 0, 0])
+
+
+class Probing(unittest.TestCase):
+    def probe(self, result):
+        with mock.patch.object(media.safe, "tool", return_value="/usr/bin/ffprobe"), \
+                mock.patch.object(media.safe, "run", return_value=result):
+            return media.probe_media("/tmp/clip.mp4")
+
+    def test_length_and_size_for_telegrams_player(self):
+        video = json.dumps({"streams": [{"codec_type": "audio"}, {"codec_type": "video", "width": 1280, "height": 720}],
+                            "format": {"duration": "12.6"}})
+        self.assertEqual(self.probe(types.SimpleNamespace(ok=True, text=lambda: video)), (13, 1280, 720))
+        music = json.dumps({"streams": [{"codec_type": "audio"}], "format": {"duration": "201.2"}})
+        self.assertEqual(self.probe(types.SimpleNamespace(ok=True, text=lambda: music)), (201, 0, 0))
+
+    def test_what_cannot_be_read_is_zero_and_the_file_still_goes(self):
+        odd = json.dumps({"format": {"duration": "nan"}, "streams": [{"codec_type": "video", "width": -3, "height": True}]})
+        for result in (types.SimpleNamespace(ok=False, text=lambda: ""), types.SimpleNamespace(ok=True, text=lambda: "not json"),
+                       types.SimpleNamespace(ok=True, text=lambda: "[]"), types.SimpleNamespace(ok=True, text=lambda: odd)):
+            self.assertEqual(self.probe(result), (0, 0, 0))
+        with mock.patch.object(media.safe, "tool", side_effect=media.safe.UnsafeError("no ffprobe")):
+            self.assertEqual(media.probe_media("/tmp/clip.mp4"), (0, 0, 0))
 
 
 class Recordings(unittest.TestCase):

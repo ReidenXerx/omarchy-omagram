@@ -75,6 +75,9 @@ FILE_ID_MAX = 2 ** 31 - 1
 DOCUMENT_MAX = 2 * 1024 ** 3                        # Telegram's file limit without Premium
 PHOTO_MAX = 10 * 1024 ** 2                          # larger images go as documents
 PHOTO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
+VIDEO_EXTENSIONS = (".mp4", ".mov", ".m4v")         # playable videos; other video files go as files
+AUDIO_EXTENSIONS = (".mp3", ".m4a", ".flac", ".ogg", ".opus")
+FILES_MAX = 10                                       # files sent at once: an album's most
 CAPTION_MAX = 1024
 MARKDOWN_CAPTION_MAX = 2 * CAPTION_MAX
 STICKERS_MAX = 300
@@ -247,6 +250,52 @@ TRANSLATE_TO = re.compile(r"[a-z]{2,3}(-[A-Za-z0-9]{2,8})?")
 GIF_BOT = "gif"                          # the inline bot Telegram's own apps search GIFs with
 CUSTOM_EMOJI_MAX = 200
 INT64_ID = re.compile(r"-?[0-9]{1,19}")
+
+
+def file_kind(path, size, as_media):
+    """How a file goes out: as a photo, a playable video or music when sent as media and Telegram can
+    take it so, otherwise as a file."""
+    lower = path.lower()
+    if as_media and lower.endswith(PHOTO_EXTENSIONS) and size <= PHOTO_MAX:
+        return "photo"
+    if as_media and lower.endswith(VIDEO_EXTENSIONS):
+        return "video"
+    if as_media and lower.endswith(AUDIO_EXTENSIONS):
+        return "audio"
+    return "document"
+
+
+def file_content(path, kind, caption, probed):
+    """The message content for a file; `probed` is (duration, width, height) for videos and music."""
+    upload = {"@type": "inputFileLocal", "path": path}
+    duration, width, height = probed
+    if kind == "photo":
+        return {"@type": "inputMessagePhoto", "caption": caption, "show_caption_above_media": False,
+                "self_destruct_type": None, "has_spoiler": False,
+                "photo": {"@type": "inputPhoto", "photo": upload, "thumbnail": None, "video": None,
+                          "added_sticker_file_ids": [], "width": 0, "height": 0}}
+    if kind == "video":
+        return {"@type": "inputMessageVideo", "caption": caption, "show_caption_above_media": False,
+                "self_destruct_type": None, "has_spoiler": False,
+                "video": {"@type": "inputVideo", "video": upload, "thumbnail": None, "cover": None, "start_timestamp": 0,
+                          "added_sticker_file_ids": [], "duration": duration, "width": width, "height": height,
+                          "supports_streaming": True}}
+    if kind == "audio":
+        return {"@type": "inputMessageAudio", "caption": caption,
+                "audio": {"@type": "inputAudio", "audio": upload, "album_cover_thumbnail": None, "duration": duration,
+                          "title": "", "performer": ""}}
+    return {"@type": "inputMessageDocument", "caption": caption,
+            "document": {"@type": "inputDocument", "document": upload, "thumbnail": None,
+                         "disable_content_type_detection": False}}
+
+
+def album_groups(kinds):
+    """Which files go out together, by index: photos and videos share albums, files and music have
+    albums of their own, each at most ten, in the order the files were given."""
+    buckets = {}
+    for i, kind in enumerate(kinds):
+        buckets.setdefault("media" if kind in ("photo", "video") else kind, []).append(i)
+    return [items[n:n + FILES_MAX] for items in buckets.values() for n in range(0, len(items), FILES_MAX)]
 
 
 def mention_links(entities):
@@ -1982,19 +2031,73 @@ class Daemon:
         caption = args.get("caption", "")
         if not isinstance(caption, str) or len(caption) > MARKDOWN_CAPTION_MAX:
             raise BadRequest(f"a caption is text of at most {CAPTION_MAX} characters")
-        as_photo = args.get("asPhoto", True) is True and path.lower().endswith(PHOTO_EXTENSIONS) and size <= PHOTO_MAX
+        kind = file_kind(path, size, args.get("asPhoto", True) is True)
         text = self.typed_text(caption, CAPTION_MAX, "a caption")
-        upload = {"@type": "inputFileLocal", "path": path}
-        if as_photo:
-            content = {"@type": "inputMessagePhoto", "caption": text, "show_caption_above_media": False,
-                       "self_destruct_type": None, "has_spoiler": False,
-                       "photo": {"@type": "inputPhoto", "photo": upload, "thumbnail": None, "video": None,
-                                 "added_sticker_file_ids": [], "width": 0, "height": 0}}
-        else:
-            content = {"@type": "inputMessageDocument", "caption": text,
-                       "document": {"@type": "inputDocument", "document": upload, "thumbnail": None,
-                                    "disable_content_type_detection": False}}
-        self.send_content(client, rid, chat_id, content, args)
+        reply = self.reply_args(args)
+        if kind not in ("video", "audio"):
+            self.send_content(client, rid, chat_id, file_content(path, kind, text, (0, 0, 0)), reply)
+            return
+        # A video's length and size, and music's length, are read first, as Telegram's player needs them.
+        self.background(lambda: media.probe_media(path),
+                        lambda probed, error: self.send_content(
+                            client, rid, chat_id, file_content(path, kind, text, probed if error is None else (0, 0, 0)), reply))
+
+    def cmd_message_send_files(self, client, rid, args):
+        """Up to ten files at once, as Telegram's apps send them: photos and videos in albums, files
+        and music in albums of their own, the caption on the first."""
+        chat_id = arg_int(args, "chatId")
+        paths = args.get("paths")
+        if not isinstance(paths, list) or not 1 <= len(paths) <= FILES_MAX:
+            raise BadRequest(f"paths is a list of 1 to {FILES_MAX} files")
+        as_media = args.get("asMedia", True)
+        if not isinstance(as_media, bool):
+            raise BadRequest("asMedia is true or false")
+        caption = args.get("caption", "")
+        if not isinstance(caption, str) or len(caption) > MARKDOWN_CAPTION_MAX:
+            raise BadRequest(f"a caption is text of at most {CAPTION_MAX} characters")
+        text = self.typed_text(caption, CAPTION_MAX, "a caption")
+        files = []
+        for given in paths:
+            path, size = local_upload(given)
+            files.append((path, file_kind(path, size, as_media)))
+        reply = self.reply_args(args)
+
+        def send(probed):
+            contents = [file_content(path, kind, text if i == 0 else None, probed[i]) for i, (path, kind) in enumerate(files)]
+            self.send_groups(client, rid, chat_id, album_groups([kind for _, kind in files]), contents, reply)
+
+        if not any(kind in ("video", "audio") for _, kind in files):
+            send([(0, 0, 0)] * len(files))
+            return
+        self.background(lambda: [media.probe_media(path) if kind in ("video", "audio") else (0, 0, 0) for path, kind in files],
+                        lambda probed, error: send(probed if error is None else [(0, 0, 0)] * len(files)))
+
+    def send_groups(self, client, rid, chat_id, groups, contents, reply):
+        """Each group as an album, or as a message when it holds one file; answered once all are sent."""
+        state = {"left": len(groups), "error": None}
+
+        def finished(error=None):
+            if error and state["error"] is None:
+                state["error"] = error
+            state["left"] -= 1
+            if state["left"] > 0:
+                return
+            if state["error"]:
+                self.respond_error(client, rid, state["error"])
+            else:
+                self.respond(client, rid, {"groups": len(groups)})
+
+        def refused(event=None):
+            finished(model._str(model._obj(event).get("message"), 256) or "Telegram did not take the files")
+
+        for n, group in enumerate(groups):
+            base = {"chat_id": chat_id, "topic_id": self.topic_of(reply), "options": self.send_options(reply),
+                    "reply_to": self.reply_to(reply) if n == 0 else None}
+            if len(group) == 1:
+                query = dict(base, **{"@type": "sendMessage", "reply_markup": None, "input_message_content": contents[group[0]]})
+            else:
+                query = dict(base, **{"@type": "sendMessageAlbum", "input_message_contents": [contents[i] for i in group]})
+            self.td_send(query, transform=lambda _event: finished(), failed=refused)
 
     def cmd_message_send_sticker(self, client, rid, args):
         chat_id = arg_int(args, "chatId")
@@ -2185,6 +2288,7 @@ COMMANDS = {
     "message.markdown": ("cmd_message_markdown", True),
     "chat.mentions": ("cmd_chat_mentions", True),
     "chat.commands": ("cmd_chat_commands", True),
+    "message.sendFiles": ("cmd_message_send_files", True),
     "story.get": ("cmd_story_get", True),
     "story.open": ("cmd_story_open", True),
     "story.close": ("cmd_story_close", True),

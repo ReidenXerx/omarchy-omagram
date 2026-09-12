@@ -237,6 +237,20 @@ var NO_MESSAGE = { id: 0, chatId: 0, date: 0, editDate: 0, outgoing: false, pinn
                    sending: null, replyTo: null, forward: null, albumId: "", reactions: [], views: 0, markup: null,
                    topicId: 0, sendAt: 0, content: { kind: "text", text: "", entities: [] } }
 
+// ---------------------------------------------------------------- files waiting to be sent
+
+var PHOTO_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"]
+var VIDEO_EXTENSIONS = [".mp4", ".mov", ".m4v"]
+var AUDIO_EXTENSIONS = [".mp3", ".m4a", ".flac", ".ogg", ".opus"]
+
+// How a file waiting to be sent goes out when sent as media, by its name, as the service decides:
+// "photo", "video", "audio" or "file".
+function attachmentKind(path) {
+  var name = String(path || "").toLowerCase()
+  var endsIn = function (list) { return list.some(function (e) { return name.slice(-e.length) === e }) }
+  return endsIn(PHOTO_EXTENSIONS) ? "photo" : (endsIn(VIDEO_EXTENSIONS) ? "video" : (endsIn(AUDIO_EXTENSIONS) ? "audio" : "file"))
+}
+
 // ---------------------------------------------------------------- suggestions while typing
 
 // What is typed at the cursor that a suggestion can complete: @someone, or a bot /command that starts

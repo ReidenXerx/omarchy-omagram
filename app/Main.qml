@@ -399,12 +399,6 @@ Scope {
     return args
   }
 
-  function sendFile(chatId, path, asPhoto, replyToId, callback) {
-    var args = { chatId: chatId, path: path, asPhoto: asPhoto !== false }
-    if (replyToId) args.replyToMessageId = replyToId
-    service.request("message.sendFile", omagram.intoTopic(chatId, args), callback || function () {})
-  }
-
   function sendSticker(chatId, sticker, replyToId, callback) {
     var args = { chatId: chatId, fileId: sticker.file.id, width: sticker.width || 0, height: sticker.height || 0,
                  emoji: sticker.emoji || "" }
