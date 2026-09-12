@@ -323,7 +323,7 @@ FocusScope {
       boundsBehavior: Flickable.StopAtBounds
       highlightFollowsCurrentItem: false
 
-      WheelScroll {}
+      WheelScroll { view: listView }
 
       Keys.onPressed: function (event) {
         var key = event.key

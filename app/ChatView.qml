@@ -297,6 +297,7 @@ FocusScope {
       bottomMargin: Style.space(12)
 
       WheelScroll {
+        view: messageList
         onScrolled: {
           root.stickToBottom = messageList.atYEnd
           if (messageList.contentY <= messageList.originY + Style.space(200) && messageList.count > 0) root.loadOlder()

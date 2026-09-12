@@ -324,7 +324,7 @@ Item {
           ListView {
             id: chatList
 
-            WheelScroll {}
+            WheelScroll { view: chatList }
             Layout.preferredWidth: Math.round(card.width * 0.36)
             Layout.fillHeight: true
             clip: true
@@ -420,7 +420,7 @@ Item {
             ListView {
               id: messageList
 
-              WheelScroll {}
+              WheelScroll { view: messageList }
               Layout.fillWidth: true
               Layout.fillHeight: true
               clip: true
