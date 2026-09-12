@@ -72,6 +72,8 @@ def normalize_combo(value):
         if mod is None or mod in mods:
             return None
         mods.add(mod)
+    if not mods & {"SUPER", "CTRL", "ALT"}:   # Shift alone would take capital letters everywhere
+        return None
     key = tokens[-1]
     name = KEY_ALIASES.get(key, KEY_ALIASES.get(key.upper(), key.upper()))
     if not (re.fullmatch(r"[A-Z0-9]", name) or re.fullmatch(r"F([1-9]|1[0-9]|2[0-4])", name) or name in KEY_NAMES):

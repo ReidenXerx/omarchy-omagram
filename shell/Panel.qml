@@ -4,6 +4,7 @@ import Quickshell
 import qs.Commons
 import qs.Ui
 import "../app/Model.js" as Model
+import "../app/Keymap.js" as Keymap
 
 // The bar's quick panel: your most recent chats, and a reply without leaving what you are doing.
 //
@@ -123,8 +124,9 @@ Panel {
       onCloseRequested: root.close()
       onTabRequested: function (direction) { root.switchPanel(direction) }
       onTextKey: function (t) {
-        if (t === "o") root.openInWindow(root.cursor)
-        else if (t === "r") root.startReply(root.cursor)
+        var keys = root.omagram ? root.omagram.shortcuts : ({})
+        if (Keymap.matchesText(keys, "panel.openInWindow", t)) root.openInWindow(root.cursor)
+        else if (Keymap.matchesText(keys, "panel.reply", t)) root.startReply(root.cursor)
       }
 
       ColumnLayout {

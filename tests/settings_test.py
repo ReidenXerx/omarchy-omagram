@@ -69,7 +69,7 @@ class Combos(unittest.TestCase):
         self.assertEqual(prefs.normalize_combo("Shift + Ctrl + ,"), "CTRL + SHIFT + COMMA")
         self.assertEqual(prefs.normalize_combo("META + enter"), "SUPER + RETURN")
         self.assertEqual(prefs.normalize_combo("SUPER + F13"), "SUPER + F13")
-        for bad in ("M", "SUPER +", "SUPER + NOPE", "SUPER + SUPER + M", 'SUPER + "', "SUPER + M + ALT",
+        for bad in ("M", "SHIFT + A", "SUPER +", "SUPER + NOPE", "SUPER + SUPER + M", 'SUPER + "', "SUPER + M + ALT",
                     "HYPER + M", "SUPER + F25", "", None, 5, "SUPER + " + "A" * 80):
             self.assertIsNone(prefs.normalize_combo(bad), bad)
 

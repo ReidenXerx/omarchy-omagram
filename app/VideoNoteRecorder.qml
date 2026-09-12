@@ -4,6 +4,7 @@ import QtMultimedia
 import Quickshell
 import qs.Commons
 import "Model.js" as Model
+import "Keymap.js" as Keymap
 
 // Recording a video message: a round preview of the camera, up to a minute.
 //
@@ -70,9 +71,9 @@ FocusScope {
   }
 
   Keys.onPressed: function (event) {
-    if (event.key === Qt.Key_Escape) noteRecorder.finish(false)
-    else if (event.key === Qt.Key_Space && noteRecorder.phase === "preview") noteRecorder.start()
-    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+    var keys = noteRecorder.app.shortcuts
+    if (Keymap.matches(keys, "videoNote.cancel", event)) noteRecorder.finish(false)
+    else if (Keymap.matches(keys, "videoNote.record", event)) {
       if (noteRecorder.phase === "preview") noteRecorder.start()
       else noteRecorder.finish(true)
     } else return
@@ -172,9 +173,11 @@ FocusScope {
 
     Text {
       anchors.horizontalCenter: parent.horizontalCenter
-      text: noteRecorder.phase === "preview" ? "Space or Enter to start recording  ·  Esc to cancel"
+      readonly property string recordKey: Keymap.label(Keymap.keysFor(noteRecorder.app.shortcuts, "videoNote.record")[0] || "")
+      readonly property string cancelKey: Keymap.label(Keymap.keysFor(noteRecorder.app.shortcuts, "videoNote.cancel")[0] || "")
+      text: noteRecorder.phase === "preview" ? recordKey + " to start recording  ·  " + cancelKey + " to cancel"
           : (Model.formatDuration(noteRecorder.seconds) + " / " + Model.formatDuration(noteRecorder.maxSeconds)
-             + "   Enter to send  ·  Esc to cancel")
+             + "   " + recordKey + " to send  ·  " + cancelKey + " to cancel")
       color: "white"
       font.family: noteRecorder.app.fontFamily
       font.pixelSize: Style.font.body

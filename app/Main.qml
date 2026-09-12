@@ -5,6 +5,7 @@ import Quickshell.Hyprland
 import Quickshell.Wayland
 import qs.Commons
 import "Model.js" as Model
+import "Keymap.js" as Keymap
 
 // Omagram's window: sign-in first, then chats on the left and the open chat on the right.
 //
@@ -31,6 +32,19 @@ Scope {
 
   property var auth: ({ state: "connecting" })
   property var recording: ({ state: "idle" })   // a voice message being recorded, as the service reports it
+
+  // Your shortcuts (only what differs from Keymap.js's defaults) and the global ones.
+  property var shortcuts: ({})
+  property var globalShortcuts: ({})
+  property var globalStatus: ({})
+  property bool settingsOpen: false
+
+  function applySettings(view) {
+    if (!view || !view.settings) return
+    omagram.shortcuts = view.settings.shortcuts || ({})
+    omagram.globalShortcuts = view.settings.globalShortcuts || ({})
+    omagram.globalStatus = view.globalStatus || ({})
+  }
   property var chats: []
   property var messages: ({})
   property int messagesRevision: 0
@@ -126,6 +140,7 @@ Scope {
     onHello: function (result) {
       omagram.auth = result.auth || { state: "starting" }
       omagram.meId = result.meId || 0
+      omagram.applySettings(result)
       omagram.chats = result.allChats || result.chats || []
       omagram.folders = result.folders || []
       omagram.mainPosition = result.mainPosition || 0
@@ -181,6 +196,8 @@ Scope {
       if (omagram.messages[e.chatId]) omagram.setMessages(e.chatId, Model.patchMessage(omagram.messages[e.chatId], e.messageId, { content: e.content }))
     } else if (name === "messageEdited") {
       if (omagram.messages[e.chatId]) omagram.setMessages(e.chatId, Model.patchMessage(omagram.messages[e.chatId], e.messageId, { editDate: e.editDate }))
+    } else if (name === "settings") {
+      omagram.applySettings(e)
     } else if (name === "recording") {
       omagram.recording = e
     } else if (name === "messagesDeleted") {
@@ -313,6 +330,22 @@ Scope {
       onLoaded: if (item) item.forceActiveFocus()
     }
 
+    Shortcut {
+      sequences: Keymap.keysFor(omagram.shortcuts, "window.settings")
+      enabled: !omagram.settingsOpen
+      onActivated: omagram.settingsOpen = true
+    }
+
+    SettingsView {
+      anchors.fill: parent
+      app: omagram
+      visible: omagram.settingsOpen
+      onClosed: {
+        omagram.settingsOpen = false
+        if (screen.item) screen.item.forceActiveFocus()
+      }
+    }
+
   }
 
   // A photo opens over the whole screen the window is on, above everything, with the keyboard.
@@ -398,17 +431,17 @@ Scope {
       function focusMessage(id) { return chatView.focusMessage(id) }
       function notify(text) { chatView.flash(text) }
 
-      Shortcut { sequences: ["Ctrl+K", "Ctrl+F"]; onActivated: chatList.focusSearch() }
-      Shortcut { sequence: "Alt+Up"; onActivated: chatList.step(-1) }
-      Shortcut { sequence: "Alt+Down"; onActivated: chatList.step(1) }
-      Shortcut { sequence: "Ctrl+1"; onActivated: chatList.focusList() }
-      Shortcut { sequence: "Ctrl+2"; onActivated: chatView.focusMessages() }
-      Shortcut { sequence: "Ctrl+3"; onActivated: chatView.focusComposer() }
-      Shortcut { sequences: ["Ctrl+PgDown", "Ctrl+]"]; onActivated: chatList.tabStep(1) }
-      Shortcut { sequences: ["Ctrl+PgUp", "Ctrl+["]; onActivated: chatList.tabStep(-1) }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.search"); enabled: !omagram.settingsOpen; onActivated: chatList.focusSearch() }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.previousChat"); enabled: !omagram.settingsOpen; onActivated: chatList.step(-1) }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.nextChat"); enabled: !omagram.settingsOpen; onActivated: chatList.step(1) }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusList"); enabled: !omagram.settingsOpen; onActivated: chatList.focusList() }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusMessages"); enabled: !omagram.settingsOpen; onActivated: chatView.focusMessages() }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusComposer"); enabled: !omagram.settingsOpen; onActivated: chatView.focusComposer() }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.nextTab"); enabled: !omagram.settingsOpen; onActivated: chatList.tabStep(1) }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.previousTab"); enabled: !omagram.settingsOpen; onActivated: chatList.tabStep(-1) }
       Shortcut {
-        sequence: "Ctrl+Shift+F"
-        enabled: !!omagram.openChat
+        sequences: Keymap.keysFor(omagram.shortcuts, "window.searchInChat")
+        enabled: !!omagram.openChat && !omagram.settingsOpen
         onActivated: chatList.searchInChat(omagram.openChatId, omagram.openChat ? omagram.openChat.title : "")
       }
 
@@ -433,6 +466,7 @@ Scope {
           onMessageActivated: function (chatId, messageId) { omagram.openChatAt(chatId, messageId) }
           onPinRequested: function (chatId) { omagram.togglePin(chatId) }
           onArchiveRequested: function (chatId) { omagram.toggleArchive(chatId) }
+          onSettingsRequested: omagram.settingsOpen = true
           onActivated: function (chatId) {
             omagram.openChatById(chatId, false)
             chatView.focusComposer()

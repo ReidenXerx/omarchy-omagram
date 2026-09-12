@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import qs.Commons
+import "Keymap.js" as Keymap
 
 // The sticker picker: recent stickers first, then each installed set.
 // Keyboard: arrows or h/j/k/l move, Tab and Shift+Tab switch sets, Enter sends, Esc closes.
@@ -137,18 +138,18 @@ FocusScope {
       model: picker.stickers
 
       Keys.onPressed: function (event) {
-        var key = event.key
-        if (key === Qt.Key_Right || key === Qt.Key_L) { picker.move(1); event.accepted = true }
-        else if (key === Qt.Key_Left || key === Qt.Key_H) { picker.move(-1); event.accepted = true }
-        else if (key === Qt.Key_Down || key === Qt.Key_J) { picker.move(picker.columns); event.accepted = true }
-        else if (key === Qt.Key_Up || key === Qt.Key_K) { picker.move(-picker.columns); event.accepted = true }
-        else if (key === Qt.Key_Backtab || (key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) { picker.show(picker.tab - 1); event.accepted = true }
-        else if (key === Qt.Key_Tab) { picker.show(picker.tab + 1); event.accepted = true }
-        else if (key === Qt.Key_Return || key === Qt.Key_Enter) {
-          if (picker.stickers[picker.cursor]) picker.picked(picker.stickers[picker.cursor])
-          event.accepted = true
-        }
-        else if (key === Qt.Key_Escape) { picker.closed(); event.accepted = true }
+        var keys = picker.app.shortcuts
+        function is(id) { return Keymap.matches(keys, id, event) }
+        if (is("stickers.right")) picker.move(1)
+        else if (is("stickers.left")) picker.move(-1)
+        else if (is("stickers.down")) picker.move(picker.columns)
+        else if (is("stickers.up")) picker.move(-picker.columns)
+        else if (is("stickers.previousSet")) picker.show(picker.tab - 1)
+        else if (is("stickers.nextSet")) picker.show(picker.tab + 1)
+        else if (is("stickers.send")) { if (picker.stickers[picker.cursor]) picker.picked(picker.stickers[picker.cursor]) }
+        else if (is("stickers.close")) picker.closed()
+        else return
+        event.accepted = true
       }
 
       delegate: Rectangle {

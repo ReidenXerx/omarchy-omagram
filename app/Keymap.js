@@ -313,6 +313,31 @@ function conflictsFor(overrides, id) {
   return out
 }
 
+var HYPRLAND_KEYS = {
+  Space: "SPACE", Return: "RETURN", Enter: "RETURN", Tab: "TAB", Esc: "ESCAPE", Backspace: "BACKSPACE", Del: "DELETE",
+  Home: "HOME", End: "END", Up: "UP", Down: "DOWN", Left: "LEFT", Right: "RIGHT", PgUp: "PAGE_UP", PgDown: "PAGE_DOWN",
+  ",": "COMMA", ".": "PERIOD", "/": "SLASH", ";": "SEMICOLON", "'": "APOSTROPHE", "-": "MINUS", "=": "EQUAL",
+  "[": "BRACKETLEFT", "]": "BRACKETRIGHT", "\\": "BACKSLASH", "`": "GRAVE"
+}
+
+// A Qt sequence ("Meta+Alt+M") as Hyprland writes a combination ("SUPER + ALT + M"), or "" when
+// Hyprland cannot bind it or it has no Super, Ctrl or Alt (a global shortcut must not eat typing).
+function toHyprland(sequence) {
+  var n = normalize(sequence)
+  if (!n || n === "+" || /\+\+$/.test(n)) return ""
+  var parts = n.split("+")
+  var key = parts.pop()
+  var mods = []
+  if (parts.indexOf("Meta") >= 0) mods.push("SUPER")
+  if (parts.indexOf("Ctrl") >= 0) mods.push("CTRL")
+  if (parts.indexOf("Alt") >= 0) mods.push("ALT")
+  if (!mods.length) return ""
+  if (parts.indexOf("Shift") >= 0) mods.push("SHIFT")
+  var name = HYPRLAND_KEYS.hasOwnProperty(key) ? HYPRLAND_KEYS[key]
+           : (/^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4]))$/.test(key) ? key : "")
+  return name ? mods.concat([name]).join(" + ") : ""
+}
+
 var GLYPHS = { Up: "↑", Down: "↓", Left: "←", Right: "→", Return: "Enter", Enter: "Keypad Enter", PgUp: "Page Up", PgDown: "Page Down" }
 
 // "Ctrl + ↑" for showing a sequence.

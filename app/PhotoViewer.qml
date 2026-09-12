@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Commons
 import "Model.js" as Model
+import "Keymap.js" as Keymap
 
 // A photo at full size over the chat. Keyboard: ←/→ or h/l step through the chat's photos,
 // Esc or q closes; a click anywhere closes too. The photo is the file the service already
@@ -35,9 +36,12 @@ FocusScope {
   }
 
   Keys.onPressed: function (event) {
-    if (event.key === Qt.Key_Escape || event.key === Qt.Key_Q) { viewer.closed(); event.accepted = true }
-    else if (event.key === Qt.Key_Left || event.key === Qt.Key_H) { viewer.step(-1); event.accepted = true }
-    else if (event.key === Qt.Key_Right || event.key === Qt.Key_L) { viewer.step(1); event.accepted = true }
+    var keys = app.shortcuts
+    if (Keymap.matches(keys, "photo.close", event)) viewer.closed()
+    else if (Keymap.matches(keys, "photo.previous", event)) viewer.step(-1)
+    else if (Keymap.matches(keys, "photo.next", event)) viewer.step(1)
+    else return
+    event.accepted = true
   }
 
   Rectangle {
@@ -95,7 +99,9 @@ FocusScope {
       horizontalAlignment: Text.AlignHCenter
       text: (viewer.index + 1) + " of " + viewer.photos.length
         + (viewer.file && viewer.file.active ? "  ·  loading " + Math.round(Model.progress(viewer.file) * 100) + "%" : "")
-        + "   ← → to step, Esc to close"
+        + "   " + Keymap.label(Keymap.keysFor(app.shortcuts, "photo.previous")[0] || "") + " "
+        + Keymap.label(Keymap.keysFor(app.shortcuts, "photo.next")[0] || "") + " to step, "
+        + Keymap.label(Keymap.keysFor(app.shortcuts, "photo.close")[0] || "") + " to close"
       color: Qt.rgba(1, 1, 1, 0.6)
       font.family: app.fontFamily
       font.pixelSize: Style.font.caption

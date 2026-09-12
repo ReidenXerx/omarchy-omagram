@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 import qs.Commons
 import "Model.js" as Model
+import "Keymap.js" as Keymap
 
 // The chat list: folder tabs over the chats of the chosen list. Typing a search finds chats
 // in every list, and messages in all chats -- or in the open chat, with Ctrl+Shift+F.
@@ -43,6 +44,7 @@ FocusScope {
   signal pinRequested(real chatId)
   signal archiveRequested(real chatId)
   signal toChat()
+  signal settingsRequested()
 
   function buildRows() {
     var out = []
@@ -204,7 +206,7 @@ FocusScope {
           id: search
           anchors.fill: parent
           anchors.leftMargin: Style.space(12)
-          anchors.rightMargin: Style.space(12)
+          anchors.rightMargin: Style.space(40)
           verticalAlignment: TextInput.AlignVCenter
           clip: true
           color: app.foreground
@@ -213,35 +215,57 @@ FocusScope {
           font.pixelSize: Style.font.body
           maximumLength: 128
 
+          // In the search box a key that types a letter is text, never a shortcut.
           Keys.onPressed: function (event) {
-            if (event.key === Qt.Key_Down || event.key === Qt.Key_Tab) {
+            var keys = root.app.shortcuts
+            if (Keymap.matchesInText(keys, "list.down", event) || event.key === Qt.Key_Tab) {
               root.cursor = 0
               root.move(0)
               root.focusList()
-              event.accepted = true
-            } else if (event.key === Qt.Key_Escape) {
+            } else if (Keymap.matchesInText(keys, "list.clearSearch", event)) {
               if (search.text !== "") search.text = ""
               else root.scopeChatId = 0
               root.focusList()
-              event.accepted = true
-            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            } else if (Keymap.matchesInText(keys, "list.open", event)) {
               root.cursor = 0
               root.move(0)
               root.openCursor()
-              event.accepted = true
+            } else {
+              return
             }
+            event.accepted = true
           }
 
           Text {
             anchors.verticalCenter: parent.verticalCenter
             width: parent.width
             visible: search.text === ""
-            text: root.scopeChatId ? "Search in " + root.scopeTitle : "Search chats and messages   Ctrl+K"
+            text: root.scopeChatId ? "Search in " + root.scopeTitle
+                : "Search chats and messages   " + Keymap.label(Keymap.keysFor(root.app.shortcuts, "window.search")[0] || "")
             textFormat: Text.PlainText
             elide: Text.ElideRight
             color: app.muted
             opacity: 0.7
             font: search.font
+          }
+        }
+
+        // md-cog (U+F0493): settings, including every shortcut
+        Text {
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(12)
+          anchors.verticalCenter: parent.verticalCenter
+          text: String.fromCodePoint(0xF0493)
+          color: gearArea.containsMouse ? app.accent : app.muted
+          font.family: app.glyphFamily
+          font.pixelSize: Style.font.body
+          MouseArea {
+            id: gearArea
+            anchors.fill: parent
+            anchors.margins: -Style.space(6)
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.settingsRequested()
           }
         }
       }
@@ -326,22 +350,22 @@ FocusScope {
       WheelScroll { view: listView }
 
       Keys.onPressed: function (event) {
-        var key = event.key
-        var shift = event.modifiers & Qt.ShiftModifier
-        if (key === Qt.Key_Down || key === Qt.Key_J) root.move(1)
-        else if (key === Qt.Key_Up || key === Qt.Key_K) root.move(-1)
-        else if (key === Qt.Key_PageDown) root.move(10)
-        else if (key === Qt.Key_PageUp) root.move(-10)
-        else if (key === Qt.Key_Home || (key === Qt.Key_G && !shift)) { root.cursor = 0; root.move(0) }
-        else if (key === Qt.Key_End || key === Qt.Key_G) { root.cursor = root.rows.length - 1; root.move(0) }
-        else if (key === Qt.Key_Return || key === Qt.Key_Enter || key === Qt.Key_L || key === Qt.Key_Right) root.openCursor()
-        else if (key === Qt.Key_Slash) root.focusSearch()
-        else if (key === Qt.Key_Tab) root.toChat()
-        else if (key === Qt.Key_BracketLeft && !root.searchMode) root.tabStep(-1)
-        else if (key === Qt.Key_BracketRight && !root.searchMode) root.tabStep(1)
-        else if (key === Qt.Key_P && !root.searchMode && root.cursorChat()) root.pinRequested(root.cursorChat().id)
-        else if (key === Qt.Key_A && root.cursorChat()) root.archiveRequested(root.cursorChat().id)
-        else if (key === Qt.Key_Escape && search.text !== "") search.text = ""
+        var keys = root.app.shortcuts
+        function is(id) { return Keymap.matches(keys, id, event) }
+        if (is("list.down")) root.move(1)
+        else if (is("list.up")) root.move(-1)
+        else if (is("list.pageDown")) root.move(10)
+        else if (is("list.pageUp")) root.move(-10)
+        else if (is("list.first")) { root.cursor = 0; root.move(0) }
+        else if (is("list.last")) { root.cursor = root.rows.length - 1; root.move(0) }
+        else if (is("list.open")) root.openCursor()
+        else if (is("list.search")) root.focusSearch()
+        else if (is("list.toChat")) root.toChat()
+        else if (is("list.previousTab") && !root.searchMode) root.tabStep(-1)
+        else if (is("list.nextTab") && !root.searchMode) root.tabStep(1)
+        else if (is("list.pin") && !root.searchMode && root.cursorChat()) root.pinRequested(root.cursorChat().id)
+        else if (is("list.archive") && root.cursorChat()) root.archiveRequested(root.cursorChat().id)
+        else if (is("list.clearSearch") && search.text !== "") search.text = ""
         else return
         event.accepted = true
       }

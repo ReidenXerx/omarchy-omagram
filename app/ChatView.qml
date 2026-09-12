@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import QtQuick.Dialogs
 import qs.Commons
 import "Model.js" as Model
+import "Keymap.js" as Keymap
 
 // The open chat: messages and the composer.
 //
@@ -101,17 +102,22 @@ FocusScope {
     else root.focusComposer()
   }
 
-  Shortcut { sequence: "Ctrl+O"; enabled: !!root.chat; onActivated: root.attach(true) }
-  Shortcut { sequence: "Ctrl+Shift+O"; enabled: !!root.chat; onActivated: root.attach(false) }
-  Shortcut { sequence: "Ctrl+S"; enabled: !!root.chat; onActivated: root.toggleStickers() }
+  readonly property bool shortcutsOn: !!root.chat && !app.settingsOpen
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.attach"); enabled: root.shortcutsOn; onActivated: root.attach(true) }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.attachFiles"); enabled: root.shortcutsOn; onActivated: root.attach(false) }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.stickers"); enabled: root.shortcutsOn; onActivated: root.toggleStickers() }
   Shortcut {
-    sequence: "Ctrl+R"
-    enabled: !!root.chat && !videoNote.visible
+    sequences: Keymap.keysFor(app.shortcuts, "window.voice")
+    enabled: root.shortcutsOn && !videoNote.visible
     onActivated: root.recordingVoice ? root.stopVoice(true) : root.startVoice()
   }
-  Shortcut { sequence: "Ctrl+Shift+R"; enabled: !!root.chat && !root.recordingVoice; onActivated: videoNote.open(root.chat.id) }
-  Shortcut { sequences: ["Return", "Enter"]; enabled: root.recordingVoice; onActivated: root.stopVoice(true) }
-  Shortcut { sequence: "Escape"; enabled: root.recordingVoice; onActivated: root.stopVoice(false) }
+  Shortcut {
+    sequences: Keymap.keysFor(app.shortcuts, "window.videoNote")
+    enabled: root.shortcutsOn && !root.recordingVoice
+    onActivated: videoNote.open(root.chat.id)
+  }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "voice.send"); enabled: root.recordingVoice && !app.settingsOpen; onActivated: root.stopVoice(true) }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "voice.cancel"); enabled: root.recordingVoice && !app.settingsOpen; onActivated: root.stopVoice(false) }
 
   // ---------------------------------------------------------------- voice messages
 
@@ -360,34 +366,34 @@ FocusScope {
       onContentYChanged: if (contentY <= originY + Style.space(200) && count > 0 && (moving || activeFocus)) root.loadOlder()
 
       Keys.onPressed: function (event) {
-        var key = event.key
-        var m = root.selectedMessage
-        if (key === Qt.Key_Down || key === Qt.Key_J) {
+        var keys = root.app.shortcuts
+        var selected = root.selectedMessage
+        function is(id) { return Keymap.matches(keys, id, event) }
+        if (is("messages.down")) {
           root.cursor = Math.min(root.messages.length - 1, root.cursor + 1)
           root.stickToBottom = root.cursor === root.messages.length - 1
           positionViewAtIndex(root.cursor, ListView.Contain)
-          event.accepted = true
-        } else if (key === Qt.Key_Up || key === Qt.Key_K) {
+        } else if (is("messages.up")) {
           root.cursor = Math.max(0, root.cursor - 1)
           root.stickToBottom = false
           positionViewAtIndex(root.cursor, ListView.Contain)
           if (root.cursor < 5) root.loadOlder()
-          event.accepted = true
-        } else if (key === Qt.Key_R) { root.startReply(m); event.accepted = true }
-        else if (key === Qt.Key_E) { root.startEdit(m); event.accepted = true }
-        else if (key === Qt.Key_Y) { root.copy(m); event.accepted = true }
-        else if (key === Qt.Key_D || key === Qt.Key_Delete) { root.askDelete(m); event.accepted = true }
-        else if (key === Qt.Key_Return || key === Qt.Key_Enter || key === Qt.Key_O || key === Qt.Key_Space) {
+        } else if (is("messages.reply")) root.startReply(selected)
+        else if (is("messages.edit")) root.startEdit(selected)
+        else if (is("messages.copy")) root.copy(selected)
+        else if (is("messages.delete")) root.askDelete(selected)
+        else if (is("messages.play") || is("messages.open")) {
           var item = messageList.itemAtIndex(root.cursor)
           if (item && item.mediaItem && item.mediaItem.media) {
-            if (key === Qt.Key_Space) item.mediaItem.togglePlay()
+            if (is("messages.play")) item.mediaItem.togglePlay()
             else item.mediaItem.activate()
           }
-          event.accepted = true
         }
-        else if (key === Qt.Key_Escape || key === Qt.Key_I) { root.cursor = -1; root.focusComposer(); event.accepted = true }
-        else if (key === Qt.Key_Tab) { root.toList(); event.accepted = true }
-        else if (key === Qt.Key_End) { root.cursor = root.messages.length - 1; root.stickToBottom = true; positionViewAtEnd(); event.accepted = true }
+        else if (is("messages.toComposer")) { root.cursor = -1; root.focusComposer() }
+        else if (is("messages.toList")) root.toList()
+        else if (is("messages.last")) { root.cursor = root.messages.length - 1; root.stickToBottom = true; positionViewAtEnd() }
+        else return
+        event.accepted = true
       }
 
       delegate: Item {
@@ -638,27 +644,26 @@ FocusScope {
             }
 
             Keys.onPressed: function (event) {
-              var key = event.key
-              if ((key === Qt.Key_Return || key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
-                root.send()
-                event.accepted = true
-              } else if (key === Qt.Key_Escape) {
+              var keys = root.app.shortcuts
+              function is(id) { return Keymap.matchesInText(keys, id, event) }
+              if (is("composer.send")) root.send()
+              else if (is("composer.newLine")) composer.insert(composer.cursorPosition, "\n")
+              else if (is("composer.cancel")) {
                 if (root.editingId) { root.editingId = 0; composer.text = "" }
                 else if (root.replyToId) root.replyToId = 0
                 else root.focusMessages()
-                event.accepted = true
-              } else if (key === Qt.Key_Up && composer.text === "") {
-                root.startEdit(Model.lastOwnEditable(root.messages))
-                event.accepted = true
-              } else if (key === Qt.Key_Tab) {
-                root.focusMessages()
-                event.accepted = true
               }
+              else if (is("composer.editLast") && composer.text === "") root.startEdit(Model.lastOwnEditable(root.messages))
+              else if (is("composer.toMessages")) root.focusMessages()
+              else return
+              event.accepted = true
             }
 
             Text {
               visible: composer.text === ""
-              text: root.editing ? "Edit message" : "Message   Enter to send, Shift+Enter for a new line"
+              text: root.editing ? "Edit message"
+                  : "Message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.send")[0] || "") + " to send, "
+                    + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.newLine")[0] || "") + " for a new line"
               color: app.muted
               opacity: 0.7
               font: composer.font
@@ -679,10 +684,10 @@ FocusScope {
         Repeater {
           // md-paperclip U+F03E2, md-sticker-emoji U+F0785, md-video U+F0567, md-microphone U+F036C
           model: [
-            { glyph: String.fromCodePoint(0xF03E2), action: "attach", hint: "Attach photos or files   Ctrl+O" },
-            { glyph: String.fromCodePoint(0xF0785), action: "stickers", hint: "Stickers   Ctrl+S" },
-            { glyph: String.fromCodePoint(0xF0567), action: "video", hint: "Video message   Ctrl+Shift+R" },
-            { glyph: String.fromCodePoint(0xF036C), action: "voice", hint: "Voice message   Ctrl+R" }
+            { glyph: String.fromCodePoint(0xF03E2), action: "attach", hint: "Attach photos or files   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.attach")[0] || "") },
+            { glyph: String.fromCodePoint(0xF0785), action: "stickers", hint: "Stickers   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.stickers")[0] || "") },
+            { glyph: String.fromCodePoint(0xF0567), action: "video", hint: "Video message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.videoNote")[0] || "") },
+            { glyph: String.fromCodePoint(0xF036C), action: "voice", hint: "Voice message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.voice")[0] || "") }
           ]
           delegate: Item {
             id: composerButton
@@ -747,7 +752,8 @@ FocusScope {
           }
           Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: "Enter sends  ·  Esc cancels"
+            text: Keymap.label(Keymap.keysFor(app.shortcuts, "voice.send")[0] || "") + " sends  ·  "
+                  + Keymap.label(Keymap.keysFor(app.shortcuts, "voice.cancel")[0] || "") + " cancels"
             color: app.muted
             font.family: app.fontFamily
             font.pixelSize: Style.font.caption

@@ -6,6 +6,7 @@ import qs.Commons
 import qs.Ui
 import "../app"
 import "../app/Model.js" as Model
+import "../app/Keymap.js" as Keymap
 
 // Quick switch and reply, summoned with a key: find a chat by typing, read its latest
 // messages, answer, and be back where you were.
@@ -272,25 +273,19 @@ Item {
             onTextChanged: overlay.query = text
 
             Keys.onPressed: function (event) {
-              var ctrl = event.modifiers & Qt.ControlModifier
-              if (event.key === Qt.Key_Down || (ctrl && (event.key === Qt.Key_J || event.key === Qt.Key_N))) {
-                overlay.move(1)
-              } else if (event.key === Qt.Key_Up || (ctrl && (event.key === Qt.Key_K || event.key === Qt.Key_P))) {
-                overlay.move(-1)
-              } else if (event.key === Qt.Key_PageDown) {
-                overlay.move(8)
-              } else if (event.key === Qt.Key_PageUp) {
-                overlay.move(-8)
-              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                if (overlay.highlighted) overlay.reply(overlay.highlighted.id)
-              } else if (ctrl && event.key === Qt.Key_O) {
-                overlay.openInWindow()
-              } else if (event.key === Qt.Key_Escape) {
+              var keys = overlay.service ? overlay.service.shortcuts : ({})
+              function is(id) { return Keymap.matchesInText(keys, id, event) }
+              if (is("quick.down")) overlay.move(1)
+              else if (is("quick.up")) overlay.move(-1)
+              else if (is("quick.pageDown")) overlay.move(8)
+              else if (is("quick.pageUp")) overlay.move(-8)
+              else if (is("quick.reply")) { if (overlay.highlighted) overlay.reply(overlay.highlighted.id) }
+              else if (is("quick.openInWindow")) overlay.openInWindow()
+              else if (is("quick.close")) {
                 if (search.text !== "") search.text = ""
                 else overlay.dismiss()
-              } else {
-                return
               }
+              else return
               event.accepted = true
             }
 
@@ -493,17 +488,15 @@ Item {
                 readOnly: overlay.sending
 
                 Keys.onPressed: function (event) {
-                  var ctrl = event.modifiers & Qt.ControlModifier
-                  if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
+                  var keys = overlay.service ? overlay.service.shortcuts : ({})
+                  function is(id) { return Keymap.matchesInText(keys, id, event) }
+                  if (is("quickMessage.send")) {
                     if (overlay.replyChatId) overlay.send()
                     else if (overlay.highlighted) overlay.reply(overlay.highlighted.id)
-                  } else if (event.key === Qt.Key_Escape) {
-                    overlay.back()
-                  } else if (ctrl && event.key === Qt.Key_O) {
-                    overlay.openInWindow()
-                  } else {
-                    return
                   }
+                  else if (is("quickMessage.back")) overlay.back()
+                  else if (is("quickMessage.openInWindow")) overlay.openInWindow()
+                  else return
                   event.accepted = true
                 }
 

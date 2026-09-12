@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import "../app"
 import "../app/Model.js" as Model
+import Quickshell.Hyprland
 
 // Omagram inside Omarchy's shell: keeps the Telegram service running for as long as the
 // shell is, and holds the one connection the bar panel and the quick-reply overlay share.
@@ -21,6 +22,7 @@ Item {
   property var auth: ({ state: "connecting" })
   property var chats: []
   property real meId: 0
+  property var shortcuts: ({})   // your shortcut choices; Keymap.js has the defaults
   readonly property bool connected: client.connected
   readonly property bool ready: client.connected && service.auth.state === "ready"
   readonly property int unread: Model.unreadTotal(service.chats)
@@ -56,6 +58,7 @@ Item {
     onHello: function (result) {
       service.auth = result.auth || { state: "starting" }
       service.meId = result.meId || 0
+      service.shortcuts = result.settings ? (result.settings.shortcuts || ({})) : ({})
       service.chats = Model.sortChats(result.chats || [])
     }
 
@@ -63,6 +66,8 @@ Item {
       if (name === "auth") {
         service.auth = e.auth
         if (e.auth.state !== "ready") service.chats = []
+      } else if (name === "settings") {
+        service.shortcuts = e.settings ? (e.settings.shortcuts || ({})) : ({})
       } else if (name === "me") {
         service.meId = e.meId || 0
       } else if (name === "chat") {
@@ -73,6 +78,15 @@ Item {
     }
 
     onConnectedChanged: if (!connected) service.auth = { state: "connecting" }
+  }
+
+  // A Hyprland config reload drops runtime bindings: have the service register your global
+  // shortcuts again.
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (event && String(event.name) === "configreloaded") client.request("shortcuts.apply", {})
+    }
   }
 
   function request(cmd, args, callback) {

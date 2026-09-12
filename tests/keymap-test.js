@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Keymap.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.K = { SHIFT, CTRL, ALT, META, SECTIONS, ACTIONS, actionById, sectionOf, fromEvent, normalize, defaultsFor, keysFor, matches, matchesInText, matchesText, types, withKeys, conflicts, conflictsFor, label }", box)
+vm.runInNewContext(source + "\nthis.K = { SHIFT, CTRL, ALT, META, SECTIONS, ACTIONS, actionById, sectionOf, fromEvent, normalize, defaultsFor, keysFor, matches, matchesInText, matchesText, types, toHyprland, withKeys, conflicts, conflictsFor, label }", box)
 const K = box.K
 const plain = v => JSON.parse(JSON.stringify(v))
 const eq = (a, b, msg) => msg === undefined ? assert.deepStrictEqual(plain(a), plain(b)) : assert.deepStrictEqual(plain(a), plain(b), msg)
@@ -105,6 +105,14 @@ test("in a text field, keys that type are text", () => {
   assert.ok(!K.matchesInText(K.withKeys({}, "composer.send", ["Space"]), "composer.send", ev(KEY.SPACE, 0)))
   assert.ok(K.types("?") && K.types("Shift+G") && K.types("Space") && !K.types("Ctrl+G") && !K.types("Esc"))
   assert.ok(K.matchesText({}, "panel.reply", "r") && !K.matchesText({}, "panel.reply", "x") && !K.matchesText({}, "panel.reply", ""))
+})
+
+test("combinations for Hyprland", () => {
+  assert.strictEqual(K.toHyprland("Meta+Alt+M"), "SUPER + ALT + M")
+  assert.strictEqual(K.toHyprland("Ctrl+Shift+,"), "CTRL + COMMA", "shift is part of a punctuation key")
+  assert.strictEqual(K.toHyprland("Ctrl+Shift+PgDown"), "CTRL + SHIFT + PAGE_DOWN")
+  assert.strictEqual(K.toHyprland("Alt+F13"), "ALT + F13")
+  for (const bad of ["M", "Shift+A", "Meta+F30", "Ctrl++", "nonsense"]) assert.strictEqual(K.toHyprland(bad), "", bad)
 })
 
 test("labels for people", () => {
