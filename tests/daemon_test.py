@@ -1012,6 +1012,111 @@ class ChatsAndAccount(Harness):
         self.assertEqual(q["forum_topic_id"], 5)
 
 
+class Extras(Harness):
+    def setUp(self):
+        super().setUp()
+        self.conn = self.connect()
+        self.sign_in(self.conn)
+        for update in (
+            {"@type": "updateUser", "user": {"@type": "user", "id": 500, "first_name": "Ann"}},
+            {"@type": "updateNewChat", "chat": {"@type": "chat", "id": 500, "title": "Ann", "type": {"@type": "chatTypePrivate", "user_id": 500}}},
+            {"@type": "updateSecretChat", "secret_chat": {"@type": "secretChat", "id": 9, "user_id": 500, "is_outbound": True,
+                                                          "state": {"@type": "secretChatStateReady"},
+                                                          "key_hash": base64.b64encode(bytes(range(36))).decode()}},
+            {"@type": "updateNewChat", "chat": {"@type": "chat", "id": -9, "title": "Ann",
+                                                "type": {"@type": "chatTypeSecret", "secret_chat_id": 9, "user_id": 500}}},
+        ):
+            self.td_event(dict(update, **{"@client_id": 1}))
+        self.secret_chat = self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == -9)["chat"]
+
+    def test_silent_and_scheduled_sending(self):
+        sent = {"@type": "message", "id": 1, "chat_id": 500}
+        q, _ = self.call(1, "message.send", "sendMessage", sent, chatId=500, text="shh", silent=True)
+        self.assertEqual((q["options"]["disable_notification"], q["options"]["scheduling_state"]), (True, None))
+        later = int(time.time()) + 3600
+        q, _ = self.call(2, "message.send", "sendMessage", sent, chatId=500, text="later", sendAt=later)
+        self.assertEqual(q["options"]["scheduling_state"], {"@type": "messageSchedulingStateSendAtDate", "send_date": later, "repeat_period": 0})
+        q, _ = self.call(3, "message.send", "sendMessage", sent, chatId=500, text="online", sendAt=-1)
+        self.assertEqual(q["options"]["scheduling_state"], {"@type": "messageSchedulingStateSendWhenOnline"})
+        q, _ = self.call(4, "message.send", "sendMessage", sent, chatId=500, text="now")
+        self.assertIsNone(q["options"])
+        for rid, bad in enumerate(({"sendAt": int(time.time()) - 60}, {"sendAt": int(time.time()) + 400 * 86400},
+                                   {"silent": "yes"}, {"sendAt": -2}), start=5):
+            self.assertFalse(self.request(self.conn, rid, "message.send", chatId=500, text="x", **bad)["ok"], bad)
+        _, r = self.call(10, "chat.scheduled", "getChatScheduledMessages", {"@type": "messages", "messages": [
+            {"@type": "message", "id": 77, "chat_id": 500, "content": {"@type": "messageText", "text": {"text": "later"}},
+             "scheduling_state": {"@type": "messageSchedulingStateSendAtDate", "send_date": later}}]}, chatId=500)
+        self.assertEqual(r["result"]["messages"][0]["sendAt"], later)
+        q, _ = self.call(11, "message.reschedule", "editMessageSchedulingState", {"@type": "ok"}, chatId=500, messageId=77, sendAt=0)
+        self.assertIsNone(q["scheduling_state"], "0 sends it now")
+        q, _ = self.call(12, "message.reschedule", "editMessageSchedulingState", {"@type": "ok"}, chatId=500, messageId=77, sendAt=later + 60)
+        self.assertEqual(q["scheduling_state"]["send_date"], later + 60)
+
+    def test_translation(self):
+        q, r = self.call(20, "message.translate", "translateMessageText", {"@type": "formattedText", "text": "hello", "entities": []},
+                         chatId=500, messageId=7, to="en")
+        self.assertEqual((q["to_language_code"], q["tone"], r["result"]), ("en", "", {"text": "hello", "entities": [], "to": "en"}))
+        self.assertFalse(self.request(self.conn, 21, "message.translate", chatId=500, messageId=7, to="english please")["ok"])
+
+    def gif(self, fid):
+        return {"@type": "animation", "duration": 3, "width": 320, "height": 240, "mime_type": "video/mp4",
+                "animation": {"@type": "file", "id": fid, "size": 1000, "local": {}}}
+
+    def test_gifs_saved_found_through_the_gif_bot_and_sent(self):
+        _, r = self.call(30, "gifs.saved", "getSavedAnimations", {"@type": "animations", "animations": [self.gif(41), "junk"]})
+        self.assertEqual([g["file"]["id"] for g in r["result"]["gifs"]], [41])
+        before = self.sent_count("searchPublicChat")
+        self.send(self.conn, {"id": 31, "cmd": "gifs.search", "args": {"chatId": 500, "query": "cats"}})
+        q = self.next_query("searchPublicChat", before)
+        self.assertEqual(q["username"], "gif")
+        before = self.sent_count("getInlineQueryResults")
+        self.answer(q, {"@type": "chat", "id": 101, "type": {"@type": "chatTypePrivate", "user_id": 101}})
+        q = self.next_query("getInlineQueryResults", before)
+        self.assertEqual((q["bot_user_id"], q["chat_id"], q["query"]), (101, 500, "cats"))
+        self.answer(q, {"@type": "inlineQueryResults", "inline_query_id": "123456789", "next_offset": "25", "results": [
+            {"@type": "inlineQueryResultAnimation", "id": "r1", "animation": self.gif(42)}, {"@type": "inlineQueryResultPhoto", "id": "p"}]})
+        r = self.read(self.conn, lambda v: v.get("id") == 31)["result"]
+        self.assertEqual((r["queryId"], r["nextOffset"], [x["id"] for x in r["results"]]), ("123456789", "25", ["r1"]))
+        lookups = self.sent_count("searchPublicChat")
+        q, _ = self.call(32, "gifs.search", "getInlineQueryResults", {"@type": "inlineQueryResults", "inline_query_id": "5", "results": []},
+                         chatId=500, query="dogs", offset="25")
+        self.assertEqual((self.sent_count("searchPublicChat"), q["offset"]), (lookups, "25"), "the bot is looked up once")
+        q, _ = self.call(33, "message.sendGif", "sendInlineQueryResultMessage", {"@type": "message", "id": 5, "chat_id": 500},
+                         chatId=500, queryId="123456789", resultId="r1")
+        self.assertEqual((q["query_id"], q["result_id"], q["hide_via_bot"]), (123456789, "r1", True))
+        q, _ = self.call(34, "message.sendGif", "sendMessage", {"@type": "message", "id": 6, "chat_id": 500},
+                         chatId=500, fileId=41, width=320, height=240, duration=3)
+        self.assertEqual(q["input_message_content"]["animation"]["animation"], {"@type": "inputFileId", "id": 41})
+        self.assertFalse(self.request(self.conn, 35, "message.sendGif", chatId=500, queryId="x", resultId="r1")["ok"])
+
+    def test_custom_emoji_secret_chats_and_calls(self):
+        sticker = {"@type": "sticker", "id": "1", "width": 100, "height": 100, "emoji": "😀", "format": {"@type": "stickerFormatWebp"},
+                   "full_type": {"@type": "stickerFullTypeCustomEmoji", "custom_emoji_id": "5368324170671202286"},
+                   "sticker": {"@type": "file", "id": 88, "size": 900, "local": {}}}
+        q, r = self.call(40, "customEmoji.get", "getCustomEmojiStickers", {"@type": "stickers", "stickers": [sticker, "junk"]},
+                         ids=["5368324170671202286"])
+        self.assertEqual((q["custom_emoji_ids"], r["result"]["emoji"][0]["id"], r["result"]["emoji"][0]["file"]["id"]),
+                         ([5368324170671202286], "5368324170671202286", 88))
+        for rid, bad in enumerate(([], ["x"], [5], ["9" * 25]), start=41):
+            self.assertFalse(self.request(self.conn, rid, "customEmoji.get", ids=bad)["ok"], bad)
+        self.assertEqual(self.secret_chat["secret"], {"state": "ready", "outbound": True})
+        self.assertNotIn("keyHash", json.dumps(self.secret_chat), "the key fingerprint is on the info page only")
+        _, r = self.call(46, "chat.info", "getUserFullInfo", {"@type": "userFullInfo"}, chatId=-9)
+        self.assertEqual(r["result"]["keyHash"].split()[:2], ["00010203", "04050607"])
+        q, r = self.call(47, "secret.create", "createNewSecretChat", {"@type": "chat", "id": -10}, userId=500)
+        self.assertEqual((q["user_id"], r["result"]), (500, {"chatId": -10}))
+        q, _ = self.call(48, "secret.close", "closeSecretChat", {"@type": "ok"}, chatId=-9)
+        self.assertEqual(q["secret_chat_id"], 9)
+        self.assertFalse(self.request(self.conn, 49, "secret.close", chatId=500)["ok"], "not a secret chat")
+        self.td_event({"@type": "updateCall", "@client_id": 1, "call": {"@type": "call", "id": 3, "user_id": 500, "is_outgoing": False,
+                                                                        "is_video": True, "state": {"@type": "callStatePending"}}})
+        call = self.read(self.conn, lambda v: v.get("event") == "call")["call"]
+        self.assertEqual((call["id"], call["name"], call["video"], call["state"]), (3, "Ann", True, "pending"))
+        self.assertEqual([c["id"] for c in self.request(self.conn, 50, "hello")["result"]["calls"]], [3], "a window opened now sees it")
+        q, _ = self.call(51, "call.decline", "discardCall", {"@type": "ok"}, callId=3)
+        self.assertEqual((q["call_id"], q["is_video"], q["duration"]), (3, True, 0))
+
+
 class Recording(Harness):
     """Voice and video messages with the recorder and converter faked: no microphone,
     camera or ffmpeg is used."""

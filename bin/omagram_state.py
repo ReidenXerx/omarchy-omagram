@@ -28,6 +28,10 @@ GROUPS_MAX = 20000
 MEMBER_STATUSES = {"chatMemberStatusCreator": "owner", "chatMemberStatusAdministrator": "admin",
                    "chatMemberStatusMember": "member", "chatMemberStatusRestricted": "restricted",
                    "chatMemberStatusLeft": "left", "chatMemberStatusBanned": "banned"}
+SECRET_STATES = {"secretChatStatePending": "pending", "secretChatStateReady": "ready", "secretChatStateClosed": "closed"}
+CALL_STATES = {"callStatePending": "pending", "callStateExchangingKeys": "connecting", "callStateReady": "ready",
+               "callStateHangingUp": "ending", "callStateDiscarded": "ended", "callStateError": "failed"}
+CALLS_MAX = 16
 
 ENTITY_TYPES = {
     "textEntityTypeBold": "bold",
@@ -147,6 +151,8 @@ def formatted(value):
             item["userId"] = _int(kind.get("user_id"))
         elif name == "preCode":
             item["language"] = _str(kind.get("language"), 64)
+        elif name == "customEmoji":
+            item["customEmojiId"] = str(_int(kind.get("custom_emoji_id")))
         entities.append(item)
     return text, entities
 
@@ -375,6 +381,30 @@ def formatted_view(value):
 def topic_id(value):
     """The forum topic a message is in, or 0 when it is not in one."""
     return max(0, _int(_obj(value, "messageTopicForum").get("forum_topic_id")))
+
+
+def scheduled_at(value):
+    """When a scheduled message goes out: its date, -1 once the other person is online, 0 when it
+    is not scheduled."""
+    s = _obj(value)
+    t = s.get("@type")
+    if t in ("messageSchedulingStateSendAtDate", "messageSchedulingStateSendWhenVideoProcessed"):
+        return max(1, _int(s.get("send_date")))
+    return -1 if t == "messageSchedulingStateSendWhenOnline" else 0
+
+
+def key_hash_view(value):
+    """A secret chat's key fingerprint as groups of hex, to compare with the other device."""
+    import base64
+    import binascii
+    if not isinstance(value, str) or not 0 < len(value) <= 256:
+        return ""
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return ""
+    hexed = raw[:32].hex()
+    return " ".join(hexed[i:i + 8] for i in range(0, len(hexed), 8))
 
 
 SESSION_DEVICES = ("android", "apple", "brave", "chrome", "edge", "firefox", "ipad", "iphone", "linux", "mac", "opera",
@@ -667,6 +697,8 @@ class State:
         self.users = {}
         self.basic_groups = {}     # basic group id -> {"memberCount", "status"}
         self.supergroups = {}      # supergroup id -> {"memberCount", "status", "username", "forum"}
+        self.secret_chats = {}     # secret chat id -> {"state", "outbound", "userId", "keyHash"}
+        self.calls = {}            # call id -> the call as the "call" event shows it, while it lasts
         self.me_id = 0
         self.folders = []          # [{"id", "name", "icon"}] in Telegram's order
         self.main_position = 0     # where "All chats" sits among the folders
@@ -724,6 +756,7 @@ class State:
             "views": views,
             "markup": reply_markup(m.get("reply_markup")),
             "topicId": topic_id(m.get("topic_id")),
+            "sendAt": scheduled_at(m.get("scheduling_state")),
         }
         reply = _obj(m.get("reply_to"), "messageReplyToMessage")
         if reply:
@@ -878,6 +911,7 @@ class State:
             return None
         main = chat["positions"].get("main", {})
         group = self.group_of(chat)
+        secret = self.secret_chats.get(chat["secretChatId"]) if chat["secretChatId"] else None
         return {
             "id": chat["id"],
             "title": chat["title"],
@@ -908,6 +942,10 @@ class State:
             "myStatus": group.get("status", ""),
             "username": group.get("username", "") if chat["supergroupId"] else self.users.get(chat["userId"], {}).get("username", ""),
             "forum": group.get("forum", False),
+            "hasScheduled": chat["hasScheduled"],
+            # A secret chat: pending until the other side accepts, then ready, or closed. Its key
+            # fingerprint is for the info page only.
+            "secret": {"state": secret["state"], "outbound": secret["outbound"]} if secret else None,
         }
 
     def chat_list(self, key="main", limit=LIST_MAX):
@@ -947,6 +985,8 @@ class State:
             "userId": _int(kind_obj.get("user_id")),
             "basicGroupId": _int(kind_obj.get("basic_group_id")),
             "supergroupId": _int(kind_obj.get("supergroup_id")),
+            "secretChatId": _int(kind_obj.get("secret_chat_id")),
+            "hasScheduled": c.get("has_scheduled_messages") is True,
             "markedUnread": c.get("is_marked_as_unread") is True,
             "unread": max(0, _int(c.get("unread_count"))),
             "mentions": max(0, _int(c.get("unread_mention_count"))),
@@ -1079,6 +1119,39 @@ class State:
                                                  "username": _str(usernames[0], NAME_MAX) if usernames else "",
                                                  "forum": g.get("is_forum") is True})
         return self._group_chat_events("supergroupId", gid)
+
+    def _on_updateChatHasScheduledMessages(self, u):
+        chat = self._chat(_int(u.get("chat_id")))
+        if not chat:
+            return []
+        chat["hasScheduled"] = u.get("has_scheduled_messages") is True
+        return self._chat_event(chat["id"])
+
+    def _on_updateSecretChat(self, u):
+        s = _obj(u.get("secret_chat"), "secretChat")
+        sid = _int(s.get("id"))
+        if sid <= 0:
+            return []
+        self._keep_group(self.secret_chats, sid, {"state": SECRET_STATES.get(_obj(s.get("state")).get("@type"), "pending"),
+                                                  "outbound": s.get("is_outbound") is True, "userId": _int(s.get("user_id")),
+                                                  "keyHash": key_hash_view(s.get("key_hash"))})
+        return self._group_chat_events("secretChatId", sid)
+
+    def _on_updateCall(self, u):
+        c = _obj(u.get("call"), "call")
+        cid = _int(c.get("id"))
+        if cid <= 0:
+            return []
+        uid = _int(c.get("user_id"))
+        view = {"id": cid, "userId": uid, "name": self.user_name(uid), "outgoing": c.get("is_outgoing") is True,
+                "video": c.get("is_video") is True, "state": CALL_STATES.get(_obj(c.get("state")).get("@type"), "pending")}
+        if view["state"] in ("ended", "failed"):
+            self.calls.pop(cid, None)
+        else:
+            self.calls[cid] = view
+            while len(self.calls) > CALLS_MAX:
+                del self.calls[next(iter(self.calls))]
+        return [{"event": "call", "call": view}]
 
     def _on_updateChatFolders(self, u):
         folders = []

@@ -235,7 +235,7 @@ def tdlib_parameters(api_id, api_hash, db_key, version):
         "use_file_database": True,
         "use_chat_info_database": True,
         "use_message_database": True,
-        "use_secret_chats": False,
+        "use_secret_chats": True,
         "api_id": api_id,
         "api_hash": api_hash,
         "system_language_code": language_code(),

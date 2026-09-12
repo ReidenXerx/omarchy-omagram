@@ -234,6 +234,11 @@ NEW_MEMBERS_MAX = 200
 SESSION_ID = re.compile(r"-?[0-9]{1,19}")
 QR_LINK = re.compile(r"tg://login\?token=[A-Za-z0-9_=-]{1,512}")
 QR_PNG_MAX = 256 * 1024
+SCHEDULE_MAX = 366 * 24 * 3600          # a message is scheduled at most a year ahead
+TRANSLATE_TO = re.compile(r"[a-z]{2,3}(-[A-Za-z0-9]{2,8})?")
+GIF_BOT = "gif"                          # the inline bot Telegram's own apps search GIFs with
+CUSTOM_EMOJI_MAX = 200
+INT64_ID = re.compile(r"-?[0-9]{1,19}")
 
 
 def arg_int(args, name, low=None, high=None, default=None):
@@ -352,6 +357,7 @@ class Daemon:
         self.prefs = prefs.load()   # your shortcuts, as stored in ~/.config/omagram/settings.json
         self.global_status = {action: "off" for action in prefs.GLOBALS}
         self.children = {}   # detached helpers still running: pid -> what to do if they fail
+        self.gif_bot_id = 0  # the @gif inline bot, once looked up
         self.state = model.State(td.MEDIA_ROOTS)
         self.td = None
         self.auth = {"state": "starting"}
@@ -559,7 +565,20 @@ class Daemon:
         if event.get("@type") == "updateNotificationGroup":
             self.on_notification_group(event)
         for out in self.state.apply(event):
+            if out.get("event") == "call":
+                self.on_call(out["call"])
             self.broadcast(out)
+
+    def on_call(self, call):
+        """Calls cannot be answered here -- TDLib brings no voice engine -- so an incoming one is
+        announced, to be taken in another Telegram app, and the note goes when the call ends."""
+        if call["outgoing"]:
+            return
+        if call["state"] == "pending":
+            kind = "video call" if call["video"] else "call"
+            self.notifier.show(call["userId"], call["name"] or "Someone", f"Incoming {kind}: answer it in another Telegram app")
+        elif call["state"] in ("ended", "failed"):
+            self.notifier.withdraw(call["userId"])
 
     def on_auth(self, value):
         kind = model._obj(value).get("@type")
@@ -886,7 +905,7 @@ class Daemon:
         answer = {"version": VERSION, "auth": self.auth, "meId": self.state.me_id,
                   "chats": self.state.chat_list("main", 100), "open": target,
                   "folders": self.state.folders, "mainPosition": self.state.main_position,
-                  "settings": self.prefs, "globalStatus": self.global_status}
+                  "settings": self.prefs, "globalStatus": self.global_status, "calls": list(self.state.calls.values())}
         if client.window:
             answer["allChats"] = self.state.all_chats()   # the window's tabs need every list
         self.respond(client, rid, answer)
@@ -960,7 +979,7 @@ class Daemon:
     def cmd_message_forward(self, client, rid, args):
         self.td_send({"@type": "forwardMessages", "chat_id": arg_int(args, "chatId"), "topic_id": self.topic_of(args),
                       "from_chat_id": arg_int(args, "fromChatId"), "message_ids": arg_ids(args, "messageIds"),
-                      "options": None, "send_copy": args.get("sendCopy") is True, "remove_caption": False},
+                      "options": self.send_options(args), "send_copy": args.get("sendCopy") is True, "remove_caption": False},
                      client, rid, lambda event: {"count": len(model._list(event.get("messages"), 100))})
 
     def cmd_message_properties(self, client, rid, args):
@@ -1214,10 +1233,12 @@ class Daemon:
 
             def person(event):
                 bot = model._obj(event.get("bot_info"), "botInfo")
+                secret = self.state.secret_chats.get(chat["secretChatId"], {}) if chat["secretChatId"] else {}
                 return dict(base, userId=chat["userId"], username=user.get("username", ""), phone=user.get("phone", ""),
                             bio=model.formatted_view(event.get("bio")),
                             botDescription=model._str(bot.get("description"), model.DESCRIPTION_MAX),
-                            commonGroups=max(0, model._int(event.get("group_in_common_count"))))
+                            commonGroups=max(0, model._int(event.get("group_in_common_count"))),
+                            keyHash=secret.get("keyHash", ""))
             self.td_send({"@type": "getUserFullInfo", "user_id": chat["userId"]}, client, rid, person)
         elif chat["basicGroupId"]:
             def group(event):
@@ -1431,12 +1452,140 @@ class Daemon:
                       "offset": arg_int(args, "offset", -99, 0, 0), "limit": arg_int(args, "limit", 1, 100, 50)},
                      client, rid, messages)
 
+    # ---------------------------------------------------------------- scheduled messages, translation
+
+    def cmd_chat_scheduled(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+
+        def scheduled(event):
+            found = [self.state.message(m) for m in model._list(event.get("messages"), 100)]
+            return {"chatId": chat_id, "messages": [m for m in found if m]}
+        self.td_send({"@type": "getChatScheduledMessages", "chat_id": chat_id}, client, rid, scheduled)
+
+    def cmd_message_reschedule(self, client, rid, args):
+        """Another time for a scheduled message: a date, -1 once the other person is online, 0 now."""
+        options = self.send_options({"sendAt": args.get("sendAt", 0)})
+        self.td_send({"@type": "editMessageSchedulingState", "chat_id": arg_int(args, "chatId"),
+                      "message_id": arg_int(args, "messageId", 1),
+                      "scheduling_state": options["scheduling_state"] if options else None}, client, rid)
+
+    def cmd_message_translate(self, client, rid, args):
+        to = args.get("to") or td.language_code().split("-")[0]
+        if not isinstance(to, str) or not TRANSLATE_TO.fullmatch(to):
+            raise BadRequest("to is a language code, like en or pt-BR")
+        self.td_send({"@type": "translateMessageText", "chat_id": arg_int(args, "chatId"),
+                      "message_id": arg_int(args, "messageId", 1), "to_language_code": to, "tone": ""},
+                     client, rid, lambda event: dict(model.formatted_view(event), to=to))
+
+    # ---------------------------------------------------------------- GIFs and custom emoji
+
+    def gif_views(self, animations):
+        views = (model.media_for("gif", {"animation": raw}, self.state.files_root) for raw in animations)
+        return [v for v in views if v is not None]
+
+    def cmd_gifs_saved(self, client, rid, args):
+        self.td_send({"@type": "getSavedAnimations"}, client, rid,
+                     lambda event: {"gifs": self.gif_views(model._list(event.get("animations"), STICKERS_MAX))})
+
+    def cmd_gifs_search(self, client, rid, args):
+        """GIFs found the way Telegram's own apps find them: through the @gif inline bot."""
+        chat_id = arg_int(args, "chatId")
+        query = arg_str(args, "query", QUERY_MAX, 0)
+        offset = args.get("offset", "")
+        if not isinstance(offset, str) or len(offset) > OFFSET_MAX:
+            raise BadRequest("offset is the text a previous search returned")
+
+        def results(event):
+            found = []
+            for raw in model._list(event.get("results"), 100):
+                r = model._obj(raw, "inlineQueryResultAnimation")
+                result_id = model._str(r.get("id"), 64)
+                view = model.media_for("gif", {"animation": r.get("animation")}, self.state.files_root) if r else None
+                if result_id and view is not None:
+                    found.append({"id": result_id, "gif": view})
+            return {"queryId": str(model._int(event.get("inline_query_id"))),
+                    "nextOffset": model._str(event.get("next_offset"), OFFSET_MAX), "results": found}
+
+        def search(bot_id):
+            self.td_send({"@type": "getInlineQueryResults", "bot_user_id": bot_id, "chat_id": chat_id, "user_location": None,
+                          "query": query, "offset": offset}, client, rid, results)
+
+        def unavailable(_event=None):
+            self.respond_error(client, rid, "GIF search is not available")
+
+        def found_bot(chat):
+            bot_id = model._int(model._obj(chat.get("type")).get("user_id"))
+            if not bot_id:
+                unavailable()
+                return
+            self.gif_bot_id = bot_id
+            search(bot_id)
+
+        if self.gif_bot_id:
+            search(self.gif_bot_id)
+        else:
+            self.td_send({"@type": "searchPublicChat", "username": GIF_BOT}, transform=found_bot, failed=unavailable)
+
+    def cmd_message_send_gif(self, client, rid, args):
+        """A GIF from a search (queryId and resultId) or one of yours (fileId)."""
+        chat_id = arg_int(args, "chatId")
+        if args.get("queryId") is not None:
+            query_id, result_id = args.get("queryId"), args.get("resultId")
+            if (not isinstance(query_id, str) or not INT64_ID.fullmatch(query_id) or not -2 ** 63 <= int(query_id) < 2 ** 63
+                    or not isinstance(result_id, str) or not 0 < len(result_id) <= 64):
+                raise BadRequest("queryId and resultId come from gifs.search")
+            self.td_send({"@type": "sendInlineQueryResultMessage", "chat_id": chat_id, "topic_id": self.topic_of(args),
+                          "reply_to": self.reply_to(args), "options": self.send_options(args), "query_id": int(query_id),
+                          "result_id": result_id, "hide_via_bot": True}, client, rid, self.state.message)
+            return
+        animation = {"@type": "inputAnimation", "animation": {"@type": "inputFileId", "id": arg_int(args, "fileId", 1, FILE_ID_MAX)},
+                     "thumbnail": None, "added_sticker_file_ids": [], "duration": arg_int(args, "duration", 0, 86400, 0),
+                     "width": arg_int(args, "width", 0, 10000, 0), "height": arg_int(args, "height", 0, 10000, 0)}
+        self.send_content(client, rid, chat_id, {"@type": "inputMessageAnimation", "animation": animation, "caption": None,
+                                                 "show_caption_above_media": False, "has_spoiler": False}, args)
+
+    def cmd_custom_emoji(self, client, rid, args):
+        """The stickers custom emoji are drawn with, by their ids (as text: they are int64)."""
+        ids = args.get("ids")
+        if (not isinstance(ids, list) or not 1 <= len(ids) <= CUSTOM_EMOJI_MAX
+                or any(not isinstance(i, str) or not INT64_ID.fullmatch(i) or not -2 ** 63 <= int(i) < 2 ** 63 for i in ids)):
+            raise BadRequest("ids is a list of custom emoji ids, as text")
+
+        def stickers(event):
+            found = []
+            for raw in model._list(event.get("stickers"), CUSTOM_EMOJI_MAX):
+                s = model._obj(raw, "sticker")
+                full = model._obj(s.get("full_type"), "stickerFullTypeCustomEmoji")
+                view = model.media_for("sticker", {"sticker": s}, self.state.files_root) if full else None
+                if view is not None:
+                    found.append(dict(view, id=str(model._int(full.get("custom_emoji_id")))))
+            return {"emoji": found}
+        self.td_send({"@type": "getCustomEmojiStickers", "custom_emoji_ids": [int(i) for i in ids]}, client, rid, stickers)
+
+    # ---------------------------------------------------------------- secret chats and calls
+
+    def cmd_secret_create(self, client, rid, args):
+        self.td_send({"@type": "createNewSecretChat", "user_id": arg_int(args, "userId", 1)}, client, rid,
+                     lambda chat: {"chatId": model._int(chat.get("id"))})
+
+    def cmd_secret_close(self, client, rid, args):
+        chat = self.state.chats.get(arg_int(args, "chatId"))
+        if chat is None or not chat["secretChatId"]:
+            raise BadRequest("that is not a secret chat")
+        self.td_send({"@type": "closeSecretChat", "secret_chat_id": chat["secretChatId"]}, client, rid)
+
+    def cmd_call_decline(self, client, rid, args):
+        call_id = arg_int(args, "callId", 1, INT32_MAX)
+        self.td_send({"@type": "discardCall", "call_id": call_id, "is_disconnected": False, "invite_link": "", "duration": 0,
+                      "is_video": self.state.calls.get(call_id, {}).get("video", False), "connection_id": 0}, client, rid)
+
     # ---------------------------------------------------------------- voice and video messages
 
     def reply_args(self, args):
-        picked = {k: args[k] for k in ("replyToMessageId", "topicId") if k in args}
+        picked = {k: args[k] for k in ("replyToMessageId", "topicId", "silent", "sendAt") if k in args}
         self.reply_to(picked)   # checked now, before any recording is used up
         self.topic_of(picked)
+        self.send_options(picked)
         return picked
 
     def cmd_voice_start(self, client, rid, args):
@@ -1669,9 +1818,30 @@ class Daemon:
             return None
         return {"@type": "messageTopicForum", "forum_topic_id": arg_int(args, "topicId", 1, INT32_MAX)}
 
+    def send_options(self, args):
+        """How a message goes out: silently, and at a date (sendAt, in seconds) or once the other
+        person is online (sendAt -1). None when neither is asked for."""
+        silent = args.get("silent", False)
+        if not isinstance(silent, bool):
+            raise BadRequest("silent is true or false")
+        send_at = arg_int(args, "sendAt", -1, None, 0)
+        if send_at > 0 and not time.time() + 10 <= send_at <= time.time() + SCHEDULE_MAX:
+            raise BadRequest("a message can be scheduled from now to a year ahead")
+        if not silent and not send_at:
+            return None
+        scheduling = None
+        if send_at > 0:
+            scheduling = {"@type": "messageSchedulingStateSendAtDate", "send_date": send_at, "repeat_period": 0}
+        elif send_at == -1:
+            scheduling = {"@type": "messageSchedulingStateSendWhenOnline"}
+        return {"@type": "messageSendOptions", "suggested_post_info": None, "disable_notification": silent,
+                "from_background": False, "protect_content": False, "allow_paid_broadcast": False, "paid_message_star_count": 0,
+                "update_order_of_installed_sticker_sets": False, "scheduling_state": scheduling, "effect_id": 0,
+                "sending_id": 0, "only_preview": False}
+
     def send_content(self, client, rid, chat_id, content, args):
         self.td_send({"@type": "sendMessage", "chat_id": chat_id, "topic_id": self.topic_of(args), "reply_to": self.reply_to(args),
-                      "options": None, "reply_markup": None, "input_message_content": content},
+                      "options": self.send_options(args), "reply_markup": None, "input_message_content": content},
                      client, rid, self.state.message)
 
     def cmd_message_send(self, client, rid, args):
@@ -1857,6 +2027,16 @@ COMMANDS = {
     "storage.clear": ("cmd_storage_clear", True),
     "topics.list": ("cmd_topics_list", True),
     "topic.history": ("cmd_topic_history", True),
+    "chat.scheduled": ("cmd_chat_scheduled", True),
+    "message.reschedule": ("cmd_message_reschedule", True),
+    "message.translate": ("cmd_message_translate", True),
+    "gifs.saved": ("cmd_gifs_saved", True),
+    "gifs.search": ("cmd_gifs_search", True),
+    "message.sendGif": ("cmd_message_send_gif", True),
+    "customEmoji.get": ("cmd_custom_emoji", True),
+    "secret.create": ("cmd_secret_create", True),
+    "secret.close": ("cmd_secret_close", True),
+    "call.decline": ("cmd_call_decline", True),
     "settings.set": ("cmd_settings_set", False),
     "shortcuts.apply": ("cmd_shortcuts_apply", False),
     "voice.start": ("cmd_voice_start", True),

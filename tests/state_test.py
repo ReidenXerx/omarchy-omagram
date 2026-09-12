@@ -500,6 +500,30 @@ class GroupsAndTopics(unittest.TestCase):
         self.assertIsNone(model.session_view("junk"))
 
 
+class Extras(unittest.TestCase):
+    def test_custom_emoji_scheduled_messages_secret_chats_and_calls(self):
+        _, entities = model.formatted({"@type": "formattedText", "text": "hi 😀", "entities": [
+            {"@type": "textEntity", "offset": 3, "length": 2,
+             "type": {"@type": "textEntityTypeCustomEmoji", "custom_emoji_id": "5368324170671202286"}}]})
+        self.assertEqual(entities, [{"type": "customEmoji", "offset": 3, "length": 2, "customEmojiId": "5368324170671202286"}])
+        s = model.State()
+        later = s.message(text_message(5, 1, "later", scheduling_state={"@type": "messageSchedulingStateSendAtDate", "send_date": 1789999999}))
+        online = s.message(text_message(6, 1, "hi", scheduling_state={"@type": "messageSchedulingStateSendWhenOnline"}))
+        self.assertEqual((later["sendAt"], online["sendAt"], s.message(text_message(7, 1, "now"))["sendAt"]), (1789999999, -1, 0))
+        s.apply({"@type": "updateNewChat", "chat": chat(-9, "Ann", kind={"@type": "chatTypeSecret", "secret_chat_id": 9, "user_id": 7})})
+        events = s.apply({"@type": "updateSecretChat", "secret_chat": {"@type": "secretChat", "id": 9, "user_id": 7, "is_outbound": False,
+                                                                       "state": {"@type": "secretChatStatePending"}, "key_hash": "not base64!"}})
+        self.assertEqual(events[0]["chat"]["secret"], {"state": "pending", "outbound": False})
+        self.assertEqual(s.secret_chats[9]["keyHash"], "")
+        s.apply({"@type": "updateChatHasScheduledMessages", "chat_id": -9, "has_scheduled_messages": True})
+        self.assertTrue(s.chat_view(-9)["hasScheduled"])
+        self.assertIsNone(s.chat_view(1), "no view for a chat never seen")
+        ended = s.apply({"@type": "updateCall", "call": {"@type": "call", "id": 4, "user_id": 7, "is_outgoing": False,
+                                                         "state": {"@type": "callStateDiscarded"}}})
+        self.assertEqual((ended[0]["call"]["state"], 4 in s.calls), ("ended", False))
+        self.assertEqual(s.apply({"@type": "updateCall", "call": "junk"}), [])
+
+
 class Bounds(unittest.TestCase):
     def test_users_are_capped_but_never_someone_a_chat_is_with(self):
         from unittest import mock
