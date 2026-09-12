@@ -191,10 +191,16 @@ Item {
       var incoming = answer.ok ? (answer.result.messages || []) : []
       var merged = Model.mergeMessages(fromMessageId ? overlay.history : [], incoming)
       overlay.history = merged
-      Qt.callLater(function () { messageList.positionViewAtEnd() })
+      messageList.positionViewAtEnd()
       if (!fromMessageId && merged.length > 0 && merged.length < 12) overlay.fetchHistory(chatId, Model.oldestId(merged), serial)
     })
   }
+
+  // The history's rows, one per message id, edited in place as in the window's chat: a new array as
+  // the model rebuilt every row and lost the view's place for a frame.
+  ListModel { id: historyRows }
+  property var historyIds: []
+  onHistoryChanged: overlay.historyIds = Model.syncRows(historyRows, overlay.historyIds, overlay.history)
 
   Connections {
     target: overlay.service
@@ -205,7 +211,7 @@ Item {
       if (e.message && e.message.sendAt) return   // scheduled: part of no history until it goes out
       if (name === "message" && e.message.chatId === overlay.historyChatId) {
         overlay.history = Model.mergeMessages(overlay.history, [e.message])
-        Qt.callLater(function () { messageList.positionViewAtEnd() })
+        messageList.positionViewAtEnd()
       } else if ((name === "messageSent" || name === "messageFailed") && e.message.chatId === overlay.historyChatId) {
         overlay.history = Model.replaceMessage(overlay.history, e.oldMessageId, e.message)
       } else if (name === "messagesDeleted" && e.chatId === overlay.historyChatId) {
@@ -421,30 +427,36 @@ Item {
               Layout.fillHeight: true
               clip: true
               spacing: Style.space(6)
-              model: overlay.history
+              model: historyRows
               boundsBehavior: Flickable.StopAtBounds
 
               delegate: Column {
                 id: line
-                required property var modelData
+                required property real mid
+                required property int index
+                readonly property var found: Model.rowMessage(overlay.history, line.index, line.mid)
+                property var kept: null
+                onFoundChanged: if (line.found) line.kept = line.found
+                Component.onCompleted: line.kept = line.found
+                readonly property var message: line.found || line.kept || Model.NO_MESSAGE
                 width: ListView.view.width
                 spacing: 0
 
                 Text {
                   width: parent.width
-                  text: (line.modelData.outgoing ? "You" : (line.modelData.senderName || (overlay.shownChat ? overlay.shownChat.title : "")))
-                        + "  ·  " + Model.clock(line.modelData.date)
+                  text: (line.message.outgoing ? "You" : (line.message.senderName || (overlay.shownChat ? overlay.shownChat.title : "")))
+                        + "  ·  " + Model.clock(line.message.date)
                   textFormat: Text.PlainText
                   elide: Text.ElideRight
-                  color: line.modelData.outgoing ? overlay.foreground : overlay.accent
-                  opacity: line.modelData.outgoing ? 0.55 : 0.9
+                  color: line.message.outgoing ? overlay.foreground : overlay.accent
+                  opacity: line.message.outgoing ? 0.55 : 0.9
                   font.family: overlay.fontFamily
                   font.pixelSize: Style.font.caption
                 }
 
                 Text {
                   width: parent.width
-                  text: Model.previewOf(line.modelData)
+                  text: Model.previewOf(line.message)
                   textFormat: Text.PlainText
                   wrapMode: Text.Wrap
                   maximumLineCount: 6

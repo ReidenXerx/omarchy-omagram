@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -441,6 +441,65 @@ test("stories: their order, what is unread and stepping across chats", () => {
   eq(M.storyStep(chats, 1, 77, 1), { chatId: 1, storyId: 5 }, "a story that is gone steps to the chat's first")
   eq([M.findStories(chats, 2).chatId, M.findStories(chats, 7)], [2, null])
   eq(M.storyChats(seq([a])).map(c => c.chatId), [1], "a QML sequence")
+})
+
+test("list rows follow a message list by edits in place, not rebuilds", () => {
+  const apply = (rows, ops) => {
+    const out = rows.slice()
+    for (const e of ops) {
+      if (e.op === "set") out[e.at] = e.id
+      else if (e.op === "remove") out.splice(e.at, e.count)
+      else out.splice(e.at, 0, ...e.ids)
+    }
+    return out
+  }
+  eq(M.listEdits([1, 2, 3], [1, 2, 3]), [])
+  eq(M.listEdits([1, 2, 3], [1, 2, 3, 4]), [{ op: "insert", at: 3, ids: [4] }], "a new message")
+  eq(M.listEdits([5, 6], [1, 2, 3, 5, 6]), [{ op: "insert", at: 0, ids: [1, 2, 3] }], "an older page")
+  eq(M.listEdits([1, 2, 99], [1, 2, 50]), [{ op: "set", at: 2, id: 50 }], "a sent message takes its server id in place")
+  eq(M.listEdits([1, 2, 50], [1, 2, 99]), [{ op: "set", at: 2, id: 99 }])
+  eq(M.listEdits([1, 2, 3, 4], [1, 3]), [{ op: "remove", at: 1, count: 1 }, { op: "remove", at: 2, count: 1 }])
+  eq(M.listEdits([1, 2, 3], []), [{ op: "remove", at: 0, count: 3 }])
+  eq(M.listEdits([], [4, 5]), [{ op: "insert", at: 0, ids: [4, 5] }])
+  assert.strictEqual(M.listEdits([2, 1], [1, 2]), null, "not sorted: rebuild")
+  eq(M.listEdits(seq([1, 2]), [1, 2, 3]), [{ op: "insert", at: 2, ids: [3] }], "a QML sequence")
+  let seed = 7
+  const rand = n => (seed = (seed * 1103515245 + 12345) % 2147483648) % n
+  const pick = () => [...new Set(Array.from({ length: rand(12) }, () => 1 + rand(30)))].sort((x, y) => x - y)
+  for (let round = 0; round < 400; round++) {
+    const before = pick()
+    const after = pick()
+    eq(apply(before, M.listEdits(before, after)), after, `round ${round}: [${before}] -> [${after}]`)
+  }
+})
+
+test("a ListModel of rows is edited in place, or rebuilt when it cannot be", () => {
+  const fake = ids => {
+    const rows = ids.map(mid => ({ mid }))
+    const calls = []
+    return {
+      rows, calls,
+      clear() { calls.push("clear"); rows.length = 0 },
+      append(items) { calls.push("append"); rows.push(...items) },
+      insert(at, items) { calls.push("insert"); rows.splice(at, 0, ...items) },
+      remove(at, count) { calls.push("remove"); rows.splice(at, count) },
+      setProperty(at, role, value) { calls.push("set"); rows[at][role] = value },
+    }
+  }
+  const list = fake([1, 2, 3])
+  eq(M.syncRows(list, [1, 2, 3], [msg(1), msg(2), msg(3), msg(4)]), [1, 2, 3, 4])
+  eq([list.rows.map(r => r.mid), list.calls], [[1, 2, 3, 4], ["insert"]], "a new message is one insert")
+  const sent = fake([1, 2, 99])
+  M.syncRows(sent, [1, 2, 99], [msg(1), msg(2), msg(50)])
+  eq([sent.rows.map(r => r.mid), sent.calls], [[1, 2, 50], ["set"]], "a sent message keeps its row")
+  const unsorted = fake([1, 2])
+  M.syncRows(unsorted, [1, 2], [msg(3), msg(1)])
+  eq([unsorted.rows.map(r => r.mid), unsorted.calls], [[3, 1], ["clear", "append"]], "rebuilt")
+  const messages = [msg(1), msg(2), msg(3)]
+  assert.strictEqual(M.rowMessage(messages, 1, 2), messages[1])
+  assert.strictEqual(M.rowMessage(messages, 0, 3), messages[2], "a step apart: found by id")
+  assert.strictEqual(M.rowMessage(messages, 5, 9), null, "not in the list")
+  eq([M.NO_MESSAGE.content.kind, M.NO_MESSAGE.content.text, M.NO_MESSAGE.senderName], ["text", "", ""])
 })
 
 test("forum topics: where their messages are kept, their order and icons", () => {

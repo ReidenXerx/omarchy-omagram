@@ -331,8 +331,26 @@ FocusScope {
   onTopicIdChanged: if (root.chat && root.chat.id === root.draftChatId && root.topicId !== root.draftTopicId) root.switchTopic()
   property real lastChatId: 0
 
+  // The rows shown, one per message id, edited in place as the messages change. A new array as
+  // the model rebuilt every row on each message sent, received or edited, and the view spent a
+  // frame at the wrong place before it was put back at the bottom.
+  ListModel { id: rows }
+  property var rowIds: []
+
+  function syncRows() {
+    var cursorId = root.cursor >= 0 && root.cursor < root.rowIds.length ? root.rowIds[root.cursor] : 0
+    var ids = Model.syncRows(rows, root.rowIds, root.messages)
+    root.rowIds = ids
+    // The cursor stays on its message when older ones load above it.
+    if (cursorId) {
+      var at = ids.indexOf(cursorId)
+      root.cursor = at >= 0 ? at : Math.min(root.cursor, ids.length - 1)
+    }
+  }
+
   onMessagesChanged: {
-    if (root.stickToBottom) Qt.callLater(function () { messageList.positionViewAtEnd() })
+    root.syncRows()
+    if (root.stickToBottom) messageList.positionViewAtEnd()   // before the next frame is drawn
   }
 
   // ---------------------------------------------------------------- what messages ask for
@@ -1316,11 +1334,13 @@ FocusScope {
         id: messageList
         anchors.fill: parent
         clip: true
-        model: root.messages
+        model: rows
         spacing: Style.space(2)
         boundsBehavior: Flickable.StopAtBounds
         topMargin: Style.space(12)
-        bottomMargin: Style.space(12)
+        // Space under the newest message as a footer, not a bottom margin: going to the end counts
+        // a footer, and would stop short of a margin.
+        footer: Item { width: 1; height: Style.space(12) }
 
         WheelScroll {
           view: messageList
@@ -1331,6 +1351,9 @@ FocusScope {
         }
 
         onMovementEnded: root.stickToBottom = atYEnd
+        // The message box growing or shrinking, or a bar above it coming and going, keeps the
+        // newest message in view.
+        onHeightChanged: if (root.stickToBottom) positionViewAtEnd()
         onAtYBeginningChanged: if (atYBeginning && count > 0 && moving) root.loadOlder()
         onContentYChanged: if (contentY <= originY + Style.space(200) && count > 0 && (moving || activeFocus)) root.loadOlder()
 

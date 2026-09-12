@@ -157,6 +157,86 @@ function patchMessage(existing, id, patch) {
   })
 }
 
+// How a list view's rows, one per id, become another sorted list of ids by editing them in place:
+// ordered edits { op: "insert", at, ids } / { op: "remove", at, count } / { op: "set", at, id }
+// (a row taking another id where one left, as a sent message takes its server id). A list view
+// given a new array instead throws away every row and loses its place. null when either list is
+// not sorted by id: then rebuild.
+function listEdits(oldIds, newIds) {
+  var a = toList(oldIds)
+  var b = toList(newIds)
+  for (var s = 1; s < a.length; s++) if (!(a[s - 1] < a[s])) return null
+  for (var t = 1; t < b.length; t++) if (!(b[t - 1] < b[t])) return null
+  var ops = []
+  var push = function (op, at, id) {
+    var last = ops[ops.length - 1]
+    if (op === "remove" && last && last.op === "remove" && last.at === at) last.count++
+    else if (op === "insert" && last && last.op === "insert" && last.at + last.ids.length === at) last.ids.push(id)
+    else ops.push(op === "remove" ? { op: op, at: at, count: 1 } : { op: op, at: at, ids: [id] })
+  }
+  var i = 0, j = 0, at = 0
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      i++
+      j++
+      at++
+    } else if (j >= b.length || (i < a.length && a[i] < b[j])) {
+      push("remove", at)
+      i++
+    } else {
+      push("insert", at, b[j])
+      j++
+      at++
+    }
+  }
+  var out = []
+  for (var k = 0; k < ops.length; k++) {
+    var e = ops[k]
+    var next = ops[k + 1]
+    if (next && e.op === "remove" && e.count === 1 && next.op === "insert" && next.at === e.at && next.ids.length === 1) {
+      out.push({ op: "set", at: e.at, id: next.ids[0] })
+      k++
+    } else if (next && e.op === "insert" && e.ids.length === 1 && next.op === "remove" && next.count === 1 && next.at === e.at + 1) {
+      out.push({ op: "set", at: e.at, id: e.ids[0] })
+      k++
+    } else {
+      out.push(e)
+    }
+  }
+  return out
+}
+
+// Brings a ListModel of { mid } rows from oldIds to the ids of `messages`: in place when it can,
+// rebuilt when the lists are not sorted or too different to edit (another chat). The ids now shown.
+function syncRows(rows, oldIds, messages) {
+  var ids = toList(messages).map(function (m) { return m.id })
+  var edits = listEdits(oldIds, ids)
+  if (edits === null || edits.length > 64) {
+    rows.clear()
+    if (ids.length) rows.append(ids.map(function (id) { return { mid: id } }))
+  } else {
+    edits.forEach(function (e) {
+      if (e.op === "set") rows.setProperty(e.at, "mid", e.id)
+      else if (e.op === "remove") rows.remove(e.at, e.count)
+      else rows.insert(e.at, e.ids.map(function (id) { return { mid: id } }))
+    })
+  }
+  return ids
+}
+
+// The message a row shows: the one at its index when the ids agree, otherwise found by id (rows and
+// messages are a step apart while they change); null when it is not in the list.
+function rowMessage(messages, index, id) {
+  var list = toList(messages)
+  var at = list[index]
+  return at && at.id === id ? at : (findMessage(list, id) || null)
+}
+
+// A message with every field a row reads, for a row that has none to show for a moment.
+var NO_MESSAGE = { id: 0, chatId: 0, date: 0, editDate: 0, outgoing: false, pinned: false, sender: null, senderName: "",
+                   sending: null, replyTo: null, forward: null, albumId: "", reactions: [], views: 0, markup: null,
+                   topicId: 0, sendAt: 0, content: { kind: "text", text: "", entities: [] } }
+
 function findMessage(messages, id) {
   for (var i = messages.length - 1; i >= 0; i--) if (messages[i].id === id) return messages[i]
   return null

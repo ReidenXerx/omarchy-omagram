@@ -12,13 +12,19 @@ import "Model.js" as Model
 Item {
   id: row
 
-  required property var modelData
+  required property real mid          // the message's id: the chat view's rows are ids
   required property int index
   property var view
   property var app
   property var messages: []
 
-  readonly property var message: row.modelData
+  // Rows and `messages` change a step apart; in between a row keeps the message it showed, so
+  // nothing evaluates against a missing one.
+  readonly property var found: Model.rowMessage(row.messages, row.index, row.mid)
+  property var kept: null
+  onFoundChanged: if (row.found) row.kept = row.found
+  Component.onCompleted: row.kept = row.found
+  readonly property var message: row.found || row.kept || Model.NO_MESSAGE
   readonly property var content: row.message && row.message.content ? row.message.content : ({})
   readonly property var previous: row.index > 0 ? row.messages[row.index - 1] : null
   readonly property bool service: row.content.kind === "service"
