@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter }", box)
 const M = box.M
 const plain = v => JSON.parse(JSON.stringify(v))
 const eq = (a, b, msg) => assert.deepStrictEqual(plain(a), plain(b), msg)
@@ -340,6 +340,23 @@ test("starting a chat: contacts, usernames, and people for a new group", () => {
   for (const bad of ["@ab", "1abc", "has space", "x".repeat(40), "@name!"]) assert.strictEqual(M.usernameQuery(bad), "", bad)
   assert.strictEqual(M.usernameQuery(" @Some_bot "), "Some_bot")
   assert.strictEqual(M.contactDetail({ username: "ann", status: { state: "online" } }, Date.now()), "@ann · online")
+})
+
+test("forum topics: where their messages are kept, their order and icons", () => {
+  assert.strictEqual(M.historyKey(-100, 0), "-100")
+  assert.strictEqual(M.historyKey(-100, 5), "-100:5")
+  assert.ok(M.isHistoryOf("-100:5", -100) && M.isHistoryOf("-100", -100))
+  assert.ok(!M.isHistoryOf("-1001:5", -100) && !M.isHistoryOf("-10012", -1001))
+  const topics = M.mergeTopics([{ id: 1, order: "5", pinned: false, name: "Old" }, { id: 2, order: "9" }],
+                               [{ id: 1, order: "20", name: "New" }, { id: 3, order: "1", pinned: true }, "junk", { id: 0 }])
+  eq(topics.map(t => t.id), [3, 1, 2])
+  assert.strictEqual(topics[1].name, "New", "the newer copy wins")
+  assert.strictEqual(M.topicColor(0x6FB9F0), "#6fb9f0")
+  assert.strictEqual(M.topicColor(0x00FF00), "#00ff00")
+  assert.strictEqual(M.topicColor(0), "#6FB9F0")
+  assert.strictEqual(M.topicLetter({ name: "rides" }), "R")
+  assert.strictEqual(M.topicLetter({ name: "🚲 rides" }), "🚲")
+  assert.strictEqual(M.topicLetter({ name: "General", general: true }), "#")
 })
 
 test("devices and storage in words", () => {

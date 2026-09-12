@@ -678,6 +678,46 @@ function memberDetail(member, nowMs) {
   return [role, member.bot ? "bot" : statusText(member.userStatus, nowMs)].filter(function (part) { return !!part }).join(" · ")
 }
 
+// ---------------------------------------------------------------- forum topics
+
+// Where the window keeps a history: a chat's id, or "chat:topic" for a topic of a forum.
+function historyKey(chatId, topicId) {
+  return topicId > 0 ? chatId + ":" + topicId : String(chatId)
+}
+
+function isHistoryOf(key, chatId) {
+  var s = String(key)
+  return s === String(chatId) || s.indexOf(chatId + ":") === 0
+}
+
+// Topics as their list shows them: pinned first, then Telegram's order (an int64, as text).
+function mergeTopics(existing, incoming) {
+  var byId = {}
+  var all = (Array.isArray(existing) ? existing : []).concat(Array.isArray(incoming) ? incoming : [])
+  all.forEach(function (topic) {
+    if (isObject(topic) && typeof topic.id === "number" && topic.id > 0) byId[topic.id] = topic   // later wins
+  })
+  return Object.keys(byId).map(function (k) { return byId[k] }).sort(function (a, b) {
+    if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1
+    return compareOrder(b.order, a.order) || (a.id - b.id)
+  }).slice(0, 500)
+}
+
+var TOPIC_COLORS = ["#6FB9F0", "#FFD67E", "#CB86DB", "#8EEE98", "#FF93B2", "#FB6F5F"]
+
+// A topic icon's colour: Telegram's RGB number, or the first of its palette when there is none.
+function topicColor(color) {
+  var n = Number(color) >>> 0 & 0xFFFFFF
+  if (!n) return TOPIC_COLORS[0]
+  var hex = n.toString(16)
+  return "#" + "000000".slice(hex.length) + hex
+}
+
+function topicLetter(topic) {
+  if (!isObject(topic) || topic.general) return "#"
+  return (Array.from(String(topic.name || "").trim())[0] || "#").toUpperCase()
+}
+
 // ---------------------------------------------------------------- starting a chat
 
 function sortContacts(contacts) {

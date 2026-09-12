@@ -63,6 +63,14 @@ FocusScope {
   property var pinnedMessage: null
   property bool infoOpen: false
 
+  // A forum group opens on its topics; a topic opened shows its messages, and what is sent goes
+  // there. The composer's text belongs to draftChatId (and draftTopicId) until it is saved.
+  readonly property bool forum: !!root.chat && root.chat.forum === true
+  readonly property real topicId: root.forum && app.openTopic && app.openTopic.chatId === root.chat.id ? app.openTopic.id : 0
+  readonly property bool showTopics: root.forum && !root.topicId
+  property real draftChatId: 0
+  property real draftTopicId: 0
+
   // Telegram keeps drafts, so they follow you to your other devices; while you type, the chat
   // sees "typing…" as it would from any Telegram app.
   property bool settingText: false
@@ -74,9 +82,13 @@ FocusScope {
   signal forwardRequested(real fromChatId, var messageIds)
   signal searchInChatRequested()
 
-  function focusComposer() { composer.forceActiveFocus() }
+  function focusComposer() {
+    if (root.showTopics) topicList.forceActiveFocus()
+    else composer.forceActiveFocus()
+  }
 
   function focusMessages() {
+    if (root.showTopics) { topicList.forceActiveFocus(); return }
     if (!root.messages.length) return
     if (root.cursor < 0 || root.cursor >= root.messages.length) root.cursor = root.messages.length - 1
     messageList.forceActiveFocus()
@@ -116,9 +128,28 @@ FocusScope {
     root.pinnedMessage = null
     root.lastTypingMs = 0
     // The chat's draft, as Telegram keeps it: you continue where you left off, on any device.
-    root.savedDraft = root.chat && root.chat.draft ? root.chat.draft : ""
+    root.draftChatId = root.chat ? root.chat.id : 0
+    root.draftTopicId = root.topicId
+    root.savedDraft = root.topicId ? (app.openTopic.draft || "") : (root.chat && root.chat.draft ? root.chat.draft : "")
     root.setComposerText(root.savedDraft)
     root.loadPinned()
+  }
+
+  // Into a forum topic, or back to the topic list: what was being written stays with the topic
+  // it was written in, and the topic opened brings back its own draft.
+  function switchTopic() {
+    root.leaveChat()
+    root.draftTopicId = root.topicId
+    root.replyToId = 0
+    root.editingId = 0
+    root.editingCaption = false
+    root.draftBeforeEdit = ""
+    root.selection = ({})
+    root.cursor = -1
+    root.confirmDeleteId = 0
+    root.stickToBottom = true
+    root.savedDraft = root.topicId ? (app.openTopic.draft || "") : (root.chat.draft || "")
+    root.setComposerText(root.savedDraft)
   }
 
   function attach(asPhoto) {
@@ -177,6 +208,7 @@ FocusScope {
     onActivated: root.jumpTo(root.pinnedMessage.id)
   }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.chatInfo"); enabled: root.shortcutsOn; onActivated: root.toggleInfo() }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.topicList"); enabled: root.shortcutsOn && root.topicId > 0; onActivated: app.closeTopic() }
 
   // ---------------------------------------------------------------- voice messages
 
@@ -201,7 +233,7 @@ FocusScope {
   }
 
   function stopVoice(send) {
-    var args = { send: send }
+    var args = root.target({ send: send })
     if (send && root.replyToId) args.replyToMessageId = root.replyToId
     client.request("voice.stop", args, function (answer) {
       if (!answer.ok) root.flash(answer.error || "Could not send the voice message")
@@ -267,11 +299,12 @@ FocusScope {
 
   onChatChanged: {
     if (!root.chat || root.chat.id !== root.lastChatId) {
-      if (root.lastChatId) root.leaveChat(root.lastChatId)
+      if (root.lastChatId) root.leaveChat()
       root.lastChatId = root.chat ? root.chat.id : 0
       resetForChat()
     }
   }
+  onTopicIdChanged: if (root.chat && root.chat.id === root.draftChatId && root.topicId !== root.draftTopicId) root.switchTopic()
   property real lastChatId: 0
 
   onMessagesChanged: {
@@ -326,7 +359,7 @@ FocusScope {
 
   function sendText(text) {
     if (!root.chat || !text) return
-    client.request("message.send", { chatId: root.chat.id, text: text }, function (answer) {
+    client.request("message.send", root.target({ chatId: root.chat.id, text: text }), function (answer) {
       if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
     })
     root.stickToBottom = true
@@ -550,6 +583,7 @@ FocusScope {
   Connections {
     target: root.app
     function onPinnedChanged(chatId) { if (root.chat && chatId === root.chat.id) root.loadPinned() }
+    function onTopicsChanged(chatId) { if (root.forum && chatId === root.chat.id) topicList.refresh() }
   }
 
   // ---------------------------------------------------------------- forwarding and deleting
@@ -630,13 +664,13 @@ FocusScope {
   function nextMention() {
     if (!root.chat) return
     var chatId = root.chat.id
-    client.request("chat.nextMention", { chatId: chatId }, function (answer) {
+    client.request("chat.nextMention", root.target({ chatId: chatId }), function (answer) {
       if (!answer.ok || !root.chat || root.chat.id !== chatId) return
       if (answer.result.messageId) {
         root.jumpTo(answer.result.messageId)
         app.markRead(chatId, [answer.result.messageId])   // seen now, so the mention is read
       } else {
-        client.request("chat.readMentions", { chatId: chatId })
+        client.request("chat.readMentions", root.target({ chatId: chatId }))
       }
     })
   }
@@ -723,15 +757,15 @@ FocusScope {
     root.settingText = false
   }
 
-  Timer { id: draftTimer; interval: 1500; onTriggered: root.saveDraft(0) }
+  Timer { id: draftTimer; interval: 1500; onTriggered: root.saveDraft() }
 
-  function saveDraft(chatId) {
-    var id = chatId || (root.chat ? root.chat.id : 0)
-    if (!id) return
+  function saveDraft() {
+    if (!root.draftChatId) return
     var text = (root.editingId ? root.draftBeforeEdit : composer.text).replace(/\s+$/, "").slice(0, 4096)
     if (text === root.savedDraft) return
     root.savedDraft = text
-    var args = { chatId: id, text: text }
+    var args = { chatId: root.draftChatId, text: text }
+    if (root.draftTopicId) args.topicId = root.draftTopicId
     if (root.replyToId && !root.editingId) args.replyToMessageId = root.replyToId
     client.request("chat.draft", args)
   }
@@ -741,18 +775,23 @@ FocusScope {
     draftTimer.restart()
     if (root.editingId) return
     if (composer.text === "") {
-      if (root.lastTypingMs) client.request("chat.action", { chatId: root.chat.id, action: "cancel" })
+      if (root.lastTypingMs) client.request("chat.action", root.target({ chatId: root.chat.id, action: "cancel" }))
       root.lastTypingMs = 0
     } else if (Date.now() - root.lastTypingMs > 4500) {   // Telegram shows an action for about five seconds
       root.lastTypingMs = Date.now()
-      client.request("chat.action", { chatId: root.chat.id, action: "typing" })
+      client.request("chat.action", root.target({ chatId: root.chat.id, action: "typing" }))
     }
   }
 
-  function leaveChat(chatId) {
+  // Leaving where the composer's text belongs: its draft is saved and "typing…" ends there.
+  function leaveChat() {
     draftTimer.stop()
-    root.saveDraft(chatId)
-    if (root.lastTypingMs) client.request("chat.action", { chatId: chatId, action: "cancel" })
+    root.saveDraft()
+    if (root.lastTypingMs && root.draftChatId) {
+      var args = { chatId: root.draftChatId, action: "cancel" }
+      if (root.draftTopicId) args.topicId = root.draftTopicId
+      client.request("chat.action", args)
+    }
     root.lastTypingMs = 0
   }
 
@@ -762,6 +801,12 @@ FocusScope {
   }
 
   Timer { id: noticeTimer; interval: 3500; onTriggered: root.notice = "" }
+
+  // What is sent from here goes into the open topic when a forum's topic is open.
+  function target(args) {
+    if (root.topicId) args.topicId = root.topicId
+    return args
+  }
 
   function send() {
     var text = composer.text.replace(/\s+$/, "")
@@ -778,7 +823,7 @@ FocusScope {
     }
     if (!text.trim()) return
     if (text.length > 4096) { root.flash("A message can be at most 4096 characters."); return }
-    var args = { chatId: root.chat.id, text: text }
+    var args = root.target({ chatId: root.chat.id, text: text })
     if (root.replyToId) args.replyToMessageId = root.replyToId
     client.request("message.send", args, function (answer) {
       if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
@@ -885,10 +930,37 @@ FocusScope {
       Layout.preferredHeight: Style.space(56)
       color: "transparent"
 
+      // md-arrow-left U+F004D: from a topic back to the forum's topics
+      Item {
+        id: backButton
+        anchors.left: parent.left
+        anchors.leftMargin: Style.space(8)
+        anchors.verticalCenter: parent.verticalCenter
+        width: root.topicId ? Style.space(32) : 0
+        height: Style.space(32)
+        visible: root.topicId > 0
+
+        Text {
+          anchors.centerIn: parent
+          text: String.fromCodePoint(0xF004D)
+          color: backArea.containsMouse ? app.accent : app.muted
+          font.family: app.glyphFamily
+          font.pixelSize: Style.font.title
+        }
+        MouseArea {
+          id: backArea
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: app.closeTopic()
+          onContainsMouseChanged: if (containsMouse) root.flash("Back to the topics   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.topicList")[0] || ""))
+        }
+      }
+
       Avatar {
         id: headerAvatar
-        anchors.left: parent.left
-        anchors.leftMargin: Style.space(18)
+        anchors.left: backButton.right
+        anchors.leftMargin: root.topicId ? Style.space(4) : Style.space(10)
         anchors.verticalCenter: parent.verticalCenter
         app: root.app
         chat: root.chat
@@ -906,7 +978,7 @@ FocusScope {
         Text {
           width: parent.width
           elide: Text.ElideRight
-          text: root.chat ? Model.chatTitle(root.chat, app.meId) : ""
+          text: root.topicId ? app.openTopic.name : (root.chat ? Model.chatTitle(root.chat, app.meId) : "")
           textFormat: Text.PlainText
           color: app.foreground
           font.family: app.fontFamily
@@ -919,9 +991,11 @@ FocusScope {
           width: parent.width
           elide: Text.ElideRight
           text: !root.chat ? "" : (activity
-              || (root.chat.kind === "private"
-                  ? (root.chat.userId === app.meId ? "" : (root.chat.bot ? "bot" : Model.statusText(app.userStatuses[root.chat.userId] || root.chat.status, root.nowMs)))
-                  : ({ group: "Group", channel: "Channel", secret: "Secret chat" }[root.chat.kind] || "")))
+              || (root.topicId ? "Topic in " + Model.chatTitle(root.chat, app.meId)
+                  : (root.chat.kind === "private"
+                     ? (root.chat.userId === app.meId ? "" : (root.chat.bot ? "bot" : Model.statusText(app.userStatuses[root.chat.userId] || root.chat.status, root.nowMs)))
+                     : (root.chat.kind === "secret" ? "Secret chat"
+                        : (root.forum ? "Topics" : Model.memberCountText(root.chat.memberCount, root.chat.kind === "channel"))))))
           textFormat: Text.PlainText
           color: activity ? app.accent : app.muted
           font.family: app.fontFamily
@@ -983,7 +1057,7 @@ FocusScope {
     Rectangle {
       Layout.fillWidth: true
       Layout.preferredHeight: visible ? Style.space(44) : 0
-      visible: !!root.pinnedMessage
+      visible: !!root.pinnedMessage && !root.showTopics
       color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.03)
 
       Rectangle {
@@ -1027,10 +1101,27 @@ FocusScope {
       Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: app.border; opacity: 0.25 }
     }
 
+    // ------------------------------------------------ a forum's topics
+    TopicList {
+      id: topicList
+      Layout.fillWidth: true
+      Layout.fillHeight: true
+      visible: root.showTopics
+      app: root.app
+      client: root.client
+      chat: root.forum ? root.chat : null
+      nowMs: root.nowMs
+      onOpened: function (topic) {
+        app.selectTopic(topic)
+        Qt.callLater(root.focusComposer)
+      }
+    }
+
     // ------------------------------------------------ messages
     Item {
       Layout.fillWidth: true
       Layout.fillHeight: true
+      visible: !root.showTopics
 
       ListView {
         id: messageList
@@ -1269,7 +1360,7 @@ FocusScope {
     Rectangle {
       id: botKeyboard
       Layout.fillWidth: true
-      visible: !!root.keyboard && root.keyboardHiddenFor !== root.keyboard.messageId && !root.recordingVoice
+      visible: !!root.keyboard && root.keyboardHiddenFor !== root.keyboard.messageId && !root.recordingVoice && !root.showTopics
       Layout.preferredHeight: visible ? keyboardColumn.implicitHeight + Style.space(16) : 0
       color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.03)
 
@@ -1348,6 +1439,7 @@ FocusScope {
     // ------------------------------------------------ composer
     Rectangle {
       Layout.fillWidth: true
+      visible: !root.showTopics
       // 20 of outer margin and 16 of inner padding around the text, plus room for the caret.
       Layout.preferredHeight: Math.min(Style.space(180), composer.implicitHeight + Style.space(40))
       color: "transparent"
@@ -1582,7 +1674,7 @@ FocusScope {
     anchors.fill: parent
     app: root.app
     onRecorded: function (chatId, path) {
-      var args = { chatId: chatId, path: path }
+      var args = root.target({ chatId: chatId, path: path })
       if (root.replyToId) args.replyToMessageId = root.replyToId
       root.replyToId = 0
       root.stickToBottom = true

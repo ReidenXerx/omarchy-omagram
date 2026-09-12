@@ -32,6 +32,7 @@ var SECTIONS = [
   { id: "prompt", title: "Questions above the message box", scope: "prompt", app: "window" },
   { id: "info", title: "Chat info", scope: "info", app: "window" },
   { id: "newChat", title: "Starting a chat", scope: "newChat", app: "window" },
+  { id: "topics", title: "A forum's topics", scope: "topics", app: "window" },
   { id: "panel", title: "Bar panel", scope: "panel", app: "shell" },
   { id: "quick", title: "Quick reply: finding a chat", scope: "quick", app: "shell" },
   { id: "quickMessage", title: "Quick reply: writing", scope: "quickMessage", app: "shell" }
@@ -59,6 +60,7 @@ var ACTIONS = [
   { id: "window.pinnedMessage", label: "Go to the pinned message", keys: ["Ctrl+Shift+P"] },
   { id: "window.chatInfo", label: "Show or hide the chat's info", keys: ["Ctrl+I"] },
   { id: "window.newChat", label: "Start a chat, a group or a channel", keys: ["Ctrl+Shift+N"] },
+  { id: "window.topicList", label: "Back to a forum's topics", keys: ["Alt+Left"] },
 
   { id: "list.down", label: "Next chat", keys: ["Down", "J"] },
   { id: "list.up", label: "Previous chat", keys: ["Up", "K"] },
@@ -145,6 +147,10 @@ var ACTIONS = [
   { id: "newChat.pick", label: "Open the chat, or add or remove the person", keys: ["Return", "Enter"] },
   { id: "newChat.next", label: "Next step, or create", keys: ["Ctrl+Return", "Ctrl+Enter"] },
   { id: "newChat.back", label: "Back, or close", keys: ["Esc"] },
+
+  { id: "topics.down", label: "Next topic", keys: ["Down", "J"] },
+  { id: "topics.up", label: "Previous topic", keys: ["Up", "K"] },
+  { id: "topics.open", label: "Open the topic", keys: ["Return", "Enter", "L", "Right"] },
 
   { id: "panel.reply", label: "Reply to the chat", keys: ["R"] },
   { id: "panel.openInWindow", label: "Open it in the window", keys: ["O"] },

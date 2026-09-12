@@ -19,7 +19,7 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   counts (or mark a chat unread), and drafts that follow you to your other devices. Pin (`p`),
   archive (`a`) and mute (`m`) from the keyboard, or right-click a chat. Start a chat with a
   contact or anyone's @username, or create a group or a channel (`Ctrl+Shift+N`, or the pencil).
-  Your chat with yourself is Saved Messages.
+  Your chat with yourself is Saved Messages, and a forum group opens on its topics.
 - **Chat info** — a panel (`Ctrl+I`) with a person's bio, username and phone, or a group's
   description and invite link; its members; and everything shared in it: photos and videos,
   files, links, voice messages, music and GIFs. Leave a group, or clear or delete a chat, from it.
@@ -47,7 +47,7 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   click opens a panel of recent chats where you can reply inline; right click opens the window.
 - **Quick reply** — an overlay to find a chat by typing, read its latest messages and answer.
 
-Not supported yet: secret chats, calls, stories and forum topics.
+Not supported yet: secret chats, calls and stories.
 
 ## Requirements
 
@@ -118,6 +118,7 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Ctrl+Shift+P` | go to the pinned message |
 | `Ctrl+I` | the chat's info (`Tab` switches its tabs, `Enter` opens, `Esc` closes) |
 | `Ctrl+Shift+N` | start a chat, a group or a channel (`Enter` opens or adds, `Ctrl+Enter` goes on) |
+| `Alt+←` | from a forum's topic back to its topics |
 | `Ctrl+,` | settings |
 
 **Chat list**
