@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -500,6 +500,16 @@ test("a ListModel of rows is edited in place, or rebuilt when it cannot be", () 
   assert.strictEqual(M.rowMessage(messages, 0, 3), messages[2], "a step apart: found by id")
   assert.strictEqual(M.rowMessage(messages, 5, 9), null, "not in the list")
   eq([M.NO_MESSAGE.content.kind, M.NO_MESSAGE.content.text, M.NO_MESSAGE.senderName], ["text", "", ""])
+})
+
+test("formatting markers go around the selection and come off again", () => {
+  eq(M.markdownToggle("say hi now", 4, 6, "**", "**"), { text: "say **hi** now", start: 6, end: 8, wrapped: true })
+  eq(M.markdownToggle("say **hi** now", 6, 8, "**", "**"), { text: "say hi now", start: 4, end: 6, wrapped: false },
+     "the same key takes them off")
+  eq(M.markdownToggle("abc", 3, 3, "`", "`"), { text: "abc``", start: 4, end: 4, wrapped: true }, "at the cursor, between the markers")
+  eq(M.markdownToggle("abc", 2, 1, "__", "__"), { text: "a__b__c", start: 3, end: 4, wrapped: true }, "a selection made backwards")
+  eq(M.markdownToggle("link", 0, 4, "[", "]()"), { text: "[link]()", start: 1, end: 5, wrapped: true })
+  eq(M.markdownToggle("**x", 2, 3, "**", "**"), { text: "****x**", start: 4, end: 5, wrapped: true }, "a marker on one side only")
 })
 
 test("forum topics: where their messages are kept, their order and icons", () => {

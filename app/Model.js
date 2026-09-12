@@ -237,6 +237,18 @@ var NO_MESSAGE = { id: 0, chatId: 0, date: 0, editDate: 0, outgoing: false, pinn
                    sending: null, replyTo: null, forward: null, albumId: "", reactions: [], views: 0, markup: null,
                    topicId: 0, sendAt: 0, content: { kind: "text", text: "", entities: [] } }
 
+// Telegram Markdown markers put around the text selected in the message box, or taken off again
+// when they are already there: { text, start, end, wrapped } with the selection after the change.
+function markdownToggle(text, start, end, before, after) {
+  var s = String(text || "")
+  var b = Math.min(s.length, Math.max(0, Math.max(start, end)))
+  var a = Math.min(b, Math.max(0, Math.min(start, end)))
+  if (a >= before.length && s.slice(a - before.length, a) === before && s.slice(b, b + after.length) === after)
+    return { text: s.slice(0, a - before.length) + s.slice(a, b) + s.slice(b + after.length),
+             start: a - before.length, end: b - before.length, wrapped: false }
+  return { text: s.slice(0, a) + before + s.slice(a, b) + after + s.slice(b), start: a + before.length, end: b + before.length, wrapped: true }
+}
+
 function findMessage(messages, id) {
   for (var i = messages.length - 1; i >= 0; i--) if (messages[i].id === id) return messages[i]
   return null

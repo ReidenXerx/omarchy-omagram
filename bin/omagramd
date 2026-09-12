@@ -56,6 +56,7 @@ OUTBOX_MAX = 16 * 1024 * 1024
 CLIENTS_MAX = 16
 REQUEST_LIMITS = {"max_depth": 8, "max_items": 1024, "max_string": 16 * 1024}
 TEXT_MAX = 4096
+MARKDOWN_TEXT_MAX = 2 * TEXT_MAX    # as typed, markers included: TEXT_MAX applies once they are read
 IDS_MAX = 100
 CLOSE_TIMEOUT = 5.0
 
@@ -75,6 +76,7 @@ DOCUMENT_MAX = 2 * 1024 ** 3                        # Telegram's file limit with
 PHOTO_MAX = 10 * 1024 ** 2                          # larger images go as documents
 PHOTO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 CAPTION_MAX = 1024
+MARKDOWN_CAPTION_MAX = 2 * CAPTION_MAX
 STICKERS_MAX = 300
 SET_ID = re.compile(r"-?[0-9]{1,20}")
 
@@ -1867,6 +1869,25 @@ class Daemon:
                 "update_order_of_installed_sticker_sets": False, "scheduling_state": scheduling, "effect_id": 0,
                 "sending_id": 0, "only_preview": False}
 
+    def typed_text(self, text, limit, what):
+        """Text as typed, with its Telegram Markdown (**bold**, __italic__, ~~strikethrough~~,
+        ||spoiler||, `code`, ```pre```, [text](address)) read into formatting by TDLib. Text TDLib
+        cannot read goes as it was typed."""
+        plain = {"@type": "formattedText", "text": text, "entities": []}
+        execute = getattr(self.td, "execute", None)
+        parsed = None
+        if text.strip() and execute is not None:
+            try:
+                parsed = execute({"@type": "parseMarkdown", "text": plain})
+            except (OSError, ValueError):
+                parsed = None
+        if (not isinstance(parsed, dict) or parsed.get("@type") != "formattedText"
+                or not isinstance(parsed.get("text"), str) or not isinstance(parsed.get("entities"), list)):
+            parsed = plain
+        if len(parsed["text"]) > limit:
+            raise BadRequest(f"{what} can be at most {limit} characters")
+        return parsed
+
     def send_content(self, client, rid, chat_id, content, args):
         self.td_send({"@type": "sendMessage", "chat_id": chat_id, "topic_id": self.topic_of(args), "reply_to": self.reply_to(args),
                       "options": self.send_options(args), "reply_markup": None, "input_message_content": content},
@@ -1874,19 +1895,18 @@ class Daemon:
 
     def cmd_message_send(self, client, rid, args):
         chat_id = arg_int(args, "chatId")
-        text = arg_str(args, "text", TEXT_MAX)
-        self.send_content(client, rid, chat_id, {"@type": "inputMessageText",
-                                                 "text": {"@type": "formattedText", "text": text, "entities": []},
+        text = self.typed_text(arg_str(args, "text", MARKDOWN_TEXT_MAX), TEXT_MAX, "a message")
+        self.send_content(client, rid, chat_id, {"@type": "inputMessageText", "text": text,
                                                  "link_preview_options": None, "clear_draft": True}, args)
 
     def cmd_message_send_file(self, client, rid, args):
         chat_id = arg_int(args, "chatId")
         path, size = local_upload(args.get("path"))
         caption = args.get("caption", "")
-        if not isinstance(caption, str) or len(caption) > CAPTION_MAX:
+        if not isinstance(caption, str) or len(caption) > MARKDOWN_CAPTION_MAX:
             raise BadRequest(f"a caption is text of at most {CAPTION_MAX} characters")
         as_photo = args.get("asPhoto", True) is True and path.lower().endswith(PHOTO_EXTENSIONS) and size <= PHOTO_MAX
-        text = {"@type": "formattedText", "text": caption, "entities": []}
+        text = self.typed_text(caption, CAPTION_MAX, "a caption")
         upload = {"@type": "inputFileLocal", "path": path}
         if as_photo:
             content = {"@type": "inputMessagePhoto", "caption": text, "show_caption_above_media": False,
@@ -1949,15 +1969,35 @@ class Daemon:
         chat_id, message_id = arg_int(args, "chatId"), arg_int(args, "messageId", 1)
         if args.get("caption") is True:   # the caption of a photo, video, file...; it may be emptied
             query = {"@type": "editMessageCaption", "chat_id": chat_id, "message_id": message_id, "reply_markup": None,
-                     "caption": {"@type": "formattedText", "text": arg_str(args, "text", CAPTION_MAX, 0), "entities": []},
+                     "caption": self.typed_text(arg_str(args, "text", MARKDOWN_CAPTION_MAX, 0), CAPTION_MAX, "a caption"),
                      "show_caption_above_media": False}
         else:
+            text = self.typed_text(arg_str(args, "text", MARKDOWN_TEXT_MAX), TEXT_MAX, "a message")
             query = {"@type": "editMessageText", "chat_id": chat_id, "message_id": message_id, "reply_markup": None,
-                     "input_message_content": {"@type": "inputMessageText",
-                                               "text": {"@type": "formattedText", "text": arg_str(args, "text", TEXT_MAX),
-                                                        "entities": []},
+                     "input_message_content": {"@type": "inputMessageText", "text": text,
                                                "link_preview_options": None, "clear_draft": False}}
         self.td_send(query, client, rid, self.state.message)
+
+    def cmd_message_markdown(self, client, rid, args):
+        """A message's text or caption with its formatting written as Telegram Markdown, to edit it as
+        it would be typed. Formatting Markdown cannot write (underline, mentions) is left out."""
+        def markdown(message):
+            content = model._obj(message.get("content"))
+            value = model._obj(content.get("text") if content.get("@type") == "messageText" else content.get("caption"),
+                               "formattedText")
+            text = value.get("text") if isinstance(value.get("text"), str) else ""
+            execute = getattr(self.td, "execute", None)
+            written = None
+            if text and execute is not None:
+                try:
+                    written = execute({"@type": "getMarkdownText", "text": value})
+                except (OSError, ValueError):
+                    written = None
+            if isinstance(written, dict) and isinstance(written.get("text"), str):
+                text = written["text"]
+            return {"text": text[:MARKDOWN_TEXT_MAX]}
+        self.td_send({"@type": "getMessage", "chat_id": arg_int(args, "chatId"), "message_id": arg_int(args, "messageId", 1)},
+                     client, rid, markdown)
 
     def cmd_message_delete(self, client, rid, args):
         revoke = args.get("revoke", True)
@@ -2065,6 +2105,7 @@ COMMANDS = {
     "secret.create": ("cmd_secret_create", True),
     "secret.close": ("cmd_secret_close", True),
     "call.decline": ("cmd_call_decline", True),
+    "message.markdown": ("cmd_message_markdown", True),
     "story.get": ("cmd_story_get", True),
     "story.open": ("cmd_story_open", True),
     "story.close": ("cmd_story_close", True),

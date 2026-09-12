@@ -28,7 +28,9 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   message above the chat, with read state kept in sync with your other devices. Right-click a
   message (or press `m`) for everything Telegram allows on it, translation included. Send without
   sound, at a time you pick or once the other person is online (`Ctrl+Alt+Enter`).
-- **Rich messages** — formatting, links, mentions and hashtags, spoilers, link previews, polls
+- **Rich messages** — formatting (typed the way Telegram's own apps read it: `**bold**`,
+  `__italic__`, `~~strikethrough~~`, `||spoiler||`, `` `code` ``, `[text](address)`, or with the keys
+  below), links, mentions and hashtags, spoilers, link previews, polls
   you can vote in, places, contacts, albums, service messages ("Ann joined the group"), and
   bots' buttons and keyboards. Web links open in your browser; Telegram links open in Omagram.
 - **Media** — photos (with a full-size viewer), videos, GIFs, files, round video notes and
@@ -164,6 +166,9 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 |---|---|
 | `Enter` / `Shift+Enter` | send / new line |
 | `Ctrl+Shift+Enter` | send without sound |
+| `Ctrl+B` / `Ctrl+Shift+I` | **bold** / __italic__ around the selection (again takes it off) |
+| `Ctrl+Shift+X` / `Ctrl+E` / `Ctrl+Shift+H` | ~~strikethrough~~ / `code` / \|\|spoiler\|\| |
+| `Ctrl+L` | a link: the selection becomes its text, then type the address |
 | `Ctrl+Alt+Enter` | send later or when they are online; scheduled messages are listed there too |
 | `↑` in an empty composer | edit your last message |
 | `Esc` | cancel a reply or edit |

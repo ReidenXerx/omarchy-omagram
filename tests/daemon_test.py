@@ -47,6 +47,27 @@ class FakeTd:
         self.daemon = None
         self.new_clients = 0
 
+    def execute(self, query):
+        """TDLib's synchronous Markdown functions, for **bold** only."""
+        value = query.get("text") or {}
+        text = value.get("text", "")
+        if query.get("@type") == "parseMarkdown":
+            start = text.find("**")
+            end = text.find("**", start + 2) if start >= 0 else -1
+            if end < 0:
+                return {"@type": "formattedText", "text": text, "entities": []}
+            inner = text[start + 2:end]
+            return {"@type": "formattedText", "text": text[:start] + inner + text[end + 2:],
+                    "entities": [{"@type": "textEntity", "offset": start, "length": len(inner),
+                                  "type": {"@type": "textEntityTypeBold"}}]}
+        if query.get("@type") == "getMarkdownText":
+            out = text
+            for e in sorted(value.get("entities", []), key=lambda e: -e["offset"]):
+                o, n = e["offset"], e["length"]
+                out = out[:o] + "**" + out[o:o + n] + "**" + out[o + n:]
+            return {"@type": "formattedText", "text": out, "entities": []}
+        return None
+
     def send(self, query):
         self.sent.append(query)
         if query.get("@type") == "close" and self.daemon is not None:
@@ -571,6 +592,36 @@ class Sending(Harness):
         self.assertEqual((one["title"], [s["file"]["id"] for s in one["stickers"]]), ("Pandas", [8]))
         for bad in (123, "12a", ""):
             self.assertFalse(self.request(self.conn, 53, "stickers.set", setId=bad)["ok"], bad)
+
+
+    def test_markdown_is_read_into_formatting_and_written_back_for_editing(self):
+        bold = {"@type": "textEntity", "offset": 3, "length": 5, "type": {"@type": "textEntityTypeBold"}}
+        q, r = self.call(90, "message.send", "sendMessage", {"@type": "message", "id": 10, "chat_id": 42}, chatId=42, text="hi **there**")
+        self.assertEqual((q["input_message_content"]["text"], r["ok"]),
+                         ({"@type": "formattedText", "text": "hi there", "entities": [bold]}, True))
+        q, _ = self.call(91, "message.send", "sendMessage", {"@type": "message", "id": 11, "chat_id": 42}, chatId=42,
+                         text="**" + "x" * 4096 + "**")
+        self.assertEqual(len(q["input_message_content"]["text"]["text"]), 4096, "markers do not count towards the limit")
+        self.assertFalse(self.request(self.conn, 92, "message.send", chatId=42, text="**" + "x" * 4097 + "**")["ok"])
+        q, _ = self.call(93, "message.edit", "editMessageText", {"@type": "message", "id": 10, "chat_id": 42},
+                         chatId=42, messageId=10, text="hi **there**")
+        self.assertEqual(q["input_message_content"]["text"]["entities"], [bold])
+        q, _ = self.call(94, "message.edit", "editMessageCaption", {"@type": "message", "id": 12, "chat_id": 42},
+                         chatId=42, messageId=12, text="hi **there**", caption=True)
+        self.assertEqual(q["caption"]["entities"], [bold])
+        photo = self.file("cat.png", 1000)
+        q, _ = self.call(95, "message.sendFile", "sendMessage", {"@type": "message", "id": 13, "chat_id": 42},
+                         chatId=42, path=str(photo), caption="hi **there**")
+        self.assertEqual(q["input_message_content"]["caption"]["entities"], [bold])
+        text = {"@type": "formattedText", "text": "hi there", "entities": [bold]}
+        q, r = self.call(96, "message.markdown", "getMessage", {"@type": "message", "id": 10, "chat_id": 42,
+                                                               "content": {"@type": "messageText", "text": text}},
+                         chatId=42, messageId=10)
+        self.assertEqual((q["message_id"], r["result"]["text"]), (10, "hi **there**"))
+        _, r = self.call(97, "message.markdown", "getMessage", {"@type": "message", "id": 12, "chat_id": 42,
+                                                               "content": {"@type": "messagePhoto", "caption": text}},
+                         chatId=42, messageId=12)
+        self.assertEqual(r["result"]["text"], "hi **there**", "a caption too")
 
 
 class ListsAndSearch(Harness):

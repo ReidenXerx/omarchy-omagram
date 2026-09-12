@@ -1002,8 +1002,8 @@ FocusScope {
     if (!root.chat) return
     if (root.editingId) {
       if (!root.editingCaption && !text.trim()) return
-      var limit = root.editingCaption ? 1024 : 4096
-      if (text.length > limit) { root.flash((root.editingCaption ? "A caption" : "A message") + " can be at most " + limit + " characters."); return }
+      // The service checks the length once the formatting markers are read.
+      if (text.length > (root.editingCaption ? 2048 : 8192)) { root.flash((root.editingCaption ? "That caption" : "That message") + " is too long."); return }
       var scheduled = root.scheduledOpen
       client.request("message.edit", { chatId: root.chat.id, messageId: root.editingId, text: text, caption: root.editingCaption }, function (answer) {
         if (!answer.ok) root.flash("Could not edit: " + (answer.error || "unknown error"))
@@ -1014,7 +1014,7 @@ FocusScope {
       return
     }
     if (!text.trim()) return
-    if (text.length > 4096) { root.flash("A message can be at most 4096 characters."); return }
+    if (text.length > 8192) { root.flash("That message is too long."); return }
     var args = root.target({ chatId: root.chat.id, text: text })
     if (root.replyToId) args.replyToMessageId = root.replyToId
     var later = options && options.sendAt ? options.sendAt : 0
@@ -1052,6 +1052,39 @@ FocusScope {
     root.setComposerText(message.content.text || "")
     root.focusComposer()
     composer.cursorPosition = composer.length
+    // Its formatting comes back as the Markdown it can be typed in, once the service has written it.
+    var id = message.id
+    var plain = composer.text
+    if (message.sending || !(message.content.entities || []).length) return
+    client.request("message.markdown", { chatId: message.chatId, messageId: id }, function (answer) {
+      if (!answer.ok || root.editingId !== id || composer.text !== plain) return
+      root.setComposerText(answer.result.text)
+      composer.cursorPosition = composer.length
+    })
+  }
+
+  // Formatting is typed as Telegram's Markdown, as in its own apps: a formatting key puts the markers
+  // around the selection (or at the cursor) and takes them off again.
+  function wrapSelection(before, after) {
+    var a = composer.selectionStart
+    var b = composer.selectionEnd
+    var r = Model.markdownToggle(composer.text, a, b, before, after)
+    if (r.wrapped) {
+      composer.insert(b, after)
+      composer.insert(a, before)
+    } else {
+      composer.remove(b, b + after.length)
+      composer.remove(a - before.length, a)
+    }
+    composer.select(r.start, r.end)
+    return r
+  }
+
+  // A link: the selection becomes its text, and the cursor waits where the address goes.
+  function wrapLink() {
+    var hadText = composer.selectionEnd > composer.selectionStart
+    var r = root.wrapSelection("[", "]()")
+    if (r.wrapped && hadText) composer.cursorPosition = r.end + 2
   }
 
   // Leaving an edit brings back what you were writing before it.
@@ -1729,6 +1762,12 @@ FocusScope {
               else if (event.matches(StandardKey.Paste) && !composer.canPaste) root.pasteImage()
               else if (is("composer.sendSilent")) root.send({ silent: true })
               else if (is("composer.later")) root.openSendMenu(null)
+              else if (is("composer.bold")) root.wrapSelection("**", "**")
+              else if (is("composer.italic")) root.wrapSelection("__", "__")
+              else if (is("composer.strikethrough")) root.wrapSelection("~~", "~~")
+              else if (is("composer.code")) root.wrapSelection("`", "`")
+              else if (is("composer.spoiler")) root.wrapSelection("||", "||")
+              else if (is("composer.link")) root.wrapLink()
               else if (is("composer.send")) root.send()
               else if (is("composer.newLine")) composer.insert(composer.cursorPosition, "\n")
               else if (is("composer.cancel")) {
