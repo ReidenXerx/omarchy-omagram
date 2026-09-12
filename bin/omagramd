@@ -146,6 +146,23 @@ INT32_MAX = 2 ** 31 - 1
 INT64_MAX = 2 ** 63 - 1
 HELPER_TIMEOUT = 10.0   # seconds a short helper (omarchy-shell) may run before it is killed
 JOBS_MAX = 2            # voice and video messages being prepared at once
+MUTE_FOREVER = 2 ** 31 - 1
+XDG_OPEN = "/usr/bin/xdg-open"
+DOWNLOADS = pathlib.Path(safe.home_dir()) / "Downloads"
+CLIPBOARD_MAX = 10 * 1024 * 1024
+CLIPBOARD_TYPES = (("image/png", ".png"), ("image/jpeg", ".jpg"), ("image/webp", ".webp"))
+CALLBACK_DATA = re.compile(r"[A-Za-z0-9+/]{1,128}={0,2}")
+USERNAME = re.compile(r"[A-Za-z0-9_]{3,64}")
+TELEGRAM_LINK = re.compile(r"(?i)^(https?://(www\.)?(t\.me|telegram\.me|telegram\.dog)/|tg://)")
+SEND_ACTIONS = {"typing": "chatActionTyping", "recordingVoice": "chatActionRecordingVoiceNote",
+                "recordingVideoNote": "chatActionRecordingVideoNote", "choosingSticker": "chatActionChoosingSticker",
+                "uploadingPhoto": "chatActionUploadingPhoto", "uploadingFile": "chatActionUploadingDocument",
+                "cancel": "chatActionCancel"}
+PROPERTIES = {"can_be_deleted_for_all_users": "canDeleteForAll", "can_be_deleted_only_for_self": "canDeleteForMe",
+              "can_be_edited": "canEdit", "can_be_forwarded": "canForward", "can_be_pinned": "canPin",
+              "can_be_copied": "canCopy", "can_be_replied": "canReply", "can_get_link": "canGetLink",
+              "can_be_saved": "canSave"}
+DEFERRED = object()   # a command that answers later, from background work
 PLUGIN_ID = "reidenxerx.omagram"
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
@@ -160,6 +177,55 @@ def arg_int(args, name, low=None, high=None, default=None):
     if (low is not None and value < low) or (high is not None and value > high):
         raise BadRequest(f"{name} is out of range")
     return value
+
+
+def download_name(value):
+    """A file name to save under: its last path part, printable, not hidden, never empty."""
+    name = os.path.basename(value.replace("\\", "/")) if isinstance(value, str) else ""
+    name = "".join(ch for ch in name if ch.isprintable() and ch not in "/\x00")[:200].strip().lstrip(".")
+    return name or "file"
+
+
+def copy_out(source, directory, name):
+    """Copy a downloaded file into `directory` under a name no file there has yet (never
+    overwriting, never through a symbolic link); returns the new path."""
+    safe.ensure_dir(directory, 0o755)
+    stem, suffix = os.path.splitext(name)
+    src = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(src).st_mode):
+            raise safe.UnsafeError("not a regular file")
+        for n in range(1, 1000):
+            candidate = pathlib.Path(directory) / (name if n == 1 else f"{stem} ({n}){suffix}")
+            try:
+                dst = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
+            except FileExistsError:
+                continue
+            try:
+                with os.fdopen(dst, "wb") as out:
+                    while True:
+                        chunk = os.read(src, 1 << 20)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+            except BaseException:
+                os.unlink(candidate)
+                raise
+            return candidate
+        raise safe.UnsafeError("no free file name")
+    finally:
+        os.close(src)
+
+
+def clipboard_types():
+    r = safe.run([str(safe.tool("wl-paste")), "--list-types"], timeout=3, max_output=16 * 1024)
+    return r.text().split() if r.ok else []
+
+
+def clipboard_data(mime):
+    r = safe.run([str(safe.tool("wl-paste")), "--no-newline", "--type", mime], timeout=5, max_output=CLIPBOARD_MAX + 1)
+    data = r.stdout if isinstance(r.stdout, bytes) else bytes(r.stdout or b"")
+    return data if r.ok and 0 < len(data) <= CLIPBOARD_MAX else None
 
 
 def arg_list(args, name="list"):
@@ -353,7 +419,7 @@ class Daemon:
 
     # ---------------------------------------------------------------- TDLib
 
-    def td_send(self, query, client=None, rid=None, transform=None):
+    def td_send(self, query, client=None, rid=None, transform=None, failed=None):
         if self.td is None:
             if client is not None:
                 self.respond_error(client, rid, "Telegram is not available")
@@ -363,7 +429,7 @@ class Daemon:
         # A request with no client but a transform is the service's own: its answer is
         # handed to the transform instead of a socket.
         if client is not None or transform is not None:
-            self.pending[extra] = (client, rid, transform)
+            self.pending[extra] = (client, rid, transform, failed)
         query = dict(query)
         query["@extra"] = extra
         self.td.send(query)
@@ -381,13 +447,17 @@ class Daemon:
             return
         extra = event.get("@extra")
         if isinstance(extra, int) and extra in self.pending:
-            client, rid, transform = self.pending.pop(extra)
+            client, rid, transform, failed = self.pending.pop(extra)
             if client is None:
-                if event.get("@type") != "error":
-                    try:
+                # The service's own request (often the first step of a command): an error goes to
+                # `failed`, so whoever is waiting still hears back.
+                try:
+                    if event.get("@type") != "error":
                         transform(event)
-                    except Exception:   # a malformed answer must not take the service down
-                        pass
+                    elif failed is not None:
+                        failed(event)
+                except Exception:   # a malformed answer must not take the service down
+                    pass
                 return
             if client.sock.fileno() in self.clients:
                 if event.get("@type") == "error":
@@ -395,9 +465,13 @@ class Daemon:
                 else:
                     try:
                         result = transform(event) if transform else {}
+                    except BadRequest as e:
+                        self.respond_error(client, rid, str(e))
+                        return
                     except Exception:   # a malformed answer must not take the service down
                         result = {}
-                    self.respond(client, rid, result)
+                    if result is not DEFERRED:
+                        self.respond(client, rid, result)
             return
         if event.get("@type") == "updateAuthorizationState":
             self.on_auth(event.get("authorization_state"))
@@ -603,7 +677,7 @@ class Daemon:
                 self.sel.unregister(client.sock)
             except (KeyError, ValueError):
                 pass
-        for extra in [e for e, (c, _, _) in self.pending.items() if c is client]:
+        for extra in [e for e, entry in self.pending.items() if entry[0] is client]:
             del self.pending[extra]
         client.sock.close()
 
@@ -785,6 +859,243 @@ class Daemon:
             return {}
         self.td_send({"@type": "addChatToList", "chat_id": arg_int(args, "chatId"), "chat_list": target},
                      client, rid, moved)
+
+    # ---------------------------------------------------------------- what you can do with messages
+
+    def cmd_message_forward(self, client, rid, args):
+        self.td_send({"@type": "forwardMessages", "chat_id": arg_int(args, "chatId"), "topic_id": None,
+                      "from_chat_id": arg_int(args, "fromChatId"), "message_ids": arg_ids(args, "messageIds"),
+                      "options": None, "send_copy": args.get("sendCopy") is True, "remove_caption": False},
+                     client, rid, lambda event: {"count": len(model._list(event.get("messages"), 100))})
+
+    def cmd_message_properties(self, client, rid, args):
+        self.td_send({"@type": "getMessageProperties", "chat_id": arg_int(args, "chatId"),
+                      "message_id": arg_int(args, "messageId", 1)},
+                     client, rid, lambda event: {name: event.get(key) is True for key, name in PROPERTIES.items()})
+
+    def cmd_message_link(self, client, rid, args):
+        self.td_send({"@type": "getMessageLink", "chat_id": arg_int(args, "chatId"), "message_id": arg_int(args, "messageId", 1),
+                      "media_timestamp": 0, "checklist_task_id": 0, "poll_option_id": "", "for_album": False,
+                      "in_message_thread": False},
+                     client, rid, lambda event: {"link": model._str(event.get("link"), model.URL_MAX),
+                                                 "public": event.get("is_public") is True})
+
+    def cmd_message_pin(self, client, rid, args):
+        chat_id, message_id = arg_int(args, "chatId"), arg_int(args, "messageId", 1)
+        pinned = args.get("pinned")
+        if pinned is True:
+            query = {"@type": "pinChatMessage", "chat_id": chat_id, "message_id": message_id,
+                     "disable_notification": args.get("notify") is not True, "only_for_self": args.get("forSelf") is True}
+        elif pinned is False:
+            query = {"@type": "unpinChatMessage", "chat_id": chat_id, "message_id": message_id}
+        else:
+            raise BadRequest("pinned must be true or false")
+        self.td_send(query, client, rid)
+
+    def cmd_chat_pinned(self, client, rid, args):
+        self.td_send({"@type": "getChatPinnedMessage", "chat_id": arg_int(args, "chatId")},
+                     client, rid, lambda event: {"message": self.state.message(event)})
+
+    def cmd_reaction_set(self, client, rid, args):
+        base = {"chat_id": arg_int(args, "chatId"), "message_id": arg_int(args, "messageId", 1),
+                "reaction_type": {"@type": "reactionTypeEmoji", "emoji": arg_str(args, "emoji", 16)}}
+        chosen = args.get("chosen")
+        if chosen is True:
+            query = dict(base, **{"@type": "addMessageReaction", "is_big": False, "update_recent_reactions": True})
+        elif chosen is False:
+            query = dict(base, **{"@type": "removeMessageReaction"})
+        else:
+            raise BadRequest("chosen must be true or false")
+        self.td_send(query, client, rid)
+
+    def cmd_reactions_available(self, client, rid, args):
+        def available(event):
+            seen, emoji = set(), []
+            for group in ("top_reactions", "recent_reactions", "popular_reactions"):
+                for raw in model._list(event.get(group), 100):
+                    r = model._obj(raw, "availableReaction")
+                    kind = model._obj(r.get("type"))
+                    value = model._str(kind.get("emoji"), 16) if kind.get("@type") == "reactionTypeEmoji" else ""
+                    if value and value not in seen and r.get("needs_premium") is not True:
+                        seen.add(value)
+                        emoji.append(value)
+            return {"emoji": emoji[:48]}
+        self.td_send({"@type": "getMessageAvailableReactions", "chat_id": arg_int(args, "chatId"),
+                      "message_id": arg_int(args, "messageId", 1), "row_size": 8}, client, rid, available)
+
+    def cmd_button_callback(self, client, rid, args):
+        data = args.get("data")
+        if not isinstance(data, str) or not CALLBACK_DATA.fullmatch(data):
+            raise BadRequest("that is not a button's data")
+        self.td_send({"@type": "getCallbackQueryAnswer", "chat_id": arg_int(args, "chatId"),
+                      "message_id": arg_int(args, "messageId", 1),
+                      "payload": {"@type": "callbackQueryPayloadData", "data": data}},
+                     client, rid, lambda event: {"text": model._str(event.get("text"), 200),
+                                                 "alert": event.get("show_alert") is True,
+                                                 "url": model._str(event.get("url"), model.URL_MAX)})
+
+    def cmd_poll_vote(self, client, rid, args):
+        options = args.get("optionIds")
+        if (not isinstance(options, list) or len(options) > model.POLL_OPTIONS_MAX
+                or any(isinstance(o, bool) or not isinstance(o, int) or not 0 <= o < model.POLL_OPTIONS_MAX for o in options)):
+            raise BadRequest("optionIds is a list of option numbers")
+        self.td_send({"@type": "setPollAnswer", "chat_id": arg_int(args, "chatId"), "message_id": arg_int(args, "messageId", 1),
+                      "option_ids": options}, client, rid)
+
+    def cmd_chat_action(self, client, rid, args):
+        action = args.get("action")
+        if action not in SEND_ACTIONS:
+            raise BadRequest("that is not a chat action")
+        self.td_send({"@type": "sendChatAction", "chat_id": arg_int(args, "chatId"), "topic_id": None,
+                      "business_connection_id": "", "action": {"@type": SEND_ACTIONS[action]}}, client, rid)
+
+    def cmd_chat_draft(self, client, rid, args):
+        text = args.get("text", "")
+        if not isinstance(text, str) or len(text) > TEXT_MAX:
+            raise BadRequest(f"a draft is text of at most {TEXT_MAX} characters")
+        draft = None
+        if text.strip():
+            draft = {"@type": "draftMessage", "reply_to": self.reply_to(args), "date": 0, "effect_id": 0,
+                     "suggested_post_info": None,
+                     "content": {"@type": "draftMessageContentText", "link_preview_options": None,
+                                 "text": {"@type": "formattedText", "text": text, "entities": []}}}
+        self.td_send({"@type": "setChatDraftMessage", "chat_id": arg_int(args, "chatId"), "topic_id": None,
+                      "draft_message": draft}, client, rid)
+
+    def cmd_chat_mute(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        chat = self.state.chats.get(chat_id)
+        if chat is None:
+            raise BadRequest("unknown chat")
+        mute_for = arg_int(args, "muteFor", -1, MUTE_FOREVER)   # -1: whatever the default for such chats is
+        settings = dict(chat["notification"], use_default_mute_for=mute_for < 0, mute_for=max(0, mute_for))
+        self.td_send({"@type": "setChatNotificationSettings", "chat_id": chat_id, "notification_settings": settings},
+                     client, rid)
+
+    def cmd_chat_next_mention(self, client, rid, args):
+        def found(event):
+            ids = [i for i in (model._int(model._obj(m, "message").get("id")) for m in model._list(event.get("messages"), 100)) if i]
+            return {"messageId": min(ids) if ids else 0}
+        self.td_send({"@type": "searchChatMessages", "chat_id": arg_int(args, "chatId"), "topic_id": None, "query": "",
+                      "sender_id": None, "from_message_id": 0, "offset": 0, "limit": 100,
+                      "filter": {"@type": "searchMessagesFilterUnreadMention"}}, client, rid, found)
+
+    def cmd_chat_read_mentions(self, client, rid, args):
+        self.td_send({"@type": "readAllChatMentions", "chat_id": arg_int(args, "chatId")}, client, rid)
+
+    # ---------------------------------------------------------------- links, people, files
+
+    def cmd_link_open(self, client, rid, args):
+        """Where a link leads: a chat or message inside Telegram, an invite, or the web."""
+        url = arg_str(args, "url", model.URL_MAX)
+        if not re.match(r"(?i)^(https?|tg)://", url):
+            raise BadRequest("only web and Telegram links open")
+        if not TELEGRAM_LINK.match(url):
+            self.respond(client, rid, {"kind": "external", "url": url})
+            return
+
+        def external(_event=None):
+            self.respond(client, rid, {"kind": "external", "url": url})
+
+        def chat_answer(chat, **extra):
+            return dict({"kind": "chat", "chatId": model._int(chat.get("id"))}, **extra)
+
+        def classified(event):
+            t = event.get("@type")
+            if t == "internalLinkTypePublicChat":
+                self.td_send({"@type": "searchPublicChat", "username": model._str(event.get("chat_username"), 64)},
+                             client, rid, chat_answer)
+            elif t == "internalLinkTypeBotStart":
+                parameter = model._str(event.get("start_parameter"), 64)
+                self.td_send({"@type": "searchPublicChat", "username": model._str(event.get("bot_username"), 64)},
+                             client, rid, lambda chat: chat_answer(chat, botStart=parameter))
+            elif t == "internalLinkTypeMessage":
+                self.td_send({"@type": "getMessageLinkInfo", "url": model._str(event.get("url"), model.URL_MAX)}, client, rid,
+                             lambda info: {"kind": "chat", "chatId": model._int(info.get("chat_id")),
+                                           "messageId": model._int(model._obj(info.get("message"), "message").get("id"))})
+            elif t == "internalLinkTypeChatInvite":
+                link = model._str(event.get("invite_link"), model.URL_MAX)
+                self.td_send({"@type": "checkChatInviteLink", "invite_link": link}, client, rid,
+                             lambda info: {"kind": "invite", "link": link, "title": model._str(info.get("title"), model.TITLE_MAX),
+                                           "members": max(0, model._int(info.get("member_count"))),
+                                           "chatId": model._int(info.get("chat_id"))})
+            else:
+                external()
+        self.td_send({"@type": "getInternalLinkType", "link": url}, transform=classified, failed=external)
+
+    def cmd_chat_join_link(self, client, rid, args):
+        self.td_send({"@type": "joinChatByInviteLink", "invite_link": arg_str(args, "link", model.URL_MAX)},
+                     client, rid, lambda chat: {"chatId": model._int(chat.get("id"))})
+
+    def cmd_bot_start(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        chat = self.state.chats.get(chat_id)
+        if chat is None or not chat["userId"]:
+            raise BadRequest("that is not a chat with a bot")
+        self.td_send({"@type": "sendBotStartMessage", "bot_user_id": chat["userId"], "chat_id": chat_id,
+                      "parameter": arg_str(args, "parameter", 64, 0)}, client, rid, self.state.message)
+
+    def cmd_user_chat(self, client, rid, args):
+        self.td_send({"@type": "createPrivateChat", "user_id": arg_int(args, "userId", 1), "force": False},
+                     client, rid, lambda chat: {"chatId": model._int(chat.get("id"))})
+
+    def cmd_username_chat(self, client, rid, args):
+        username = arg_str(args, "username", 64).lstrip("@")
+        if not USERNAME.fullmatch(username):
+            raise BadRequest("that is not a username")
+        self.td_send({"@type": "searchPublicChat", "username": username},
+                     client, rid, lambda chat: {"chatId": model._int(chat.get("id"))})
+
+    def downloaded_path(self, event):
+        f = model._obj(event, "file")
+        local = model._obj(f.get("local"))
+        if local.get("is_downloading_completed") is not True:
+            raise BadRequest("the file is not downloaded yet")
+        path = model.local_path(local.get("path"), td.MEDIA_ROOTS)
+        if not path:
+            raise BadRequest("that file is not one of Omagram's")
+        return path
+
+    def cmd_file_open(self, client, rid, args):
+        def opened(event):
+            self.spawn([XDG_OPEN, self.downloaded_path(event)], timeout=HELPER_TIMEOUT * 3)
+            return {}
+        self.td_send({"@type": "getFile", "file_id": arg_int(args, "fileId", 1, INT32_MAX)}, client, rid, opened)
+
+    def cmd_file_save(self, client, rid, args):
+        name = download_name(args.get("fileName"))
+
+        def located(event):
+            path = self.downloaded_path(event)
+            if self.jobs >= JOBS_MAX:
+                raise BadRequest("still saving an earlier file")
+
+            def done(saved, error):
+                if error is not None:
+                    self.respond_error(client, rid, "the file could not be saved to Downloads")
+                else:
+                    self.respond(client, rid, {"path": saved})
+            self.background(lambda: str(copy_out(path, DOWNLOADS, name)), done)
+            return DEFERRED
+        self.td_send({"@type": "getFile", "file_id": arg_int(args, "fileId", 1, INT32_MAX)}, client, rid, located)
+
+    def cmd_clipboard_image(self, client, rid, args):
+        """An image on the clipboard, saved privately to send; "" when there is none."""
+        try:
+            offered = clipboard_types()
+            for mime, suffix in CLIPBOARD_TYPES:
+                if mime not in offered:
+                    continue
+                data = clipboard_data(mime)
+                if data is None:
+                    break
+                path = media.new_path("paste", suffix)
+                safe.write_file(path, data, mode=0o600)
+                self.respond(client, rid, {"path": str(path)})
+                return
+        except (safe.UnsafeError, OSError):
+            pass
+        self.respond(client, rid, {"path": ""})
 
     # ---------------------------------------------------------------- voice and video messages
 
@@ -1159,6 +1470,28 @@ COMMANDS = {
     "messages.search": ("cmd_messages_search", True),
     "chat.pin": ("cmd_chat_pin", True),
     "chat.archive": ("cmd_chat_archive", True),
+    "message.forward": ("cmd_message_forward", True),
+    "message.properties": ("cmd_message_properties", True),
+    "message.link": ("cmd_message_link", True),
+    "message.pin": ("cmd_message_pin", True),
+    "chat.pinned": ("cmd_chat_pinned", True),
+    "reaction.set": ("cmd_reaction_set", True),
+    "reactions.available": ("cmd_reactions_available", True),
+    "button.callback": ("cmd_button_callback", True),
+    "poll.vote": ("cmd_poll_vote", True),
+    "chat.action": ("cmd_chat_action", True),
+    "chat.draft": ("cmd_chat_draft", True),
+    "chat.mute": ("cmd_chat_mute", True),
+    "chat.nextMention": ("cmd_chat_next_mention", True),
+    "chat.readMentions": ("cmd_chat_read_mentions", True),
+    "link.open": ("cmd_link_open", True),
+    "chat.joinLink": ("cmd_chat_join_link", True),
+    "bot.start": ("cmd_bot_start", True),
+    "user.chat": ("cmd_user_chat", True),
+    "username.chat": ("cmd_username_chat", True),
+    "file.open": ("cmd_file_open", True),
+    "file.save": ("cmd_file_save", True),
+    "clipboard.image": ("cmd_clipboard_image", True),
     "settings.set": ("cmd_settings_set", False),
     "shortcuts.apply": ("cmd_shortcuts_apply", False),
     "voice.start": ("cmd_voice_start", True),

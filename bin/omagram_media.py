@@ -74,7 +74,7 @@ def clean_stale(max_age=STALE_SECONDS, now=None):
         with os.scandir(REC) as entries:
             # Only raw camera captures: a voice message recorded here before may still be on screen.
             old = [e.path for e in entries
-                   if e.name.startswith("note-") and e.is_file(follow_symlinks=False)
+                   if e.name.startswith(("note-", "paste-")) and e.is_file(follow_symlinks=False)
                    and now - e.stat(follow_symlinks=False).st_mtime > max_age]
     except FileNotFoundError:
         return

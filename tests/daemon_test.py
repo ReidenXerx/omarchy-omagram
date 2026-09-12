@@ -613,6 +613,189 @@ class ListsAndSearch(Harness):
         self.assertFalse(self.request(self.conn, 55, "chat.archive", chatId=42)["ok"])
 
 
+class MessageActions(Harness):
+    def setUp(self):
+        super().setUp()
+        self.conn = self.connect()
+        self.sign_in(self.conn)
+        self.td_event({"@type": "updateNewChat", "@client_id": 1, "chat": {
+            "@type": "chat", "id": 42, "title": "Friends", "type": {"@type": "chatTypeBasicGroup"},
+            "notification_settings": {"@type": "chatNotificationSettings", "use_default_mute_for": True, "mute_for": 0,
+                                      "show_preview": True, "sound_id": "5"},
+            "positions": [{"@type": "chatPosition", "list": {"@type": "chatListMain"}, "order": "7"}]}})
+        self.td_event({"@type": "updateNewChat", "@client_id": 1, "chat": {
+            "@type": "chat", "id": 500, "title": "Helper bot", "type": {"@type": "chatTypePrivate", "user_id": 500}}})
+        self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == 500)
+
+    def sent_count(self, kind):
+        return self.fake.sent_types().count(kind)
+
+    def next_query(self, kind, before):
+        self.wait(lambda: self.sent_count(kind) > before)
+        return [q for q in self.fake.sent if q.get("@type") == kind][-1]
+
+    def answer(self, query, result):
+        self.td_event(dict(result, **{"@extra": query["@extra"], "@client_id": 1}))
+
+    def call(self, rid, cmd, kind, result, **args):
+        before = self.sent_count(kind)
+        self.send(self.conn, {"id": rid, "cmd": cmd, "args": args})
+        query = self.next_query(kind, before)
+        self.answer(query, result)
+        return query, self.read(self.conn, lambda v: v.get("id") == rid)
+
+    def test_forward_properties_link_pin_reactions(self):
+        q, r = self.call(1, "message.forward", "forwardMessages", {"@type": "messages", "messages": [{}, {}]},
+                         chatId=42, fromChatId=500, messageIds=[7, 8])
+        self.assertEqual((q["chat_id"], q["from_chat_id"], q["message_ids"], q["send_copy"], r["result"]["count"]),
+                         (42, 500, [7, 8], False, 2))
+        q, r = self.call(2, "message.properties", "getMessageProperties",
+                         {"@type": "messageProperties", "can_be_deleted_for_all_users": True, "can_be_edited": False,
+                          "can_be_forwarded": True, "can_be_pinned": True}, chatId=42, messageId=7)
+        self.assertEqual(r["result"], {"canDeleteForAll": True, "canDeleteForMe": False, "canEdit": False, "canForward": True,
+                                       "canPin": True, "canCopy": False, "canReply": False, "canGetLink": False, "canSave": False})
+        q, r = self.call(3, "message.link", "getMessageLink", {"@type": "messageLink", "link": "https://t.me/x/7", "is_public": True},
+                         chatId=42, messageId=7)
+        self.assertEqual(r["result"], {"link": "https://t.me/x/7", "public": True})
+        q, _ = self.call(4, "message.pin", "pinChatMessage", {"@type": "ok"}, chatId=42, messageId=7, pinned=True)
+        self.assertEqual((q["disable_notification"], q["only_for_self"]), (True, False))
+        q, _ = self.call(5, "message.pin", "unpinChatMessage", {"@type": "ok"}, chatId=42, messageId=7, pinned=False)
+        self.assertEqual(q["message_id"], 7)
+        self.assertFalse(self.request(self.conn, 6, "message.pin", chatId=42, messageId=7)["ok"])
+        q, r = self.call(7, "chat.pinned", "getChatPinnedMessage", {"@type": "message", "id": 7, "chat_id": 42, "date": 1,
+                                                                    "content": {"@type": "messageText", "text": {"text": "rules"}}},
+                         chatId=42)
+        self.assertEqual(r["result"]["message"]["content"]["text"], "rules")
+        q, _ = self.call(8, "reaction.set", "addMessageReaction", {"@type": "ok"}, chatId=42, messageId=7, emoji="👍", chosen=True)
+        self.assertEqual((q["reaction_type"], q["is_big"]), ({"@type": "reactionTypeEmoji", "emoji": "👍"}, False))
+        self.call(9, "reaction.set", "removeMessageReaction", {"@type": "ok"}, chatId=42, messageId=7, emoji="👍", chosen=False)
+        _, r = self.call(10, "reactions.available", "getMessageAvailableReactions", {
+            "@type": "availableReactions",
+            "top_reactions": [{"@type": "availableReaction", "type": {"@type": "reactionTypeEmoji", "emoji": "👍"}},
+                              {"@type": "availableReaction", "type": {"@type": "reactionTypeEmoji", "emoji": "🦄"}, "needs_premium": True}],
+            "recent_reactions": [{"@type": "availableReaction", "type": {"@type": "reactionTypeEmoji", "emoji": "👍"}},
+                                 {"@type": "availableReaction", "type": {"@type": "reactionTypeCustomEmoji", "custom_emoji_id": "1"}},
+                                 {"@type": "availableReaction", "type": {"@type": "reactionTypeEmoji", "emoji": "🔥"}}]},
+            chatId=42, messageId=7)
+        self.assertEqual(r["result"]["emoji"], ["👍", "🔥"])
+
+    def test_buttons_polls_actions_drafts_mute_mentions(self):
+        q, r = self.call(20, "button.callback", "getCallbackQueryAnswer",
+                         {"@type": "callbackQueryAnswer", "text": "Done", "show_alert": True, "url": ""}, chatId=500, messageId=3, data="eWVz")
+        self.assertEqual((q["payload"], r["result"]), ({"@type": "callbackQueryPayloadData", "data": "eWVz"},
+                                                       {"text": "Done", "alert": True, "url": ""}))
+        for rid, bad in enumerate(("", "not base64!", "A" * 200, 5), start=21):
+            self.assertFalse(self.request(self.conn, rid, "button.callback", chatId=500, messageId=3, data=bad)["ok"], bad)
+        q, _ = self.call(30, "poll.vote", "setPollAnswer", {"@type": "ok"}, chatId=42, messageId=9, optionIds=[1])
+        self.assertEqual(q["option_ids"], [1])
+        self.call(31, "poll.vote", "setPollAnswer", {"@type": "ok"}, chatId=42, messageId=9, optionIds=[])
+        for rid, bad in enumerate(([12], [-1], ["1"], [True], "1"), start=32):
+            self.assertFalse(self.request(self.conn, rid, "poll.vote", chatId=42, messageId=9, optionIds=bad)["ok"], bad)
+        q, _ = self.call(40, "chat.action", "sendChatAction", {"@type": "ok"}, chatId=42, action="typing")
+        self.assertEqual((q["action"], q["business_connection_id"]), ({"@type": "chatActionTyping"}, ""))
+        self.assertFalse(self.request(self.conn, 41, "chat.action", chatId=42, action="dancing")["ok"])
+        q, _ = self.call(42, "chat.draft", "setChatDraftMessage", {"@type": "ok"}, chatId=42, text="half", replyToMessageId=9)
+        self.assertEqual((q["draft_message"]["content"]["text"]["text"], q["draft_message"]["reply_to"]["message_id"]), ("half", 9))
+        q, _ = self.call(43, "chat.draft", "setChatDraftMessage", {"@type": "ok"}, chatId=42, text="  ")
+        self.assertIsNone(q["draft_message"])
+        q, _ = self.call(44, "chat.mute", "setChatNotificationSettings", {"@type": "ok"}, chatId=42, muteFor=2 ** 31 - 1)
+        settings = q["notification_settings"]
+        self.assertEqual((settings["use_default_mute_for"], settings["mute_for"], settings["show_preview"], settings["sound_id"]),
+                         (False, 2 ** 31 - 1, True, "5"), "only the mute changes")
+        q, _ = self.call(45, "chat.mute", "setChatNotificationSettings", {"@type": "ok"}, chatId=42, muteFor=-1)
+        self.assertEqual((q["notification_settings"]["use_default_mute_for"], q["notification_settings"]["mute_for"]), (True, 0))
+        self.assertFalse(self.request(self.conn, 46, "chat.mute", chatId=999, muteFor=0)["ok"])
+        q, r = self.call(47, "chat.nextMention", "searchChatMessages",
+                         {"@type": "foundChatMessages", "messages": [{"@type": "message", "id": 90}, {"@type": "message", "id": 70}]},
+                         chatId=42)
+        self.assertEqual((q["filter"], r["result"]["messageId"]), ({"@type": "searchMessagesFilterUnreadMention"}, 70))
+        self.call(48, "chat.readMentions", "readAllChatMentions", {"@type": "ok"}, chatId=42)
+
+    def test_links_lead_inside_telegram_or_to_the_web(self):
+        self.assertEqual(self.request(self.conn, 50, "link.open", url="https://example.com/a")["result"],
+                         {"kind": "external", "url": "https://example.com/a"})
+        for rid, bad in enumerate(("javascript:alert(1)", "file:///etc/passwd", "", 5), start=51):
+            self.assertFalse(self.request(self.conn, rid, "link.open", url=bad)["ok"], bad)
+        # a username
+        before = self.sent_count("getInternalLinkType")
+        self.send(self.conn, {"id": 60, "cmd": "link.open", "args": {"url": "https://t.me/durov"}})
+        q = self.next_query("getInternalLinkType", before)
+        before = self.sent_count("searchPublicChat")
+        self.answer(q, {"@type": "internalLinkTypePublicChat", "chat_username": "durov"})
+        q = self.next_query("searchPublicChat", before)
+        self.assertEqual(q["username"], "durov")
+        self.answer(q, {"@type": "chat", "id": 777})
+        self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 60)["result"], {"kind": "chat", "chatId": 777})
+        # a message link
+        before = self.sent_count("getInternalLinkType")
+        self.send(self.conn, {"id": 61, "cmd": "link.open", "args": {"url": "https://t.me/c/1/5"}})
+        q = self.next_query("getInternalLinkType", before)
+        before = self.sent_count("getMessageLinkInfo")
+        self.answer(q, {"@type": "internalLinkTypeMessage", "url": "tg://privatepost?channel=1&post=5"})
+        q = self.next_query("getMessageLinkInfo", before)
+        self.answer(q, {"@type": "messageLinkInfo", "chat_id": -100, "message": {"@type": "message", "id": 5}})
+        self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 61)["result"], {"kind": "chat", "chatId": -100, "messageId": 5})
+        # an invite
+        before = self.sent_count("getInternalLinkType")
+        self.send(self.conn, {"id": 62, "cmd": "link.open", "args": {"url": "https://t.me/+abc"}})
+        q = self.next_query("getInternalLinkType", before)
+        before = self.sent_count("checkChatInviteLink")
+        self.answer(q, {"@type": "internalLinkTypeChatInvite", "invite_link": "https://t.me/+abc"})
+        q = self.next_query("checkChatInviteLink", before)
+        self.answer(q, {"@type": "chatInviteLinkInfo", "title": "Club", "member_count": 12, "chat_id": 0})
+        self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 62)["result"],
+                         {"kind": "invite", "link": "https://t.me/+abc", "title": "Club", "members": 12, "chatId": 0})
+        # TDLib does not recognise it: it is a web page after all
+        before = self.sent_count("getInternalLinkType")
+        self.send(self.conn, {"id": 63, "cmd": "link.open", "args": {"url": "https://t.me/"}})
+        q = self.next_query("getInternalLinkType", before)
+        self.td_event({"@type": "error", "code": 400, "message": "Link is not recognized", "@extra": q["@extra"], "@client_id": 1})
+        self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 63)["result"]["kind"], "external")
+        q, r = self.call(64, "chat.joinLink", "joinChatByInviteLink", {"@type": "chat", "id": 888}, link="https://t.me/+abc")
+        self.assertEqual(r["result"], {"chatId": 888})
+        q, _ = self.call(65, "bot.start", "sendBotStartMessage", {"@type": "message", "id": 1, "chat_id": 500},
+                         chatId=500, parameter="ref42")
+        self.assertEqual((q["bot_user_id"], q["parameter"]), (500, "ref42"))
+        self.assertFalse(self.request(self.conn, 66, "bot.start", chatId=42, parameter="x")["ok"], "not a private chat")
+        q, r = self.call(67, "user.chat", "createPrivateChat", {"@type": "chat", "id": 8}, userId=8)
+        self.assertEqual(r["result"], {"chatId": 8})
+        q, r = self.call(68, "username.chat", "searchPublicChat", {"@type": "chat", "id": 9}, username="@some_bot")
+        self.assertEqual((q["username"], r["result"]), ("some_bot", {"chatId": 9}))
+        self.assertFalse(self.request(self.conn, 69, "username.chat", username="a b")["ok"])
+
+    def test_files_open_save_and_clipboard_images(self):
+        files = self.root / "files"
+        files.mkdir(mode=0o700)
+        document = files / "report.pdf"
+        document.write_bytes(b"%PDF-1.7 data")
+        downloads = self.root / "Downloads"
+        spawned = []
+        for target, value in ((self.d.td, ("MEDIA_ROOTS", (str(files),))), (self.d, ("DOWNLOADS", downloads))):
+            patch = mock.patch.object(target, value[0], value[1])
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.daemon.spawn = lambda argv, fallback=None, timeout=None: spawned.append(argv)
+        done = {"@type": "file", "id": 5, "local": {"path": str(document), "is_downloading_completed": True}}
+        q, r = self.call(70, "file.open", "getFile", done, fileId=5)
+        self.assertEqual((r["ok"], spawned), (True, [["/usr/bin/xdg-open", str(document)]]))
+        _, r = self.call(71, "file.open", "getFile", {"@type": "file", "id": 5, "local": {"path": str(document)}}, fileId=5)
+        self.assertFalse(r["ok"], "not downloaded yet")
+        _, r = self.call(72, "file.open", "getFile", dict(done, local={"path": "/etc/passwd", "is_downloading_completed": True}), fileId=5)
+        self.assertFalse(r["ok"], "outside Omagram's files")
+        _, first = self.call(73, "file.save", "getFile", done, fileId=5, fileName="../../Report.pdf")
+        _, second = self.call(74, "file.save", "getFile", done, fileId=5, fileName="../../Report.pdf")
+        self.assertEqual((first["result"]["path"], second["result"]["path"]),
+                         (str(downloads / "Report.pdf"), str(downloads / "Report (2).pdf")))
+        self.assertEqual((downloads / "Report (2).pdf").read_bytes(), b"%PDF-1.7 data")
+        with mock.patch.object(self.d, "clipboard_types", lambda: ["text/plain", "image/png"]), \
+             mock.patch.object(self.d, "clipboard_data", lambda mime: b"\x89PNG image"):
+            path = self.request(self.conn, 75, "clipboard.image")["result"]["path"]
+        self.assertEqual((os.path.dirname(path), pathlib.Path(path).read_bytes(), os.stat(path).st_mode & 0o777),
+                         (str(self.d.media.REC), b"\x89PNG image", 0o600))
+        with mock.patch.object(self.d, "clipboard_types", lambda: ["text/plain"]):
+            self.assertEqual(self.request(self.conn, 76, "clipboard.image")["result"], {"path": ""})
+
+
 class Recording(Harness):
     """Voice and video messages with the recorder and converter faked: no microphone,
     camera or ffmpeg is used."""
