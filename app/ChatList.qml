@@ -48,6 +48,7 @@ FocusScope {
   signal settingsRequested()
   signal muteRequested(real chatId)
   signal readRequested(real chatId)
+  signal unreadRequested(real chatId)
 
   property var menuChat: null
   readonly property bool modalOpen: chatMenu.visible
@@ -137,6 +138,7 @@ FocusScope {
     if (!chat) return
     if (id === "open") root.activated(chat.id)
     else if (id === "read") root.readRequested(chat.id)
+    else if (id === "unread") root.unreadRequested(chat.id)
     else if (id === "pin" || id === "unpin") root.pinRequested(chat.id)
     else if (id === "mute" || id === "unmute") root.muteRequested(chat.id)
     else if (id === "archive" || id === "unarchive") root.archiveRequested(chat.id)
@@ -492,7 +494,7 @@ FocusScope {
                   color: app.foreground
                   font.family: app.fontFamily
                   font.pixelSize: Style.font.body
-                  font.bold: row.chat.unread > 0
+                  font.bold: row.chat.unread > 0 || row.chat.markedUnread
                 }
 
                 Text {
@@ -544,17 +546,18 @@ FocusScope {
                   font.pixelSize: Style.font.bodySmall
                 }
 
+                // The unread count, @ for a mention, or a dot for a chat you marked unread.
                 Rectangle {
-                  visible: row.chat.unread > 0 || row.chat.mentions > 0
-                  Layout.preferredHeight: Style.space(20)
-                  Layout.preferredWidth: Math.max(Style.space(20), badge.implicitWidth + Style.space(12))
+                  visible: row.chat.unread > 0 || row.chat.mentions > 0 || row.chat.markedUnread
+                  Layout.preferredHeight: badge.text === "" ? Style.space(12) : Style.space(20)
+                  Layout.preferredWidth: badge.text === "" ? Style.space(12) : Math.max(Style.space(20), badge.implicitWidth + Style.space(12))
                   radius: height / 2
                   color: row.chat.muted ? Qt.rgba(app.muted.r, app.muted.g, app.muted.b, 0.5) : app.accent
 
                   Text {
                     id: badge
                     anchors.centerIn: parent
-                    text: row.chat.mentions > 0 ? "@" : (row.chat.unread > 999 ? "999+" : String(row.chat.unread))
+                    text: row.chat.mentions > 0 ? "@" : (row.chat.unread > 999 ? "999+" : (row.chat.unread > 0 ? String(row.chat.unread) : ""))
                     color: app.background
                     font.family: app.fontFamily
                     font.pixelSize: Style.font.caption

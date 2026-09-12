@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText }", box)
 const M = box.M
 const plain = v => JSON.parse(JSON.stringify(v))
 const eq = (a, b, msg) => assert.deepStrictEqual(plain(a), plain(b), msg)
@@ -278,7 +278,28 @@ test("mute and chat menus", () => {
   for (const bad of ["mute:", "mute:-5", "mute:0", "mute:9999999999", "junk", null]) assert.strictEqual(M.muteSeconds(bad), -1, String(bad))
   const c = { id: 1, unread: 2, mentions: 0, muted: false, archived: false, positions: { main: { order: "5", pinned: true } } }
   eq(M.chatMenu(c, "main", false).map(i => i.id), ["open", "read", "unpin", "mute", "archive"])
-  eq(M.chatMenu(Object.assign({}, c, { unread: 0, muted: true, archived: true }), "main", true).map(i => i.id), ["open", "unmute", "unarchive"])
+  eq(M.chatMenu(Object.assign({}, c, { unread: 0, muted: true, archived: true }), "main", true).map(i => i.id),
+     ["open", "unread", "unmute", "unarchive"])
+  eq(M.chatMenu(Object.assign({}, c, { unread: 0, markedUnread: true }), "main", true).map(i => i.id), ["open", "read", "mute", "archive"])
+})
+
+test("devices and storage in words", () => {
+  const now = new Date(2026, 8, 12, 15, 0).getTime()
+  const at = (y, mo, d, h, mi) => new Date(y, mo, d, h, mi).getTime() / 1000
+  assert.strictEqual(M.agoText(now / 1000 - 20, now), "just now")
+  assert.strictEqual(M.agoText(at(2026, 8, 12, 14, 55), now), "5 minutes ago")
+  assert.strictEqual(M.agoText(at(2026, 8, 12, 12, 0), now), "3 hours ago")
+  assert.strictEqual(M.agoText(at(2026, 8, 11, 20, 0), now), "yesterday")
+  assert.strictEqual(M.agoText(0, now), "")
+  const desktop = { app: "Telegram Desktop", appVersion: "5.1", device: "PC", platform: "Windows", system: "11",
+                    location: "Kyiv, Ukraine", current: false, lastActive: at(2026, 8, 12, 14, 55) }
+  assert.strictEqual(M.sessionTitle(desktop), "Telegram Desktop 5.1")
+  assert.strictEqual(M.sessionDetail(desktop, now), "PC · Windows 11 · Kyiv, Ukraine · active 5 minutes ago")
+  assert.strictEqual(M.sessionDetail({ app: "", current: true }, now), "this device")
+  assert.strictEqual(M.sessionTitle({}), "Unknown app")
+  assert.strictEqual(M.storageText({ filesSize: 5 * 1048576, fileCount: 12, databaseSize: 2048, stickerCacheSize: 0 }),
+                     "5.0 MB of downloads in 12 files · database 2.0 KB")
+  assert.strictEqual(M.storageText(null), "Counting…")
 })
 
 test("albums act as one, selections toggle and copy like Telegram", () => {

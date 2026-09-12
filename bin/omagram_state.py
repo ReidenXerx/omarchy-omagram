@@ -384,9 +384,9 @@ SESSION_DEVICES = ("android", "apple", "brave", "chrome", "edge", "firefox", "ip
 def session_view(value):
     """A device signed in to the account, as Settings lists it."""
     s = _obj(value, "session")
-    sid = _int(s.get("id"))
-    if not sid:
+    if not s:
         return None
+    sid = _int(s.get("id"))   # the device you are using has id 0
     device = _str(_obj(s.get("device_type")).get("@type"), 64).replace("sessionDeviceType", "").lower()
     return {"id": str(sid), "current": s.get("is_current") is True, "passwordPending": s.get("is_password_pending") is True,
             "unconfirmed": s.get("is_unconfirmed") is True, "official": s.get("is_official_application") is True,

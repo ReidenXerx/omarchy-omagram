@@ -563,7 +563,8 @@ function muteSeconds(id) {
 function chatMenu(chat, listKey, searchMode) {
   if (!isObject(chat)) return []
   var out = [{ id: "open", label: "Open" }]
-  if (chat.unread > 0 || chat.mentions > 0) out.push({ id: "read", label: "Mark as read" })
+  if (chat.unread > 0 || chat.mentions > 0 || chat.markedUnread) out.push({ id: "read", label: "Mark as read" })
+  else out.push({ id: "unread", label: "Mark as unread" })
   if (!searchMode) out.push(pinnedIn(chat, listKey) ? { id: "unpin", label: "Unpin" } : { id: "pin", label: "Pin" })
   out.push(chat.muted ? { id: "unmute", label: "Unmute" } : { id: "mute", label: "Mute" })
   out.push(chat.archived ? { id: "unarchive", label: "Move out of the archive" } : { id: "archive", label: "Archive" })
@@ -626,6 +627,42 @@ function saveName(message) {
   var base = { photo: "photo", video: "video", gif: "animation", voice: "voice", videoNote: "video-message", audio: "audio" }[c.kind] || "file"
   var ext = { photo: ".jpg", video: ".mp4", gif: ".mp4", voice: ".ogg", videoNote: ".mp4" }[c.kind] || ""
   return base + "_" + stamp + ext
+}
+
+// "just now", "5 minutes ago", "3 hours ago", "yesterday", then a date.
+function agoText(seconds, nowMs) {
+  if (!(seconds > 0)) return ""
+  var minutes = Math.floor((nowMs / 1000 - seconds) / 60)
+  if (minutes < 1) return "just now"
+  if (minutes < 60) return minutes + (minutes === 1 ? " minute ago" : " minutes ago")
+  if (sameDay(seconds, nowMs / 1000)) {
+    var hours = Math.floor(minutes / 60)
+    return hours + (hours === 1 ? " hour ago" : " hours ago")
+  }
+  if (daysBetween(seconds, nowMs) === 1) return "yesterday"
+  return listTime(seconds, nowMs)
+}
+
+// A signed-in device: "Telegram Desktop 5.1", then "PC · Windows 11 · Kyiv · active 5 minutes ago".
+function sessionTitle(session) {
+  if (!isObject(session)) return ""
+  return (String(session.app || "") || "Unknown app") + (session.appVersion ? " " + session.appVersion : "")
+}
+
+function sessionDetail(session, nowMs) {
+  if (!isObject(session)) return ""
+  var system = [session.platform, session.system].filter(function (part) { return !!part }).join(" ")
+  var parts = [session.device, system, session.location].filter(function (part) { return !!part })
+  parts.push(session.current ? "this device" : "active " + agoText(session.lastActive, nowMs))
+  return parts.join(" · ")
+}
+
+function storageText(stats) {
+  if (!isObject(stats)) return "Counting…"
+  var files = Math.max(0, stats.fileCount | 0)
+  return formatSize(stats.filesSize) + " of downloads in " + files + (files === 1 ? " file" : " files")
+    + " · database " + formatSize(stats.databaseSize)
+    + (stats.stickerCacheSize > 0 ? " · stickers " + formatSize(stats.stickerCacheSize) : "")
 }
 
 // Chats to forward to: Saved Messages first, then the main list and the archive.

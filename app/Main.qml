@@ -322,6 +322,20 @@ Scope {
     if (!chat) return
     if (chat.lastMessage && chat.lastMessage.id) omagram.markRead(chatId, [chat.lastMessage.id])
     if (chat.mentions > 0) service.request("chat.readMentions", { chatId: chatId })
+    if (chat.markedUnread) service.request("chat.markUnread", { chatId: chatId, unread: false })
+  }
+
+  function markChatUnread(chatId) {
+    service.request("chat.markUnread", { chatId: chatId, unread: true }, function (answer) {
+      if (!answer.ok && screen.item && screen.item.notify) screen.item.notify(answer.error || "Could not mark the chat unread")
+    })
+  }
+
+  // After the cache is cleared no downloaded path is valid any more: files and stickers load again.
+  function clearFileStates() {
+    omagram.files = ({})
+    omagram.filesRevision++
+    omagram.lottieCache = ({})
   }
 
   function openFile(message) {
@@ -554,6 +568,7 @@ Scope {
           onSettingsRequested: omagram.settingsOpen = true
           onMuteRequested: function (chatId) { omagram.toggleMute(chatId) }
           onReadRequested: function (chatId) { omagram.markChatRead(chatId) }
+          onUnreadRequested: function (chatId) { omagram.markChatUnread(chatId) }
           onActivated: function (chatId) {
             omagram.openChatById(chatId, false)
             chatView.focusComposer()

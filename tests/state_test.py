@@ -495,7 +495,9 @@ class GroupsAndTopics(unittest.TestCase):
         self.assertEqual((session["id"], session["current"], session["type"], session["app"]), ("123", True, "linux", "Omagram"))
         self.assertEqual(model.session_view({"@type": "session", "id": "5", "device_type": {"@type": "sessionDeviceTypeToaster"}})["type"],
                          "unknown")
-        self.assertIsNone(model.session_view({"@type": "session"}))
+        current = model.session_view({"@type": "session", "id": "0", "is_current": True})
+        self.assertEqual((current["id"], current["current"]), ("0", True), "Telegram gives the device in use id 0")
+        self.assertIsNone(model.session_view("junk"))
 
 
 class Bounds(unittest.TestCase):
