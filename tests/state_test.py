@@ -482,6 +482,9 @@ class GroupsAndTopics(unittest.TestCase):
                                                              "join_to_send_messages": False, "status": {"@type": "chatMemberStatusLeft"}}})
         s.apply({"@type": "updateNewChat", "chat": chat(-10078, "Comments", kind={"@type": "chatTypeSupergroup", "supergroup_id": 78})})
         self.assertEqual((s.chat_view(-10078)["myStatus"], s.chat_view(-10078)["joinToWrite"]), ("left", False))
+        s.apply({"@type": "updateSupergroup", "supergroup": {"@type": "supergroup", "id": 78, "has_linked_chat": True,
+                                                             "join_to_send_messages": True, "status": {"@type": "chatMemberStatusLeft"}}})
+        self.assertTrue(s.chat_view(-10078)["joinToWrite"], "one that takes comments from its members only")
         for junk in ({"@type": "updateSupergroup", "supergroup": "x"}, {"@type": "updateBasicGroup"},
                      {"@type": "updateSupergroup", "supergroup": {"@type": "supergroup", "id": -1}}):
             self.assertEqual(s.apply(junk), [])

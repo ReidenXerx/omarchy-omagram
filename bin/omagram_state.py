@@ -967,7 +967,7 @@ class State:
             # A supergroup or channel can be joined, a basic group you left cannot; a channel's
             # discussion group may take messages from people who have not joined it.
             "supergroup": chat["supergroupId"] != 0,
-            "joinToWrite": not (chat["kind"] == "group" and group.get("linked", False) and not group.get("joinToSend", False)),
+            "joinToWrite": chat["kind"] != "group" or group.get("joinToSend", True),
             "hasScheduled": chat["hasScheduled"],
             # A secret chat: pending until the other side accepts, then ready, or closed. Its key
             # fingerprint is for the info page only.
@@ -1144,8 +1144,10 @@ class State:
                                                  "status": MEMBER_STATUSES.get(_obj(g.get("status")).get("@type"), ""),
                                                  "username": _str(usernames[0], NAME_MAX) if usernames else "",
                                                  "forum": g.get("is_forum") is True,
-                                                 "linked": g.get("has_linked_chat") is True,
-                                                 "joinToSend": g.get("join_to_send_messages") is True})
+                                                 # TDLib's own answer to "must you join before writing": false
+                                                 # only where people who have not joined may write, as in a
+                                                 # channel's discussion group that takes comments from anyone.
+                                                 "joinToSend": g.get("join_to_send_messages") is not False})
         return self._group_chat_events("supergroupId", gid)
 
     def _on_updateChatHasScheduledMessages(self, u):
