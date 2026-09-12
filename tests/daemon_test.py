@@ -3,6 +3,7 @@
 
 The real event loop runs in a thread on a real Unix socket inside a sandbox under
 $XDG_RUNTIME_DIR; nothing talks to Telegram or the real keyring."""
+import base64
 import importlib.machinery
 import importlib.util
 import json
@@ -205,6 +206,25 @@ class Harness(unittest.TestCase):
         self.td_event(auth_update("authorizationStateReady"))
         self.read(conn, lambda v: v.get("event") == "auth" and v["auth"]["state"] == "ready")
 
+    # A command on self.conn, the TDLib query it makes and TDLib's answer to it.
+
+    def sent_count(self, kind):
+        return self.fake.sent_types().count(kind)
+
+    def next_query(self, kind, before):
+        self.wait(lambda: self.sent_count(kind) > before)
+        return [q for q in self.fake.sent if q.get("@type") == kind][-1]
+
+    def answer(self, query, result):
+        self.td_event(dict(result, **{"@extra": query["@extra"], "@client_id": 1}))
+
+    def call(self, rid, cmd, kind, result, **args):
+        before = self.sent_count(kind)
+        self.send(self.conn, {"id": rid, "cmd": cmd, "args": args})
+        query = self.next_query(kind, before)
+        self.answer(query, result)
+        return query, self.read(self.conn, lambda v: v.get("id") == rid)
+
 
 class Service(Harness):
     # ---------------------------------------------------------------- login
@@ -252,6 +272,22 @@ class Service(Harness):
         self.assertEqual(self.read(conn, lambda v: v.get("event") == "auth")["auth"], {"state": "password", "hint": "cat"})
         self.send(conn, {"id": 11, "cmd": "auth.password", "args": {"password": "correct horse"}})
         self.assertEqual(self.last_query("checkAuthenticationPassword")["password"], "correct horse")
+
+    def test_qr_sign_in_comes_with_a_picture_of_the_link(self):
+        conn = self.connect()
+        link = "tg://login?token=AQIDBAUGBwgJCgsMDQ4PEA"
+        self.td_event(auth_update("authorizationStateWaitOtherDeviceConfirmation", link=link))
+        auth = self.read(conn, lambda v: v.get("event") == "auth")["auth"]
+        self.assertEqual((auth["state"], auth["link"]), ("qr", link))
+        if not safe.has_tool("qrencode"):
+            self.skipTest("qrencode is not installed")
+        self.assertTrue(auth["image"].startswith("data:image/png;base64,"))
+        if safe.has_tool("zbarimg"):
+            png = self.root / "qr.png"
+            png.write_bytes(base64.b64decode(auth["image"].split(",", 1)[1]))
+            self.assertEqual(safe.run(["zbarimg", "--raw", "-q", str(png)], timeout=10).text().strip(), link)
+        self.td_event(auth_update("authorizationStateWaitOtherDeviceConfirmation", link="https://example.com/not-a-login"))
+        self.assertEqual(self.read(conn, lambda v: v.get("event") == "auth")["auth"].get("image", ""), "")
 
     def test_account_commands_need_a_signed_in_session(self):
         conn = self.connect()
@@ -656,23 +692,6 @@ class MessageActions(Harness):
             "@type": "chat", "id": 500, "title": "Helper bot", "type": {"@type": "chatTypePrivate", "user_id": 500}}})
         self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == 500)
 
-    def sent_count(self, kind):
-        return self.fake.sent_types().count(kind)
-
-    def next_query(self, kind, before):
-        self.wait(lambda: self.sent_count(kind) > before)
-        return [q for q in self.fake.sent if q.get("@type") == kind][-1]
-
-    def answer(self, query, result):
-        self.td_event(dict(result, **{"@extra": query["@extra"], "@client_id": 1}))
-
-    def call(self, rid, cmd, kind, result, **args):
-        before = self.sent_count(kind)
-        self.send(self.conn, {"id": rid, "cmd": cmd, "args": args})
-        query = self.next_query(kind, before)
-        self.answer(query, result)
-        return query, self.read(self.conn, lambda v: v.get("id") == rid)
-
     def test_forward_properties_link_pin_reactions(self):
         q, r = self.call(1, "message.forward", "forwardMessages", {"@type": "messages", "messages": [{}, {}]},
                          chatId=42, fromChatId=500, messageIds=[7, 8])
@@ -823,6 +842,174 @@ class MessageActions(Harness):
                          (str(self.d.media.REC), b"\x89PNG image", 0o600))
         with mock.patch.object(self.d, "clipboard_types", lambda: ["text/plain"]):
             self.assertEqual(self.request(self.conn, 76, "clipboard.image")["result"], {"path": ""})
+
+
+class ChatsAndAccount(Harness):
+    def setUp(self):
+        super().setUp()
+        self.conn = self.connect()
+        self.sign_in(self.conn)
+        main = [{"@type": "chatPosition", "list": {"@type": "chatListMain"}, "order": "5"}]
+        for update in (
+            {"@type": "updateUser", "user": {"@type": "user", "id": 500, "first_name": "Ann", "phone_number": "380671234567",
+                                              "usernames": {"@type": "usernames", "active_usernames": ["ann"]}}},
+            {"@type": "updateUser", "user": {"@type": "user", "id": 501, "first_name": "Bob"}},
+            {"@type": "updateSupergroup", "supergroup": {"@type": "supergroup", "id": 77, "member_count": 1234, "is_forum": True,
+                                                         "usernames": {"@type": "usernames", "active_usernames": ["club"]},
+                                                         "status": {"@type": "chatMemberStatusMember"}}},
+            {"@type": "updateBasicGroup", "basic_group": {"@type": "basicGroup", "id": 66, "member_count": 3,
+                                                          "status": {"@type": "chatMemberStatusCreator"}}},
+            {"@type": "updateNewChat", "chat": {"@type": "chat", "id": 500, "title": "Ann", "positions": main,
+                                                "type": {"@type": "chatTypePrivate", "user_id": 500}}},
+            {"@type": "updateNewChat", "chat": {"@type": "chat", "id": -66, "title": "Friends", "positions": main,
+                                                "type": {"@type": "chatTypeBasicGroup", "basic_group_id": 66}}},
+            {"@type": "updateNewChat", "chat": {"@type": "chat", "id": -10077, "title": "Club", "positions": main,
+                                                "type": {"@type": "chatTypeSupergroup", "supergroup_id": 77, "is_channel": False}}},
+        ):
+            self.td_event(dict(update, **{"@client_id": 1}))
+        self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == -10077)
+
+    def test_chat_views_know_group_sizes_usernames_forums_and_your_place(self):
+        chats = {c["id"]: c for c in self.request(self.conn, 1, "chats.list", list="main")["result"]["chats"]}
+        club = chats[-10077]
+        self.assertEqual((club["memberCount"], club["username"], club["forum"], club["myStatus"]), (1234, "club", True, "member"))
+        self.assertEqual((chats[-66]["memberCount"], chats[-66]["myStatus"]), (3, "owner"))
+        self.assertEqual((chats[500]["username"], chats[500]["forum"]), ("ann", False))
+        self.assertNotIn("380671234567", json.dumps(chats), "phone numbers stay out of chat lists")
+
+    def test_info_for_a_person_a_group_and_a_supergroup(self):
+        q, r = self.call(10, "chat.info", "getUserFullInfo", {"@type": "userFullInfo", "group_in_common_count": 2,
+                                                              "bio": {"@type": "formattedText", "text": "hi there", "entities": []}},
+                         chatId=500)
+        info = r["result"]
+        self.assertEqual((q["user_id"], info["username"], info["phone"], info["bio"]["text"], info["commonGroups"]),
+                         (500, "ann", "380671234567", "hi there", 2))
+        member = lambda uid, status: {"@type": "chatMember", "member_id": {"@type": "messageSenderUser", "user_id": uid},
+                                      "status": {"@type": status}}
+        q, r = self.call(11, "chat.info", "getBasicGroupFullInfo", {
+            "@type": "basicGroupFullInfo", "description": "our group", "members": [
+                member(500, "chatMemberStatusCreator"), member(501, "chatMemberStatusMember"), "junk"],
+            "invite_link": {"@type": "chatInviteLink", "invite_link": "https://t.me/+abc"}}, chatId=-66)
+        info = r["result"]
+        self.assertEqual((q["basic_group_id"], [(m["name"], m["status"]) for m in info["members"]]),
+                         (66, [("Ann", "owner"), ("Bob", "member")]))
+        self.assertEqual((info["description"], info["inviteLink"], info["memberCount"]), ("our group", "https://t.me/+abc", 2))
+        q, r = self.call(12, "chat.info", "getSupergroupFullInfo", {"@type": "supergroupFullInfo", "description": "club talk",
+                                                                    "member_count": 1500, "can_get_members": True}, chatId=-10077)
+        self.assertEqual((q["supergroup_id"], r["result"]["memberCount"], r["result"]["canGetMembers"], r["result"]["username"]),
+                         (77, 1500, True, "club"))
+        self.assertFalse(self.request(self.conn, 13, "chat.info", chatId=999)["ok"])
+
+    def test_members_shared_media_and_counts(self):
+        member = lambda uid, status: {"@type": "chatMember", "member_id": {"@type": "messageSenderUser", "user_id": uid},
+                                      "status": {"@type": status}}
+        q, r = self.call(20, "chat.members", "getSupergroupMembers", {"@type": "chatMembers", "total_count": 1500,
+                                                                      "members": [member(501, "chatMemberStatusAdministrator")]},
+                         chatId=-10077, query="bo", limit=20)
+        self.assertEqual((q["filter"], q["limit"], r["result"]["total"], r["result"]["members"][0]["status"]),
+                         ({"@type": "supergroupMembersFilterSearch", "query": "bo"}, 20, 1500, "admin"))
+        _, r = self.call(21, "chat.members", "getBasicGroupFullInfo", {"@type": "basicGroupFullInfo", "members": [
+            member(500, "chatMemberStatusMember"), member(501, "chatMemberStatusMember")]}, chatId=-66, query="ANN")
+        self.assertEqual(([m["name"] for m in r["result"]["members"]], r["result"]["total"]), (["Ann"], 1))
+        self.assertFalse(self.request(self.conn, 22, "chat.members", chatId=500)["ok"], "a private chat has no member list")
+        q, r = self.call(23, "chat.media", "searchChatMessages", {
+            "@type": "foundChatMessages", "total_count": 7, "next_from_message_id": 40,
+            "messages": [{"@type": "message", "id": 41, "chat_id": -66, "content": {"@type": "messageDocument", "document": {}}}]},
+            chatId=-66, filter="files")
+        self.assertEqual((q["filter"], r["result"]["total"], r["result"]["nextFromMessageId"], len(r["result"]["messages"])),
+                         ({"@type": "searchMessagesFilterDocument"}, 7, 40, 1))
+        self.assertFalse(self.request(self.conn, 24, "chat.media", chatId=-66, filter="secrets")["ok"])
+        before = self.sent_count("getChatMessageCount")
+        self.send(self.conn, {"id": 25, "cmd": "chat.mediaCounts", "args": {"chatId": -66}})
+        self.wait(lambda: self.sent_count("getChatMessageCount") >= before + len(self.d.MEDIA_FILTERS))
+        for n, query in enumerate(q for q in self.fake.sent if q.get("@type") == "getChatMessageCount"):
+            if n == 0:
+                self.td_event({"@type": "error", "code": 400, "message": "nope", "@extra": query["@extra"], "@client_id": 1})
+            else:
+                self.answer(query, {"@type": "count", "count": n})
+        counts = self.read(self.conn, lambda v: v.get("id") == 25)["result"]["counts"]
+        self.assertEqual(sorted(counts), sorted(self.d.MEDIA_FILTERS))
+        self.assertEqual(sorted(counts.values()), list(range(len(self.d.MEDIA_FILTERS))), "a count that failed is 0")
+
+    def test_leaving_clearing_and_marking_unread(self):
+        q, _ = self.call(30, "chat.leave", "leaveChat", {"@type": "ok"}, chatId=-66)
+        self.assertEqual(q["chat_id"], -66)
+        q, _ = self.call(31, "chat.clearHistory", "deleteChatHistory", {"@type": "ok"}, chatId=500, removeFromList=True)
+        self.assertEqual((q["remove_from_chat_list"], q["revoke"]), (True, False))
+        q, _ = self.call(32, "chat.markUnread", "toggleChatIsMarkedAsUnread", {"@type": "ok"}, chatId=500, unread=True)
+        self.assertTrue(q["is_marked_as_unread"])
+        self.assertFalse(self.request(self.conn, 33, "chat.markUnread", chatId=500, unread="yes")["ok"])
+        self.assertFalse(self.request(self.conn, 34, "chat.clearHistory", chatId=500, revoke=1)["ok"])
+
+    def test_contacts_and_new_groups_and_channels(self):
+        _, r = self.call(40, "contacts.list", "getContacts", {"@type": "users", "total_count": 3, "user_ids": [500, 501, 999]})
+        self.assertEqual([(c["userId"], c["name"], c["username"]) for c in r["result"]["contacts"]], [(500, "Ann", "ann"), (501, "Bob", "")])
+        q, _ = self.call(41, "contacts.search", "searchContacts", {"@type": "users", "user_ids": [501]}, query="bo")
+        self.assertEqual((q["query"], q["limit"]), ("bo", 50))
+        q, r = self.call(42, "group.create", "createNewBasicGroupChat", {
+            "@type": "createdBasicGroupChat", "chat_id": -99,
+            "failed_to_add_members": {"@type": "failedToAddMembers", "failed_to_add_members": [{}]}}, title="  Trip  ", userIds=[500, 501])
+        self.assertEqual((q["title"], q["user_ids"], r["result"]), ("Trip", [500, 501], {"chatId": -99, "notAdded": 1}))
+        for rid, args in enumerate(({"title": " ", "userIds": []}, {"title": "x" * 200, "userIds": []},
+                                    {"title": "ok", "userIds": [True]}, {"title": "ok", "userIds": list(range(1, 300))}), start=43):
+            self.assertFalse(self.request(self.conn, rid, "group.create", **args)["ok"], args)
+        q, r = self.call(50, "channel.create", "createNewSupergroupChat", {"@type": "chat", "id": -100123},
+                         title="News", description="daily", channel=True)
+        self.assertEqual((q["is_channel"], q["is_forum"], q["description"], r["result"]), (True, False, "daily", {"chatId": -100123}))
+        self.assertFalse(self.request(self.conn, 51, "channel.create", title="News", description="d" * 300)["ok"])
+
+    def test_devices_can_be_listed_and_signed_out(self):
+        _, r = self.call(60, "sessions.list", "getActiveSessions", {"@type": "sessions", "inactive_session_ttl_days": 180, "sessions": [
+            {"@type": "session", "id": "111", "is_current": False, "application_name": "Telegram Desktop", "device_model": "PC",
+             "last_active_date": 100, "device_type": {"@type": "sessionDeviceTypeWindows"}},
+            {"@type": "session", "id": "-9223372036854775807", "is_current": True, "application_name": "Omagram", "last_active_date": 50},
+            "junk"]})
+        self.assertEqual([(s["id"], s["current"], s["type"]) for s in r["result"]["sessions"]],
+                         [("-9223372036854775807", True, "unknown"), ("111", False, "windows")])
+        self.assertEqual(r["result"]["inactiveDays"], 180)
+        q, _ = self.call(61, "session.terminate", "terminateSession", {"@type": "ok"}, id="111")
+        self.assertEqual(q["session_id"], 111)
+        for rid, bad in enumerate((111, "abc", "9" * 25, "", "9999999999999999999"), start=62):
+            self.assertFalse(self.request(self.conn, rid, "session.terminate", id=bad)["ok"], bad)
+        self.call(67, "sessions.terminateOthers", "terminateAllOtherSessions", {"@type": "ok"})
+
+    def test_storage_is_counted_and_cleared(self):
+        cache = self.root / "lottie"
+        cache.mkdir(mode=0o700)
+        (cache / ("a" * 64 + ".json")).write_bytes(b"{}" * 10)
+        patch = mock.patch.object(self.d, "LOTTIE", cache)
+        patch.start()
+        self.addCleanup(patch.stop)
+        _, r = self.call(70, "storage.stats", "getStorageStatisticsFast", {"@type": "storageStatisticsFast", "files_size": 5000,
+                                                                          "file_count": 3, "database_size": 700, "log_size": 0})
+        self.assertEqual(r["result"], {"filesSize": 5000, "fileCount": 3, "databaseSize": 700, "logSize": 0, "stickerCacheSize": 20})
+        q, r = self.call(71, "storage.clear", "optimizeStorage", {"@type": "storageStatistics", "size": 10, "count": 1, "by_chat": []})
+        self.assertEqual((q["size"], q["ttl"], q["count"], q["immunity_delay"], r["result"]), (0, 0, 0, 0, {"remaining": 10}))
+        self.assertEqual(list(cache.iterdir()), [], "unpacked stickers go too")
+
+    def test_forum_topics_their_history_and_sending_into_one(self):
+        _, r = self.call(80, "topics.list", "getForumTopics", {
+            "@type": "forumTopics", "total_count": 1, "next_offset_date": 9, "next_offset_message_id": 8, "next_offset_forum_topic_id": 7,
+            "topics": [{"@type": "forumTopic", "unread_count": 4, "is_pinned": True, "order": "123", "last_message": None,
+                        "info": {"@type": "forumTopicInfo", "chat_id": -10077, "forum_topic_id": 5, "name": "Rides",
+                                 "icon": {"@type": "forumTopicIcon", "color": 7322096}}}, "junk"]}, chatId=-10077)
+        topic = r["result"]["topics"][0]
+        self.assertEqual((topic["id"], topic["name"], topic["unread"], topic["pinned"], r["result"]["next"]["offsetTopicId"]),
+                         (5, "Rides", 4, True, 7))
+        q, r = self.call(81, "topic.history", "getForumTopicHistory", {"@type": "messages", "messages": [
+            {"@type": "message", "id": 9, "chat_id": -10077, "topic_id": {"@type": "messageTopicForum", "forum_topic_id": 5},
+             "content": {"@type": "messageText", "text": {"text": "hi"}}}]}, chatId=-10077, topicId=5)
+        self.assertEqual((q["forum_topic_id"], r["result"]["messages"][0]["topicId"]), (5, 5))
+        q, _ = self.call(82, "message.send", "sendMessage", {"@type": "message", "id": 10, "chat_id": -10077},
+                         chatId=-10077, text="hey", topicId=5)
+        self.assertEqual(q["topic_id"], {"@type": "messageTopicForum", "forum_topic_id": 5})
+        q, _ = self.call(83, "message.send", "sendMessage", {"@type": "message", "id": 11, "chat_id": -10077}, chatId=-10077, text="hey")
+        self.assertIsNone(q["topic_id"])
+        self.assertFalse(self.request(self.conn, 84, "message.send", chatId=-10077, text="hey", topicId=0)["ok"])
+        q, _ = self.call(85, "chat.draft", "setChatDraftMessage", {"@type": "ok"}, chatId=-10077, text="later", topicId=5)
+        self.assertEqual(q["topic_id"]["forum_topic_id"], 5)
+        q, _ = self.call(86, "chat.readMentions", "readAllForumTopicMentions", {"@type": "ok"}, chatId=-10077, topicId=5)
+        self.assertEqual(q["forum_topic_id"], 5)
 
 
 class Recording(Harness):

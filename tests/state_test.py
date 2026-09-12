@@ -448,6 +448,56 @@ class Media(unittest.TestCase):
         self.assertEqual(s.apply({"@type": "updateFile", "file": "junk"}), [])
 
 
+class GroupsAndTopics(unittest.TestCase):
+    def test_chats_know_their_group_size_username_forum_and_your_place(self):
+        s = model.State()
+        s.apply({"@type": "updateSupergroup", "supergroup": {"@type": "supergroup", "id": 77, "member_count": 40, "is_forum": True,
+                                                             "usernames": {"@type": "usernames", "active_usernames": ["club"]},
+                                                             "status": {"@type": "chatMemberStatusAdministrator"}}})
+        s.apply({"@type": "updateNewChat", "chat": chat(-10077, "Club", kind={"@type": "chatTypeSupergroup", "supergroup_id": 77})})
+        view = s.chat_view(-10077)
+        self.assertEqual((view["memberCount"], view["username"], view["forum"], view["myStatus"]), (40, "club", True, "admin"))
+        events = s.apply({"@type": "updateSupergroup", "supergroup": {"@type": "supergroup", "id": 77, "member_count": 41}})
+        self.assertEqual([(e["chat"]["id"], e["chat"]["memberCount"], e["chat"]["forum"]) for e in events], [(-10077, 41, False)])
+        s.apply({"@type": "updateNewChat", "chat": chat(-5, "Friends", kind={"@type": "chatTypeBasicGroup", "basic_group_id": 5})})
+        s.apply({"@type": "updateBasicGroup", "basic_group": {"@type": "basicGroup", "id": 5, "member_count": 3,
+                                                              "status": {"@type": "chatMemberStatusLeft"}}})
+        self.assertEqual((s.chat_view(-5)["memberCount"], s.chat_view(-5)["myStatus"]), (3, "left"))
+        for junk in ({"@type": "updateSupergroup", "supergroup": "x"}, {"@type": "updateBasicGroup"},
+                     {"@type": "updateSupergroup", "supergroup": {"@type": "supergroup", "id": -1}}):
+            self.assertEqual(s.apply(junk), [])
+        self.assertFalse(s.chat_view(-5)["markedUnread"])
+        s.apply({"@type": "updateChatIsMarkedAsUnread", "chat_id": -5, "is_marked_as_unread": True})
+        self.assertTrue(s.chat_view(-5)["markedUnread"])
+
+    def test_members_topics_sessions_and_phone_numbers(self):
+        s = model.State()
+        event = s.apply({"@type": "updateUser", "user": {"@type": "user", "id": 7, "first_name": "Ann", "phone_number": "380671234567"}})
+        self.assertNotIn("phone", event[0]["user"], "phone numbers are not broadcast")
+        self.assertEqual(s.users[7]["phone"], "380671234567")
+        member = s.member_view({"@type": "chatMember", "member_id": {"@type": "messageSenderUser", "user_id": 7},
+                                "status": {"@type": "chatMemberStatusCreator"}})
+        self.assertEqual((member["name"], member["status"], member["type"]), ("Ann", "owner", "user"))
+        self.assertIsNone(s.member_view("junk"))
+        topic = s.topic_view({"@type": "forumTopic", "unread_count": 2, "order": "99", "last_message": text_message(5, -100, "see you"),
+                              "info": {"@type": "forumTopicInfo", "chat_id": -100, "forum_topic_id": 3, "name": "Rides",
+                                       "icon": {"@type": "forumTopicIcon", "color": -1}}})
+        self.assertEqual((topic["id"], topic["name"], topic["color"], topic["unread"], topic["lastMessage"]["text"]),
+                         (3, "Rides", 0xFFFFFF, 2, "see you"))
+        self.assertIsNone(s.topic_view({"@type": "forumTopic", "info": {"@type": "forumTopicInfo", "forum_topic_id": 0}}))
+        in_topic = s.message(text_message(9, -100, "hi", topic_id={"@type": "messageTopicForum", "forum_topic_id": 3}))
+        self.assertEqual((in_topic["topicId"], s.message(text_message(10, -100, "hi"))["topicId"]), (3, 0))
+        closed = s.apply({"@type": "updateForumTopicInfo", "info": {"@type": "forumTopicInfo", "chat_id": -100, "forum_topic_id": 3,
+                                                                    "name": "Rides", "is_closed": True}})
+        self.assertEqual((closed[0]["event"], closed[0]["closed"]), ("topicInfo", True))
+        session = model.session_view({"@type": "session", "id": "123", "is_current": True, "application_name": "Omagram",
+                                      "device_type": {"@type": "sessionDeviceTypeLinux"}, "last_active_date": 5})
+        self.assertEqual((session["id"], session["current"], session["type"], session["app"]), ("123", True, "linux", "Omagram"))
+        self.assertEqual(model.session_view({"@type": "session", "id": "5", "device_type": {"@type": "sessionDeviceTypeToaster"}})["type"],
+                         "unknown")
+        self.assertIsNone(model.session_view({"@type": "session"}))
+
+
 class Bounds(unittest.TestCase):
     def test_users_are_capped_but_never_someone_a_chat_is_with(self):
         from unittest import mock

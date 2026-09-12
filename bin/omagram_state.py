@@ -24,6 +24,10 @@ COPY_TEXT_MAX = 4096
 POLL_OPTIONS_MAX = 12
 POLL_TEXT_MAX = 300
 DESCRIPTION_MAX = 600
+GROUPS_MAX = 20000
+MEMBER_STATUSES = {"chatMemberStatusCreator": "owner", "chatMemberStatusAdministrator": "admin",
+                   "chatMemberStatusMember": "member", "chatMemberStatusRestricted": "restricted",
+                   "chatMemberStatusLeft": "left", "chatMemberStatusBanned": "banned"}
 
 ENTITY_TYPES = {
     "textEntityTypeBold": "bold",
@@ -363,6 +367,36 @@ def draft_text(value):
     return formatted(c.get("text"))[0] if c else ""
 
 
+def formatted_view(value):
+    text, entities = formatted(value)
+    return {"text": text, "entities": entities}
+
+
+def topic_id(value):
+    """The forum topic a message is in, or 0 when it is not in one."""
+    return max(0, _int(_obj(value, "messageTopicForum").get("forum_topic_id")))
+
+
+SESSION_DEVICES = ("android", "apple", "brave", "chrome", "edge", "firefox", "ipad", "iphone", "linux", "mac", "opera",
+                   "safari", "ubuntu", "vivaldi", "windows", "xbox")
+
+
+def session_view(value):
+    """A device signed in to the account, as Settings lists it."""
+    s = _obj(value, "session")
+    sid = _int(s.get("id"))
+    if not sid:
+        return None
+    device = _str(_obj(s.get("device_type")).get("@type"), 64).replace("sessionDeviceType", "").lower()
+    return {"id": str(sid), "current": s.get("is_current") is True, "passwordPending": s.get("is_password_pending") is True,
+            "unconfirmed": s.get("is_unconfirmed") is True, "official": s.get("is_official_application") is True,
+            "app": _str(s.get("application_name"), NAME_MAX), "appVersion": _str(s.get("application_version"), 64),
+            "device": _str(s.get("device_model"), NAME_MAX), "platform": _str(s.get("platform"), 64),
+            "system": _str(s.get("system_version"), 64), "loginDate": max(0, _int(s.get("log_in_date"))),
+            "lastActive": max(0, _int(s.get("last_active_date"))), "ip": _str(s.get("ip_address"), 64),
+            "location": _str(s.get("location"), NAME_MAX), "type": device if device in SESSION_DEVICES else "unknown"}
+
+
 NOTIFICATION_FLAGS = ("use_default_mute_for", "use_default_sound", "use_default_show_preview", "show_preview",
                       "use_default_mute_stories", "mute_stories", "use_default_story_sound",
                       "use_default_show_story_poster", "show_story_poster",
@@ -631,6 +665,8 @@ class State:
     def __init__(self, files_root=""):
         self.chats = {}
         self.users = {}
+        self.basic_groups = {}     # basic group id -> {"memberCount", "status"}
+        self.supergroups = {}      # supergroup id -> {"memberCount", "status", "username", "forum"}
         self.me_id = 0
         self.folders = []          # [{"id", "name", "icon"}] in Telegram's order
         self.main_position = 0     # where "All chats" sits among the folders
@@ -687,6 +723,7 @@ class State:
             "reactions": reactions,
             "views": views,
             "markup": reply_markup(m.get("reply_markup")),
+            "topicId": topic_id(m.get("topic_id")),
         }
         reply = _obj(m.get("reply_to"), "messageReplyToMessage")
         if reply:
@@ -786,6 +823,32 @@ class State:
         return {"id": message["id"], "date": message["date"], "outgoing": message["outgoing"],
                 "senderName": message["senderName"], "text": preview_text(message["content"])}
 
+    def member_view(self, value):
+        """One member of a group: who, and whether they own it, run it or just belong."""
+        m = _obj(value, "chatMember")
+        sender, name = self.sender(m.get("member_id"))
+        if not sender["id"]:
+            return None
+        user = self.users.get(sender["id"], {}) if sender["type"] == "user" else {}
+        return {"type": sender["type"], "id": sender["id"], "name": name,
+                "status": MEMBER_STATUSES.get(_obj(m.get("status")).get("@type"), "member"),
+                "tag": _str(m.get("tag"), 64), "bot": user.get("bot", False), "userStatus": user.get("status")}
+
+    def topic_view(self, value):
+        """A topic of a forum group, as its list shows it."""
+        t = _obj(value, "forumTopic")
+        info = _obj(t.get("info"), "forumTopicInfo")
+        tid = _int(info.get("forum_topic_id"))
+        if tid <= 0:
+            return None
+        icon = _obj(info.get("icon"), "forumTopicIcon")
+        return {"id": tid, "chatId": _int(info.get("chat_id")), "name": _str(info.get("name"), TITLE_MAX),
+                "color": _int(icon.get("color")) & 0xFFFFFF, "general": info.get("is_general") is True,
+                "closed": info.get("is_closed") is True, "hidden": info.get("is_hidden") is True,
+                "pinned": t.get("is_pinned") is True, "unread": max(0, _int(t.get("unread_count"))),
+                "mentions": max(0, _int(t.get("unread_mention_count"))), "order": str(max(0, _int(t.get("order")))),
+                "lastMessage": self.preview(t.get("last_message")), "draft": draft_text(t.get("draft_message"))}
+
     # -------------------------------------------------- chats
 
     def _chat(self, chat_id):
@@ -802,11 +865,19 @@ class State:
         else:
             chat["positions"][key] = {"order": order, "pinned": pos.get("is_pinned") is True}
 
+    def group_of(self, chat):
+        if chat["supergroupId"]:
+            return self.supergroups.get(chat["supergroupId"], {})
+        if chat["basicGroupId"]:
+            return self.basic_groups.get(chat["basicGroupId"], {})
+        return {}
+
     def chat_view(self, chat_id):
         chat = self.chats.get(chat_id)
         if chat is None:
             return None
         main = chat["positions"].get("main", {})
+        group = self.group_of(chat)
         return {
             "id": chat["id"],
             "title": chat["title"],
@@ -828,9 +899,15 @@ class State:
             "lastReadOutbox": chat["lastReadOutbox"],
             "lastMessage": chat["lastMessage"],
             "draft": chat["draft"],
+            "markedUnread": chat["markedUnread"],
             # The other person's status and whether they are a bot, for a private chat.
             "status": self.users.get(chat["userId"], {}).get("status") if chat["userId"] else None,
             "bot": self.users.get(chat["userId"], {}).get("bot", False) if chat["userId"] else False,
+            # A group's size and your place in it, a public username, and whether it is a forum of topics.
+            "memberCount": group.get("memberCount", 0),
+            "myStatus": group.get("status", ""),
+            "username": group.get("username", "") if chat["supergroupId"] else self.users.get(chat["userId"], {}).get("username", ""),
+            "forum": group.get("forum", False),
         }
 
     def chat_list(self, key="main", limit=LIST_MAX):
@@ -868,6 +945,9 @@ class State:
             "title": _str(c.get("title"), TITLE_MAX),
             "kind": kind or "unknown",
             "userId": _int(kind_obj.get("user_id")),
+            "basicGroupId": _int(kind_obj.get("basic_group_id")),
+            "supergroupId": _int(kind_obj.get("supergroup_id")),
+            "markedUnread": c.get("is_marked_as_unread") is True,
             "unread": max(0, _int(c.get("unread_count"))),
             "mentions": max(0, _int(c.get("unread_mention_count"))),
             "muteFor": max(0, _int(_obj(c.get("notification_settings")).get("mute_for"))),
@@ -962,6 +1042,44 @@ class State:
         chat["notification"] = notification_settings(u.get("notification_settings"))
         return self._chat_event(chat["id"])
 
+    def _on_updateChatIsMarkedAsUnread(self, u):
+        chat = self._chat(_int(u.get("chat_id")))
+        if not chat:
+            return []
+        chat["markedUnread"] = u.get("is_marked_as_unread") is True
+        return self._chat_event(chat["id"])
+
+    @staticmethod
+    def _keep_group(groups, gid, view):
+        groups.pop(gid, None)
+        groups[gid] = view
+        while len(groups) > GROUPS_MAX:
+            del groups[next(iter(groups))]
+
+    def _group_chat_events(self, key, gid):
+        return [event for cid, chat in self.chats.items() if chat[key] == gid for event in self._chat_event(cid)]
+
+    def _on_updateBasicGroup(self, u):
+        g = _obj(u.get("basic_group"), "basicGroup")
+        gid = _int(g.get("id"))
+        if gid <= 0:
+            return []
+        self._keep_group(self.basic_groups, gid, {"memberCount": max(0, _int(g.get("member_count"))),
+                                                  "status": MEMBER_STATUSES.get(_obj(g.get("status")).get("@type"), "")})
+        return self._group_chat_events("basicGroupId", gid)
+
+    def _on_updateSupergroup(self, u):
+        g = _obj(u.get("supergroup"), "supergroup")
+        gid = _int(g.get("id"))
+        if gid <= 0:
+            return []
+        usernames = _list(_obj(g.get("usernames")).get("active_usernames"), 4)
+        self._keep_group(self.supergroups, gid, {"memberCount": max(0, _int(g.get("member_count"))),
+                                                 "status": MEMBER_STATUSES.get(_obj(g.get("status")).get("@type"), ""),
+                                                 "username": _str(usernames[0], NAME_MAX) if usernames else "",
+                                                 "forum": g.get("is_forum") is True})
+        return self._group_chat_events("supergroupId", gid)
+
     def _on_updateChatFolders(self, u):
         folders = []
         for info in _list(u.get("chat_folders"), FOLDERS_MAX):
@@ -987,9 +1105,11 @@ class State:
         self.users[uid] = {"id": uid, "name": name or (_str(usernames[0], NAME_MAX) if usernames else ""),
                            "username": _str(usernames[0], NAME_MAX) if usernames else "",
                            "bot": _obj(user.get("type")).get("@type") == "userTypeBot",
-                           "status": status_view(user.get("status"))}
+                           "status": status_view(user.get("status")),
+                           "phone": _str(user.get("phone_number"), 32)}
         self._trim_users()
-        return [{"event": "user", "user": self.users[uid]}]
+        # A phone number is for a chat's info page only, not for every client's stream of events.
+        return [{"event": "user", "user": {k: v for k, v in self.users[uid].items() if k != "phone"}}]
 
     def _trim_users(self):
         """Past the ceiling the users heard of longest ago go first -- never someone a chat is with."""
@@ -1045,6 +1165,22 @@ class State:
     def _on_updatePoll(self, u):
         poll = poll_view(u.get("poll"))
         return [{"event": "poll", "poll": poll}] if poll else []
+
+    def _on_updateForumTopicInfo(self, u):
+        info = _obj(u.get("info"), "forumTopicInfo")
+        cid, tid = _int(info.get("chat_id")), _int(info.get("forum_topic_id"))
+        if not cid or tid <= 0:
+            return []
+        return [{"event": "topicInfo", "chatId": cid, "topicId": tid, "name": _str(info.get("name"), TITLE_MAX),
+                 "closed": info.get("is_closed") is True, "hidden": info.get("is_hidden") is True}]
+
+    def _on_updateForumTopic(self, u):
+        cid, tid = _int(u.get("chat_id")), _int(u.get("forum_topic_id"))
+        if not cid or tid <= 0:
+            return []
+        return [{"event": "topicUpdate", "chatId": cid, "topicId": tid, "pinned": u.get("is_pinned") is True,
+                 "mentions": max(0, _int(u.get("unread_mention_count"))),
+                 "lastReadInbox": _int(u.get("last_read_inbox_message_id"))}]
 
     def _on_updateNewMessage(self, u):
         message = self.message(u.get("message"))

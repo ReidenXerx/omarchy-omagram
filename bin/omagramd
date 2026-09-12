@@ -18,6 +18,7 @@ Lines are capped at 64 KB in, a slow client's backlog at 16 MB out.
 Login codes, passwords and the API credentials are handed straight to TDLib or the keyring:
 they are never echoed back, logged or written anywhere.
 """
+import base64
 import fcntl
 import hashlib
 import json
@@ -140,11 +141,7 @@ def cached_lottie(target):
 
 def trim_lottie_cache():
     """Keeps the unpacked stickers under their size and count ceilings, the oldest out first."""
-    try:
-        entries = [(name, st) for name, st in safe.list_dir(LOTTIE, max_entries=LOTTIE_CACHE_FILES * 2)
-                   if name.endswith(".json") and stat.S_ISREG(st.st_mode)]
-    except (safe.UnsafeError, OSError):
-        return
+    entries = lottie_cache_entries()
     total = sum(st.st_size for _, st in entries)
     if total <= LOTTIE_CACHE_MAX and len(entries) <= LOTTIE_CACHE_FILES:
         return
@@ -156,6 +153,22 @@ def trim_lottie_cache():
         except (safe.UnsafeError, OSError):
             pass
         total -= st.st_size
+
+
+def lottie_cache_entries():
+    try:
+        return [(name, st) for name, st in safe.list_dir(LOTTIE, max_entries=LOTTIE_CACHE_FILES * 2)
+                if name.endswith(".json") and stat.S_ISREG(st.st_mode)]
+    except (safe.UnsafeError, OSError):
+        return []
+
+
+def clear_lottie_cache():
+    for name, _ in lottie_cache_entries():
+        try:
+            safe.remove_file(LOTTIE / name)
+        except (safe.UnsafeError, OSError):
+            pass
 
 
 def local_upload(path):
@@ -210,6 +223,17 @@ DEFERRED = object()   # a command that answers later, from background work
 PLUGIN_ID = "reidenxerx.omagram"
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
+MEDIA_FILTERS = {"photos": "searchMessagesFilterPhotoAndVideo", "files": "searchMessagesFilterDocument",
+                 "links": "searchMessagesFilterUrl", "voice": "searchMessagesFilterVoiceAndVideoNote",
+                 "music": "searchMessagesFilterAudio", "gifs": "searchMessagesFilterAnimation"}
+MEMBERS_MAX = 200
+CONTACTS_MAX = 5000
+NEW_TITLE_MAX = 128
+NEW_DESCRIPTION_MAX = 255
+NEW_MEMBERS_MAX = 200
+SESSION_ID = re.compile(r"-?[0-9]{1,19}")
+QR_LINK = re.compile(r"tg://login\?token=[A-Za-z0-9_=-]{1,512}")
+QR_PNG_MAX = 256 * 1024
 
 
 def arg_int(args, name, low=None, high=None, default=None):
@@ -559,7 +583,7 @@ class Daemon:
             self.td.new_client()
             self.td_send({"@type": "getOption", "name": "version"})
         else:
-            self.set_auth(model.auth_view(value))
+            self.set_auth(self.with_qr(model.auth_view(value)))
 
     def send_parameters(self):
         try:
@@ -700,6 +724,21 @@ class Daemon:
     def set_auth(self, auth):
         self.auth = auth
         self.broadcast({"event": "auth", "auth": auth})
+
+    def with_qr(self, auth):
+        """Signing in with a QR code: the link Telegram gives, drawn as a PNG for another device to
+        scan. qrencode reads the link on stdin, never from its command line. No picture when the link
+        is not a login link or qrencode is missing."""
+        link = auth.get("link", "")
+        if auth.get("state") != "qr" or not isinstance(link, str) or not QR_LINK.fullmatch(link):
+            return auth
+        try:
+            r = safe.run(["qrencode", "--type=PNG", "--size=8", "--margin=2", "--output=-"], input=link,
+                         timeout=HELPER_TIMEOUT, max_output=QR_PNG_MAX)
+        except (safe.UnsafeError, OSError):
+            return dict(auth, image="")
+        png = r.stdout if r.ok and r.stdout.startswith(b"\x89PNG\r\n\x1a\n") else b""
+        return dict(auth, image=("data:image/png;base64," + base64.b64encode(png).decode("ascii")) if png else "")
 
     # ---------------------------------------------------------------- sockets
 
@@ -919,7 +958,7 @@ class Daemon:
     # ---------------------------------------------------------------- what you can do with messages
 
     def cmd_message_forward(self, client, rid, args):
-        self.td_send({"@type": "forwardMessages", "chat_id": arg_int(args, "chatId"), "topic_id": None,
+        self.td_send({"@type": "forwardMessages", "chat_id": arg_int(args, "chatId"), "topic_id": self.topic_of(args),
                       "from_chat_id": arg_int(args, "fromChatId"), "message_ids": arg_ids(args, "messageIds"),
                       "options": None, "send_copy": args.get("sendCopy") is True, "remove_caption": False},
                      client, rid, lambda event: {"count": len(model._list(event.get("messages"), 100))})
@@ -1002,7 +1041,7 @@ class Daemon:
         action = args.get("action")
         if action not in SEND_ACTIONS:
             raise BadRequest("that is not a chat action")
-        self.td_send({"@type": "sendChatAction", "chat_id": arg_int(args, "chatId"), "topic_id": None,
+        self.td_send({"@type": "sendChatAction", "chat_id": arg_int(args, "chatId"), "topic_id": self.topic_of(args),
                       "business_connection_id": "", "action": {"@type": SEND_ACTIONS[action]}}, client, rid)
 
     def cmd_chat_draft(self, client, rid, args):
@@ -1015,7 +1054,7 @@ class Daemon:
                      "suggested_post_info": None,
                      "content": {"@type": "draftMessageContentText", "link_preview_options": None,
                                  "text": {"@type": "formattedText", "text": text, "entities": []}}}
-        self.td_send({"@type": "setChatDraftMessage", "chat_id": arg_int(args, "chatId"), "topic_id": None,
+        self.td_send({"@type": "setChatDraftMessage", "chat_id": arg_int(args, "chatId"), "topic_id": self.topic_of(args),
                       "draft_message": draft}, client, rid)
 
     def cmd_chat_mute(self, client, rid, args):
@@ -1032,12 +1071,17 @@ class Daemon:
         def found(event):
             ids = [i for i in (model._int(model._obj(m, "message").get("id")) for m in model._list(event.get("messages"), 100)) if i]
             return {"messageId": min(ids) if ids else 0}
-        self.td_send({"@type": "searchChatMessages", "chat_id": arg_int(args, "chatId"), "topic_id": None, "query": "",
+        self.td_send({"@type": "searchChatMessages", "chat_id": arg_int(args, "chatId"), "topic_id": self.topic_of(args), "query": "",
                       "sender_id": None, "from_message_id": 0, "offset": 0, "limit": 100,
                       "filter": {"@type": "searchMessagesFilterUnreadMention"}}, client, rid, found)
 
     def cmd_chat_read_mentions(self, client, rid, args):
-        self.td_send({"@type": "readAllChatMentions", "chat_id": arg_int(args, "chatId")}, client, rid)
+        topic = self.topic_of(args)
+        if topic is None:
+            self.td_send({"@type": "readAllChatMentions", "chat_id": arg_int(args, "chatId")}, client, rid)
+        else:
+            self.td_send({"@type": "readAllForumTopicMentions", "chat_id": arg_int(args, "chatId"),
+                          "forum_topic_id": topic["forum_topic_id"]}, client, rid)
 
     # ---------------------------------------------------------------- links, people, files
 
@@ -1153,11 +1197,246 @@ class Daemon:
             pass
         self.respond(client, rid, {"path": ""})
 
+    # ---------------------------------------------------------------- a chat's info, members and shared media
+
+    def cmd_chat_info(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        chat = self.state.chats.get(chat_id)
+        if chat is None:
+            raise BadRequest("unknown chat")
+        base = {"chatId": chat_id, "kind": chat["kind"]}
+
+        def invite(event):
+            return model._str(model._obj(event.get("invite_link"), "chatInviteLink").get("invite_link"), model.URL_MAX)
+
+        if chat["userId"]:
+            user = self.state.users.get(chat["userId"], {})
+
+            def person(event):
+                bot = model._obj(event.get("bot_info"), "botInfo")
+                return dict(base, userId=chat["userId"], username=user.get("username", ""), phone=user.get("phone", ""),
+                            bio=model.formatted_view(event.get("bio")),
+                            botDescription=model._str(bot.get("description"), model.DESCRIPTION_MAX),
+                            commonGroups=max(0, model._int(event.get("group_in_common_count"))))
+            self.td_send({"@type": "getUserFullInfo", "user_id": chat["userId"]}, client, rid, person)
+        elif chat["basicGroupId"]:
+            def group(event):
+                members = self.member_views(event)
+                return dict(base, description=model._str(event.get("description"), model.DESCRIPTION_MAX),
+                            memberCount=len(members), members=members, canGetMembers=True, inviteLink=invite(event))
+            self.td_send({"@type": "getBasicGroupFullInfo", "basic_group_id": chat["basicGroupId"]}, client, rid, group)
+        elif chat["supergroupId"]:
+            known = self.state.supergroups.get(chat["supergroupId"], {})
+
+            def supergroup(event):
+                return dict(base, description=model._str(event.get("description"), model.DESCRIPTION_MAX),
+                            memberCount=max(0, model._int(event.get("member_count"))) or known.get("memberCount", 0),
+                            members=[], canGetMembers=event.get("can_get_members") is True, inviteLink=invite(event),
+                            username=known.get("username", ""), linkedChatId=model._int(event.get("linked_chat_id")))
+            self.td_send({"@type": "getSupergroupFullInfo", "supergroup_id": chat["supergroupId"]}, client, rid, supergroup)
+        else:
+            self.respond(client, rid, base)
+
+    def member_views(self, event):
+        found = (self.state.member_view(m) for m in model._list(event.get("members"), MEMBERS_MAX))
+        return [m for m in found if m]
+
+    def cmd_chat_members(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        chat = self.state.chats.get(chat_id)
+        if chat is None or not (chat["basicGroupId"] or chat["supergroupId"]):
+            raise BadRequest("that chat has no members to list")
+        query = args.get("query", "")
+        if not isinstance(query, str) or len(query) > QUERY_MAX:
+            raise BadRequest("query is text")
+        offset, limit = arg_int(args, "offset", 0, 100000, 0), arg_int(args, "limit", 1, MEMBERS_MAX, 50)
+
+        def members(event):
+            found = self.member_views(event)
+            if chat["supergroupId"]:
+                return {"chatId": chat_id, "members": found, "total": max(len(found), model._int(event.get("total_count")))}
+            # A basic group's members all come at once, so they are searched and paged here.
+            wanted = query.casefold()
+            found = [m for m in found if wanted in m["name"].casefold()]
+            return {"chatId": chat_id, "members": found[offset:offset + limit], "total": len(found)}
+
+        if chat["supergroupId"]:
+            wanted = {"@type": "supergroupMembersFilterSearch", "query": query} if query else {"@type": "supergroupMembersFilterRecent"}
+            self.td_send({"@type": "getSupergroupMembers", "supergroup_id": chat["supergroupId"], "filter": wanted,
+                          "offset": offset, "limit": limit}, client, rid, members)
+        else:
+            self.td_send({"@type": "getBasicGroupFullInfo", "basic_group_id": chat["basicGroupId"]}, client, rid, members)
+
+    def cmd_chat_media(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        kind = args.get("filter")
+        if kind not in MEDIA_FILTERS:
+            raise BadRequest("filter is one of " + ", ".join(MEDIA_FILTERS))
+
+        def found(event):
+            return {"chatId": chat_id, "filter": kind, "messages": self.found_messages(event),
+                    "total": max(0, model._int(event.get("total_count"))),
+                    "nextFromMessageId": model._int(event.get("next_from_message_id"))}
+        self.td_send({"@type": "searchChatMessages", "chat_id": chat_id, "topic_id": None, "query": "", "sender_id": None,
+                      "from_message_id": arg_int(args, "fromMessageId", 0, None, 0), "offset": 0,
+                      "limit": arg_int(args, "limit", 1, 100, 50), "filter": {"@type": MEDIA_FILTERS[kind]}},
+                     client, rid, found)
+
+    def cmd_chat_media_counts(self, client, rid, args):
+        """How many photos, files, links and so on a chat has: one count each, answered together."""
+        chat_id = arg_int(args, "chatId")
+        counts, waiting = {}, set(MEDIA_FILTERS)
+
+        def settle(kind, value):
+            counts[kind] = value
+            waiting.discard(kind)
+            if not waiting and client.sock.fileno() in self.clients:
+                self.respond(client, rid, {"chatId": chat_id, "counts": counts})
+
+        for kind, name in MEDIA_FILTERS.items():
+            self.td_send({"@type": "getChatMessageCount", "chat_id": chat_id, "topic_id": None, "filter": {"@type": name},
+                          "return_local": False},
+                         transform=lambda event, kind=kind: settle(kind, max(0, model._int(event.get("count")))),
+                         failed=lambda event, kind=kind: settle(kind, 0))
+
+    def cmd_chat_leave(self, client, rid, args):
+        self.td_send({"@type": "leaveChat", "chat_id": arg_int(args, "chatId")}, client, rid)
+
+    def cmd_chat_clear_history(self, client, rid, args):
+        remove, revoke = args.get("removeFromList", False), args.get("revoke", False)
+        if not isinstance(remove, bool) or not isinstance(revoke, bool):
+            raise BadRequest("removeFromList and revoke are true or false")
+        self.td_send({"@type": "deleteChatHistory", "chat_id": arg_int(args, "chatId"), "remove_from_chat_list": remove,
+                      "revoke": revoke}, client, rid)
+
+    def cmd_chat_mark_unread(self, client, rid, args):
+        unread = args.get("unread")
+        if not isinstance(unread, bool):
+            raise BadRequest("unread is true or false")
+        self.td_send({"@type": "toggleChatIsMarkedAsUnread", "chat_id": arg_int(args, "chatId"),
+                      "is_marked_as_unread": unread}, client, rid)
+
+    # ---------------------------------------------------------------- people and new chats
+
+    def user_views(self, event):
+        views = []
+        for raw in model._list(event.get("user_ids"), CONTACTS_MAX):
+            user = self.state.users.get(model._int(raw))
+            if user:
+                views.append({"userId": user["id"], "name": user["name"], "username": user["username"],
+                              "bot": user["bot"], "status": user["status"]})
+        return views
+
+    def cmd_contacts_list(self, client, rid, args):
+        self.td_send({"@type": "getContacts"}, client, rid, lambda event: {"contacts": self.user_views(event)})
+
+    def cmd_contacts_search(self, client, rid, args):
+        self.td_send({"@type": "searchContacts", "query": arg_str(args, "query", QUERY_MAX, 0),
+                      "limit": arg_int(args, "limit", 1, 100, 50)},
+                     client, rid, lambda event: {"contacts": self.user_views(event)})
+
+    def new_title(self, args):
+        title = arg_str(args, "title", NEW_TITLE_MAX).strip()
+        if not title:
+            raise BadRequest("a new chat needs a name")
+        return title
+
+    def cmd_group_create(self, client, rid, args):
+        title = self.new_title(args)
+        users = args.get("userIds", [])
+        if (not isinstance(users, list) or len(users) > NEW_MEMBERS_MAX
+                or any(isinstance(u, bool) or not isinstance(u, int) or not 0 < u <= INT64_MAX for u in users)):
+            raise BadRequest(f"userIds is a list of at most {NEW_MEMBERS_MAX} people")
+
+        def created(event):
+            failed = model._obj(event.get("failed_to_add_members")).get("failed_to_add_members")
+            return {"chatId": model._int(event.get("chat_id")), "notAdded": len(model._list(failed, NEW_MEMBERS_MAX))}
+        self.td_send({"@type": "createNewBasicGroupChat", "user_ids": users, "title": title, "message_auto_delete_time": 0},
+                     client, rid, created)
+
+    def cmd_channel_create(self, client, rid, args):
+        title = self.new_title(args)
+        description = args.get("description", "")
+        if not isinstance(description, str) or len(description) > NEW_DESCRIPTION_MAX:
+            raise BadRequest(f"a description is text of at most {NEW_DESCRIPTION_MAX} characters")
+        self.td_send({"@type": "createNewSupergroupChat", "title": title, "is_forum": False,
+                      "is_channel": args.get("channel", True) is True, "description": description, "location": None,
+                      "message_auto_delete_time": 0, "for_import": False},
+                     client, rid, lambda chat: {"chatId": model._int(chat.get("id"))})
+
+    # ---------------------------------------------------------------- devices and storage
+
+    def cmd_sessions_list(self, client, rid, args):
+        def sessions(event):
+            views = [v for v in (model.session_view(s) for s in model._list(event.get("sessions"), 100)) if v]
+            views.sort(key=lambda v: (not v["current"], -v["lastActive"]))
+            return {"sessions": views, "inactiveDays": max(0, model._int(event.get("inactive_session_ttl_days")))}
+        self.td_send({"@type": "getActiveSessions"}, client, rid, sessions)
+
+    def cmd_session_terminate(self, client, rid, args):
+        sid = args.get("id")
+        if not isinstance(sid, str) or not SESSION_ID.fullmatch(sid) or not -2 ** 63 <= int(sid) < 2 ** 63:
+            raise BadRequest("id is a session id, as text")
+        self.td_send({"@type": "terminateSession", "session_id": int(sid)}, client, rid)
+
+    def cmd_sessions_terminate_others(self, client, rid, args):
+        self.td_send({"@type": "terminateAllOtherSessions"}, client, rid)
+
+    def cmd_storage_stats(self, client, rid, args):
+        def stats(event):
+            return {"filesSize": max(0, model._int(event.get("files_size"))), "fileCount": max(0, model._int(event.get("file_count"))),
+                    "databaseSize": max(0, model._int(event.get("database_size"))),
+                    "logSize": max(0, model._int(event.get("log_size"))),
+                    "stickerCacheSize": sum(st.st_size for _, st in lottie_cache_entries())}
+        self.td_send({"@type": "getStorageStatisticsFast"}, client, rid, stats)
+
+    def cmd_storage_clear(self, client, rid, args):
+        """Deletes every downloaded file TDLib may delete (they download again when needed) and the
+        unpacked stickers. The voice and video messages you sent stay."""
+        def cleared(event):
+            clear_lottie_cache()
+            return {"remaining": max(0, model._int(event.get("size")))}
+        self.td_send({"@type": "optimizeStorage", "size": 0, "ttl": 0, "count": 0, "immunity_delay": 0, "file_types": [],
+                      "chat_ids": [], "exclude_chat_ids": [], "return_deleted_file_statistics": False, "chat_limit": 0},
+                     client, rid, cleared)
+
+    # ---------------------------------------------------------------- forum topics
+
+    def cmd_topics_list(self, client, rid, args):
+        chat_id = arg_int(args, "chatId")
+        query = args.get("query", "")
+        if not isinstance(query, str) or len(query) > QUERY_MAX:
+            raise BadRequest("query is text")
+
+        def topics(event):
+            views = [v for v in (self.state.topic_view(t) for t in model._list(event.get("topics"), 100)) if v]
+            return {"chatId": chat_id, "topics": views, "total": max(0, model._int(event.get("total_count"))),
+                    "next": {"offsetDate": model._int(event.get("next_offset_date")),
+                             "offsetMessageId": model._int(event.get("next_offset_message_id")),
+                             "offsetTopicId": model._int(event.get("next_offset_forum_topic_id"))}}
+        self.td_send({"@type": "getForumTopics", "chat_id": chat_id, "query": query,
+                      "offset_date": arg_int(args, "offsetDate", 0, INT32_MAX, 0),
+                      "offset_message_id": arg_int(args, "offsetMessageId", 0, None, 0),
+                      "offset_forum_topic_id": arg_int(args, "offsetTopicId", 0, INT32_MAX, 0),
+                      "limit": arg_int(args, "limit", 1, 100, 50)}, client, rid, topics)
+
+    def cmd_topic_history(self, client, rid, args):
+        chat_id, topic = arg_int(args, "chatId"), arg_int(args, "topicId", 1, INT32_MAX)
+
+        def messages(event):
+            found = [self.state.message(m) for m in model._list(event.get("messages"), 100)]
+            return {"chatId": chat_id, "topicId": topic, "messages": [m for m in found if m]}
+        self.td_send({"@type": "getForumTopicHistory", "chat_id": chat_id, "forum_topic_id": topic,
+                      "from_message_id": arg_int(args, "fromMessageId", 0, None, 0),
+                      "offset": arg_int(args, "offset", -99, 0, 0), "limit": arg_int(args, "limit", 1, 100, 50)},
+                     client, rid, messages)
+
     # ---------------------------------------------------------------- voice and video messages
 
     def reply_args(self, args):
-        picked = {k: args[k] for k in ("replyToMessageId",) if k in args}
+        picked = {k: args[k] for k in ("replyToMessageId", "topicId") if k in args}
         self.reply_to(picked)   # checked now, before any recording is used up
+        self.topic_of(picked)
         return picked
 
     def cmd_voice_start(self, client, rid, args):
@@ -1375,7 +1654,8 @@ class Daemon:
     def cmd_chat_read(self, client, rid, args):
         self.td_send({"@type": "viewMessages", "chat_id": arg_int(args, "chatId"),
                       "message_ids": arg_ids(args, "messageIds"),
-                      "source": {"@type": "messageSourceChatHistory"}, "force_read": True}, client, rid)
+                      "source": {"@type": "messageSourceForumTopicHistory" if self.topic_of(args) else "messageSourceChatHistory"},
+                      "force_read": True}, client, rid)
 
     def reply_to(self, args):
         if args.get("replyToMessageId") is None:
@@ -1383,8 +1663,14 @@ class Daemon:
         return {"@type": "inputMessageReplyToMessage", "message_id": arg_int(args, "replyToMessageId", 1),
                 "quote": None, "checklist_task_id": 0, "poll_option_id": ""}
 
+    def topic_of(self, args):
+        """The forum topic to send into, or None for the chat itself."""
+        if args.get("topicId") is None:
+            return None
+        return {"@type": "messageTopicForum", "forum_topic_id": arg_int(args, "topicId", 1, INT32_MAX)}
+
     def send_content(self, client, rid, chat_id, content, args):
-        self.td_send({"@type": "sendMessage", "chat_id": chat_id, "topic_id": None, "reply_to": self.reply_to(args),
+        self.td_send({"@type": "sendMessage", "chat_id": chat_id, "topic_id": self.topic_of(args), "reply_to": self.reply_to(args),
                       "options": None, "reply_markup": None, "input_message_content": content},
                      client, rid, self.state.message)
 
@@ -1553,6 +1839,24 @@ COMMANDS = {
     "file.open": ("cmd_file_open", True),
     "file.save": ("cmd_file_save", True),
     "clipboard.image": ("cmd_clipboard_image", True),
+    "chat.info": ("cmd_chat_info", True),
+    "chat.members": ("cmd_chat_members", True),
+    "chat.media": ("cmd_chat_media", True),
+    "chat.mediaCounts": ("cmd_chat_media_counts", True),
+    "chat.leave": ("cmd_chat_leave", True),
+    "chat.clearHistory": ("cmd_chat_clear_history", True),
+    "chat.markUnread": ("cmd_chat_mark_unread", True),
+    "contacts.list": ("cmd_contacts_list", True),
+    "contacts.search": ("cmd_contacts_search", True),
+    "group.create": ("cmd_group_create", True),
+    "channel.create": ("cmd_channel_create", True),
+    "sessions.list": ("cmd_sessions_list", True),
+    "session.terminate": ("cmd_session_terminate", True),
+    "sessions.terminateOthers": ("cmd_sessions_terminate_others", True),
+    "storage.stats": ("cmd_storage_stats", True),
+    "storage.clear": ("cmd_storage_clear", True),
+    "topics.list": ("cmd_topics_list", True),
+    "topic.history": ("cmd_topic_history", True),
     "settings.set": ("cmd_settings_set", False),
     "shortcuts.apply": ("cmd_shortcuts_apply", False),
     "voice.start": ("cmd_voice_start", True),
