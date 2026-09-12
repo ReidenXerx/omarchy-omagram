@@ -42,9 +42,10 @@ class Recordings(unittest.TestCase):
     def setUp(self):
         self.root = pathlib.Path(tempfile.mkdtemp(prefix="omagram-media-", dir=safe.runtime_dir()))
         self.addCleanup(shutil.rmtree, self.root, True)
-        patch = mock.patch.object(media, "REC", self.root / "rec")
-        patch.start()
-        self.addCleanup(patch.stop)
+        for name, value in (("REC", self.root / "rec"), ("SENT", self.root / "sent")):
+            patch = mock.patch.object(media, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
 
     def test_only_regular_files_in_the_recording_directory(self):
         rec = media.rec_dir()
@@ -66,21 +67,58 @@ class Recordings(unittest.TestCase):
 
     def test_remove_and_clean_touch_only_the_recording_directory(self):
         rec = media.rec_dir()
-        old = rec / "voice-old.ogg"
-        new = rec / "voice-new.ogg"
-        old.write_bytes(b"x")
-        new.write_bytes(b"x")
+        old = rec / "note-old.mp4"
+        new = rec / "note-new.mp4"
+        voice = rec / "voice-old.ogg"   # a voice message recorded here before may still be on screen
+        for f in (old, new, voice):
+            f.write_bytes(b"x")
         past = time.time() - 2 * media.STALE_SECONDS
         os.utime(old, (past, past))
+        os.utime(voice, (past, past))
         outside = self.root / "keep.txt"
         outside.write_bytes(b"x")
         media.clean_stale()
-        self.assertEqual((old.exists(), new.exists()), (False, True))
+        self.assertEqual((old.exists(), new.exists(), voice.exists()), (False, True, True))
         media.remove(outside)
         self.assertTrue(outside.exists())
         media.remove(new)
         media.remove(new)   # already gone: no error
         self.assertFalse(new.exists())
+
+    def test_photos_are_copied_privately_before_sending(self):
+        photo = self.root / "Holiday.JPG"
+        photo.write_bytes(b"\xff\xd8 picture")
+        copied = media.copy_for_sending(str(photo))
+        self.assertEqual(os.path.dirname(copied), str(media.SENT))
+        self.assertTrue(copied.endswith(".jpg"))
+        self.assertEqual(pathlib.Path(copied).read_bytes(), b"\xff\xd8 picture")
+        self.assertEqual(os.stat(copied).st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(media.SENT).st_mode & 0o777, 0o700)
+        document = self.root / "report.pdf"
+        document.write_bytes(b"%PDF")
+        big = self.root / "big.png"
+        big.write_bytes(b"x" * 64)
+        link = self.root / "link.jpg"
+        link.symlink_to(photo)
+        empty = self.root / "empty.png"
+        empty.write_bytes(b"")
+        self.assertIsNone(media.copy_for_sending(str(document)))
+        self.assertIsNone(media.copy_for_sending(str(big), max_bytes=16))
+        self.assertIsNone(media.copy_for_sending(str(link)))
+        self.assertIsNone(media.copy_for_sending(str(empty)))
+        self.assertIsNone(media.copy_for_sending(str(self.root / "missing.jpg")))
+        media.remove(copied)
+        self.assertFalse(os.path.exists(copied))
+
+    def test_what_you_send_is_shown_from_where_it_is_kept(self):
+        import omagram_state as model
+        import omagram_td as td
+        self.assertIn(str(td.SENT), td.MEDIA_ROOTS)
+        self.assertIn(str(td.REC), td.MEDIA_ROOTS)
+        self.assertNotIn(str(td.DATABASE), td.MEDIA_ROOTS)
+        sent = str(td.SENT) + "/voice-0123.ogg"
+        self.assertEqual(model.local_path(sent, td.MEDIA_ROOTS), sent)
+        self.assertEqual(model.local_path(str(td.DATABASE) + "/db.sqlite", td.MEDIA_ROOTS), "")
 
     def test_commands_are_argument_lists_of_absolute_tools(self):
         with mock.patch.object(safe, "tool", lambda name: pathlib.Path("/usr/bin") / name):

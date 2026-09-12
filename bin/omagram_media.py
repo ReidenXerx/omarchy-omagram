@@ -22,6 +22,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import plugin_safety as safe  # noqa: E402
 
 REC = pathlib.Path(safe.runtime_dir()) / "omagram" / "rec"
+# Messages as they are sent: TDLib keeps pointing at these files afterwards, so they stay, and the
+# chat shows your own voice messages, video messages and photos from them.
+SENT = pathlib.Path(safe.home_dir()) / ".local" / "share" / "omagram" / "sent"
+PHOTO_COPY_MAX = 10 * 1024 * 1024
 
 VOICE_MAX_SECONDS = 600
 NOTE_MAX_SECONDS = 60           # Telegram's limit for a video message
@@ -44,10 +48,36 @@ def new_path(prefix, suffix):
     return rec_dir() / f"{prefix}-{secrets.token_hex(8)}{suffix}"
 
 
+def sent_dir():
+    safe.ensure_dir(SENT, 0o700)
+    return SENT
+
+
+def new_sent_path(prefix, suffix):
+    return sent_dir() / f"{prefix}-{secrets.token_hex(8)}{suffix}"
+
+
+def copy_for_sending(path, max_bytes=PHOTO_COPY_MAX):
+    """A copy of a photo you send, in SENT, so the chat can show it; None if it cannot be copied
+    (then the original is sent and your own message shows it once downloaded)."""
+    suffix = pathlib.Path(path).suffix.lower()
+    if suffix not in (".jpg", ".jpeg", ".png", ".webp"):
+        return None
+    try:
+        data = safe.read_file(path, max_bytes)
+        if not data:
+            return None
+        target = new_sent_path("photo", suffix)
+        safe.write_file(target, data, mode=0o600)
+        return str(target)
+    except (safe.UnsafeError, OSError, ValueError):
+        return None
+
+
 def remove(path):
-    """Delete a file of ours in the recording directory; anything else is left alone."""
+    """Delete a file of ours in the recording or sent directory; anything else is left alone."""
     path = pathlib.Path(path)
-    if os.path.dirname(str(path)) != str(REC):
+    if os.path.dirname(str(path)) not in (str(REC), str(SENT)):
         return
     try:
         os.unlink(path)
@@ -59,8 +89,10 @@ def clean_stale(max_age=STALE_SECONDS, now=None):
     now = time.time() if now is None else now
     try:
         with os.scandir(REC) as entries:
+            # Only raw camera captures: a voice message recorded here before may still be on screen.
             old = [e.path for e in entries
-                   if e.is_file(follow_symlinks=False) and now - e.stat(follow_symlinks=False).st_mtime > max_age]
+                   if e.name.startswith("note-") and e.is_file(follow_symlinks=False)
+                   and now - e.stat(follow_symlinks=False).st_mtime > max_age]
     except FileNotFoundError:
         return
     for path in old:

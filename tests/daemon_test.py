@@ -102,9 +102,10 @@ class Harness(unittest.TestCase):
             patch = mock.patch.object(self.d, name, value)
             patch.start()
             self.addCleanup(patch.stop)
-        patch = mock.patch.object(self.d.media, "REC", self.root / "rec")
-        patch.start()
-        self.addCleanup(patch.stop)
+        for name, value in (("REC", self.root / "rec"), ("SENT", self.root / "sent")):
+            patch = mock.patch.object(self.d.media, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
         for name, value in (("CONFIG", self.root / "config"), ("SETTINGS", self.root / "config" / "settings.json")):
             patch = mock.patch.object(self.d.prefs, name, value)
             patch.start()
@@ -439,8 +440,12 @@ class Sending(Harness):
         photo = self.file("cat.JPG", 200_000)
         q = self.sent(1, chatId=42, path=str(photo), caption="look", replyToMessageId=9)
         content = q["input_message_content"]
-        self.assertEqual((content["@type"], content["photo"]["photo"], content["caption"]["text"], q["reply_to"]["message_id"]),
-                         ("inputMessagePhoto", {"@type": "inputFileLocal", "path": str(photo)}, "look", 9))
+        self.assertEqual((content["@type"], content["caption"]["text"], q["reply_to"]["message_id"]),
+                         ("inputMessagePhoto", "look", 9))
+        # sent from a private copy, which your own message can show
+        sent = content["photo"]["photo"]["path"]
+        self.assertEqual(os.path.dirname(sent), str(self.d.media.SENT))
+        self.assertEqual(pathlib.Path(sent).read_bytes(), photo.read_bytes())
         big = self.file("huge.png", self.d.PHOTO_MAX + 1)
         self.assertEqual(self.sent(2, chatId=42, path=str(big))["input_message_content"]["@type"], "inputMessageDocument")
         pdf = self.file("report.pdf")
@@ -448,7 +453,9 @@ class Sending(Harness):
         self.assertEqual(self.sent(4, chatId=42, path=str(photo), asPhoto=False)["input_message_content"]["@type"], "inputMessageDocument")
         link = self.uploads / "link.jpg"
         link.symlink_to(photo)
-        self.assertEqual(self.sent(5, chatId=42, path=str(link))["input_message_content"]["photo"]["photo"]["path"], str(photo))
+        via_link = self.sent(5, chatId=42, path=str(link))["input_message_content"]["photo"]["photo"]["path"]
+        self.assertEqual(os.path.dirname(via_link), str(self.d.media.SENT))   # a copy of the photo the link points at
+        self.assertEqual(pathlib.Path(via_link).read_bytes(), photo.read_bytes())
 
     def test_what_cannot_be_sent_is_refused_before_tdlib_sees_it(self):
         empty = self.file("empty.txt", 0)
@@ -645,6 +652,7 @@ class Recording(Harness):
         self.read(self.conn, lambda v: v.get("event") == "recording" and v.get("state") == "voice")
         self.assertFalse(self.request(self.conn, 2, "voice.start", chatId=42)["ok"])   # one at a time
         path = str(self.daemon.recording["path"])
+        self.assertEqual(os.path.dirname(path), str(self.d.media.SENT), "kept: the chat plays it from there")
         before = self.fake.sent_types().count("sendMessage")
         self.send(self.conn, {"id": 3, "cmd": "voice.stop", "args": {"send": True, "replyToMessageId": 9}})
         query = self.sent_after(before)
@@ -674,7 +682,7 @@ class Recording(Harness):
         self.send(self.conn, {"id": 5, "cmd": "videonote.send", "args": {"chatId": 42, "path": str(source)}})
         note = self.sent_after(before)["input_message_content"]["video_note"]
         self.assertEqual((note["duration"], note["length"], note["thumbnail"]), (7, self.d.media.NOTE_SIZE, None))
-        self.assertEqual(os.path.dirname(note["video_note"]["path"]), str(rec))
+        self.assertEqual(os.path.dirname(note["video_note"]["path"]), str(self.d.media.SENT))
         self.wait(lambda: not source.exists())   # the raw recording goes once converted
         outside = self.root / "elsewhere.mp4"
         outside.write_bytes(b"x")

@@ -302,6 +302,7 @@ class Daemon:
         self.notifier = self.notifier_factory(self.on_notification_action)
         try:
             media.rec_dir()
+            media.sent_dir()
             media.clean_stale()
         except (safe.UnsafeError, OSError):
             pass
@@ -798,7 +799,7 @@ class Daemon:
             raise BadRequest("a voice message is already being recorded")
         try:
             media.clean_stale()
-            path = media.new_path("voice", ".ogg")
+            path = media.new_sent_path("voice", ".ogg")
             argv = media.voice_argv(path)
         except (safe.UnsafeError, OSError) as e:
             raise BadRequest(f"cannot record: {e}")
@@ -860,7 +861,7 @@ class Daemon:
         reply = self.reply_args(args)
         if self.jobs >= JOBS_MAX:
             raise BadRequest("still preparing an earlier message")
-        target = media.new_path("note", ".mp4")
+        target = media.new_sent_path("note", ".mp4")
 
         def work():
             try:
@@ -1035,7 +1036,8 @@ class Daemon:
             raise BadRequest(f"a caption is text of at most {CAPTION_MAX} characters")
         as_photo = args.get("asPhoto", True) is True and path.lower().endswith(PHOTO_EXTENSIONS) and size <= PHOTO_MAX
         text = {"@type": "formattedText", "text": caption, "entities": []}
-        upload = {"@type": "inputFileLocal", "path": path}
+        # A photo goes from a private copy, which the chat may show; other files from where they are.
+        upload = {"@type": "inputFileLocal", "path": (media.copy_for_sending(path) if as_photo else None) or path}
         if as_photo:
             content = {"@type": "inputMessagePhoto", "caption": text, "show_caption_above_media": False,
                        "self_destruct_type": None, "has_spoiler": False,

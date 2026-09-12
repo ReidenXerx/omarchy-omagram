@@ -32,7 +32,13 @@ FILES = DATA / "files"
 # Where TDLib puts downloaded media. Stickers, thumbnails, profile photos and wallpapers
 # live beside its database; everything else under FILES. Only paths under these are ever
 # shown to the UI -- never the database directory itself (db.sqlite, td.binlog).
-MEDIA_ROOTS = (str(FILES),) + tuple(str(DATABASE / name) for name in ("stickers", "thumbnails", "profile_photos", "wallpapers"))
+# What you send stays readable too: voice and video messages and photos are prepared in SENT (kept
+# in step with omagram_media), and TDLib goes on pointing at those files after sending. REC is where
+# recordings were made before they moved to SENT.
+SENT = DATA / "sent"
+REC = pathlib.Path(safe.runtime_dir()) / "omagram" / "rec"
+MEDIA_ROOTS = ((str(FILES),) + tuple(str(DATABASE / name) for name in ("stickers", "thumbnails", "profile_photos", "wallpapers"))
+               + (str(SENT), str(REC)))
 
 KEYRING_SERVICE = "omagram"
 KEYRING_TIMEOUT = 60        # an unlock prompt from the keyring daemon may be on screen
