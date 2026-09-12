@@ -27,7 +27,9 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   or select several and act on them at once. Read ticks, "typing…", last seen and the pinned
   message above the chat, with read state kept in sync with your other devices. Right-click a
   message (or press `m`) for everything Telegram allows on it, translation included. Send without
-  sound, at a time you pick or once the other person is online (`Ctrl+Alt+Enter`).
+  sound, at a time you pick or once the other person is online (`Ctrl+Alt+Enter`). Search finds public
+  groups and channels by name too; one you open is joined from the bar that takes the message box's
+  place.
 - **Rich messages** — formatting (typed the way Telegram's own apps read it: `**bold**`,
   `__italic__`, `~~strikethrough~~`, `||spoiler||`, `` `code` ``, `[text](address)`, or with the keys
   below), links, mentions and hashtags, spoilers, link previews, polls

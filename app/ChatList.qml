@@ -5,7 +5,8 @@ import "Model.js" as Model
 import "Keymap.js" as Keymap
 
 // The chat list: folder tabs over the chats of the chosen list. Typing a search finds chats
-// in every list, and messages in all chats -- or in the open chat, with Ctrl+Shift+F.
+// in every list, public groups and channels by name, and messages in all chats -- or in the
+// open chat, with Ctrl+Shift+F.
 //
 // Keyboard (every key can be changed in settings): Ctrl+K or / searches, ↑/↓ or j/k move, Enter
 // opens, [ and ] switch tabs, p pins or unpins, a archives or unarchives, m mutes or unmutes, the
@@ -28,6 +29,7 @@ FocusScope {
   property real scopeChatId: 0
   property string scopeTitle: ""
   property var messageResults: []
+  property var publicResults: []
   property string nextOffset: ""
   property real nextFromMessageId: 0
   property bool searching: false
@@ -69,6 +71,12 @@ FocusScope {
       var every = Model.chatsIn(root.allChats, "main").concat(Model.chatsIn(root.allChats, "archive"))
       var found = Model.filterChats(every, root.query, root.app.meId)
       for (var j = 0; j < found.length && j < 50; j++) out.push({ kind: "chat", chat: found[j] })
+      // Groups, channels and bots anyone can find by name, which are in none of your lists.
+      var shown = {}
+      for (var s = 0; s < found.length; s++) shown[found[s].id] = true
+      var strangers = root.publicResults.filter(function (c) { return !shown[c.id] })
+      if (strangers.length) out.push({ kind: "header", title: "Public groups and channels" })
+      for (var p = 0; p < strangers.length; p++) out.push({ kind: "chat", chat: strangers[p], public: true })
     }
     if (root.messageResults.length || root.searching)
       out.push({ kind: "header", title: root.scopeChatId ? "Messages in " + root.scopeTitle : "Messages" })
@@ -116,13 +124,22 @@ FocusScope {
   function openCursor() {
     var row = root.rows[root.cursor]
     if (!row) return
-    if (row.kind === "chat") root.activated(row.chat.id)
-    else if (row.kind === "message") root.messageActivated(row.message.chatId, row.message.id)
+    root.openRow(row)
   }
 
+  function openRow(row) {
+    if (row.kind === "chat") {
+      if (row.public) root.app.knowChat(row.chat)
+      root.activated(row.chat.id)
+    } else if (row.kind === "message") {
+      root.messageActivated(row.message.chatId, row.message.id)
+    }
+  }
+
+  // A chat of yours at the cursor: a public one found by search has no menu, pin or archive.
   function cursorChat() {
     var row = root.rows[root.cursor]
-    return row && row.kind === "chat" ? row.chat : null
+    return row && row.kind === "chat" && !row.public ? row.chat : null
   }
 
   function openChatMenu(chat, x, y) {
@@ -182,13 +199,17 @@ FocusScope {
   }
 
   onQueryChanged: {
+    // From the query itself: searchMode's binding may not have caught up with it yet in here, and a
+    // first letter typed would count as the search ending (and forget the chat searched in).
+    var searching = root.query !== ""
     root.cursor = 0
     root.messageResults = []
+    root.publicResults = []
     root.nextOffset = ""
     root.nextFromMessageId = 0
     root.searchSerial++
-    root.searching = root.searchMode
-    if (root.searchMode) {
+    root.searching = searching
+    if (searching) {
       searchDelay.restart()
     } else {
       searchDelay.stop()
@@ -200,6 +221,11 @@ FocusScope {
     var q = root.query
     if (!q) return
     var serial = root.searchSerial
+    if (!more && !root.scopeChatId && Model.publicQuery(q)) {
+      root.app.request("chats.search", { query: q, public: true }, function (answer) {
+        if (serial === root.searchSerial && answer.ok) root.publicResults = (answer.result.chats || []).slice(0, 20)
+      })
+    }
     var args = { query: q, limit: 30 }
     if (root.scopeChatId) {
       args.chatId = root.scopeChatId
@@ -625,6 +651,7 @@ FocusScope {
                   text: {
                     if (activity) return activity
                     if (draft) return "Draft: " + row.chat.draft
+                    if (row.modelData.public) return Model.publicChatDetail(row.chat)
                     var last = row.chat.lastMessage
                     if (!last) return root.searchMode && row.chat.archived ? "In the archive" : ""
                     var who = last.outgoing ? "You: " : (row.chat.kind !== "private" && last.senderName ? last.senderName + ": " : "")
@@ -731,7 +758,7 @@ FocusScope {
             root.cursor = row.index
             if (mouse.button !== Qt.RightButton) {
               root.openCursor()
-            } else if (row.chat) {
+            } else if (row.chat && !row.modelData.public) {
               var at = hover.mapToItem(root, mouse.x, mouse.y)
               root.openChatMenu(row.chat, at.x, at.y)
             }

@@ -897,8 +897,9 @@ class MessageActions(Harness):
         q = self.next_query("getInternalLinkType", before)
         self.td_event({"@type": "error", "code": 400, "message": "Link is not recognized", "@extra": q["@extra"], "@client_id": 1})
         self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 63)["result"]["kind"], "external")
-        q, r = self.call(64, "chat.joinLink", "joinChatByInviteLink", {"@type": "chat", "id": 888}, link="https://t.me/+abc")
-        self.assertEqual(r["result"], {"chatId": 888})
+        q, r = self.call(64, "chat.joinLink", "joinChatByInviteLink", {"@type": "chatJoinResultSuccess", "chat_id": 888},
+                         link="https://t.me/+abc")
+        self.assertEqual(r["result"], {"chatId": 888, "state": "joined"})
         q, _ = self.call(65, "bot.start", "sendBotStartMessage", {"@type": "message", "id": 1, "chat_id": 500},
                          chatId=500, parameter="ref42")
         self.assertEqual((q["bot_user_id"], q["parameter"]), (500, "ref42"))
@@ -1145,6 +1146,20 @@ class ChatsAndAccount(Harness):
         self.assertEqual((q["basic_group_id"], [c["command"] for c in r["result"]["commands"]]), (66, ["help"]))
         self.assertEqual(self.request(self.conn, 125, "chat.commands", chatId=500)["result"]["commands"], [],
                          "a person has no commands")
+
+
+    def test_joining_a_public_group_or_channel(self):
+        q, r = self.call(130, "chat.join", "joinChat", {"@type": "chatJoinResultSuccess", "chat_id": -10077}, chatId=-10077)
+        self.assertEqual((q["chat_id"], r["result"]), (-10077, {"chatId": -10077, "state": "joined"}))
+        _, r = self.call(131, "chat.join", "joinChat", {"@type": "chatJoinResultRequestSent"}, chatId=-10077)
+        self.assertEqual(r["result"], {"chatId": -10077, "state": "requested"})
+        for rid, chat_id in ((132, 500), (133, -66), (134, -424242)):
+            self.assertFalse(self.request(self.conn, rid, "chat.join", chatId=chat_id)["ok"], "a private chat, a basic group, an unknown chat")
+        q, r = self.call(135, "chats.search", "searchPublicChats", {"@type": "chats", "chat_ids": [-10077, 424242]},
+                         query="club", public=True)
+        self.assertEqual((q["query"], q["type_filter"], [c["id"] for c in r["result"]["chats"]]), ("club", None, [-10077]))
+        _, r = self.call(136, "chat.open", "openChat", {"@type": "ok"}, chatId=-10077)
+        self.assertEqual((r["result"]["chat"]["id"], r["result"]["chat"]["supergroup"]), (-10077, True))
 
 
 class Extras(Harness):

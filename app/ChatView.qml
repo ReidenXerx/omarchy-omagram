@@ -100,7 +100,32 @@ FocusScope {
 
   function focusComposer() {
     if (root.showTopics) topicList.forceActiveFocus()
+    else if (root.composerBlock !== "" && !root.scheduledOpen) blockButton.forceActiveFocus()
     else composer.forceActiveFocus()
+  }
+
+  // Where you cannot write, a bar stands in for the message box: join the group or channel, or mute a
+  // channel only its admins post in.
+  readonly property string composerBlock: Model.composerBlock(root.chat)
+  readonly property bool canWrite: root.composerBlock === "" && !root.secretBlocked
+
+  // Once Telegram says you are in, the message box comes back where the bar was, with the keys.
+  property real joiningChatId: 0
+
+  function joinChat() {
+    if (!root.chat) return
+    var chatId = root.chat.id
+    var channel = root.chat.kind === "channel"
+    root.joiningChatId = chatId
+    client.request("chat.join", { chatId: chatId }, function (answer) {
+      root.flash(answer.ok ? Model.joinText(answer.result.state, channel) : (answer.error || "Could not join"))
+    })
+  }
+
+  onComposerBlockChanged: {
+    if (root.composerBlock !== "" || !root.chat || root.chat.id !== root.joiningChatId) return
+    root.joiningChatId = 0
+    composer.forceActiveFocus()
   }
 
   function focusMessages() {
@@ -150,6 +175,7 @@ FocusScope {
     root.botCommands = null
     root.suggestions = []
     root.attachments = []
+    root.joiningChatId = 0
     root.scheduledOpen = false
     root.scheduledMessages = []
     // The chat's draft, as Telegram keeps it: you continue where you left off, on any device.
@@ -179,7 +205,7 @@ FocusScope {
   }
 
   function attach(asPhoto) {
-    if (!root.chat) return
+    if (!root.chat || !root.canWrite) return
     attachDialog.asPhoto = asPhoto
     attachDialog.open()
   }
@@ -195,7 +221,7 @@ FocusScope {
   property bool attachAsMedia: true
 
   function addAttachments(paths, asMedia) {
-    if (!root.chat || !paths.length) return
+    if (!root.chat || !paths.length || !root.canWrite) return
     if (!root.attachments.length) root.attachAsMedia = asMedia !== false
     var next = root.attachments.slice()
     for (var i = 0; i < paths.length; i++) {
@@ -238,7 +264,7 @@ FocusScope {
   }
 
   function toggleStickers() {
-    if (!root.chat) return
+    if (!root.chat || !root.canWrite) return
     root.stickersOpen = !root.stickersOpen
     if (root.stickersOpen) Qt.callLater(function () { stickerPicker.open() })
     else root.focusComposer()
@@ -255,7 +281,7 @@ FocusScope {
   }
   Shortcut {
     sequences: Keymap.keysFor(app.shortcuts, "window.videoNote")
-    enabled: root.shortcutsOn && !root.recordingVoice
+    enabled: root.shortcutsOn && !root.recordingVoice && root.canWrite
     onActivated: videoNote.open(root.chat.id)
   }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "voice.send"); enabled: root.recordingVoice && !app.settingsOpen; onActivated: root.stopVoice(true) }
@@ -286,7 +312,7 @@ FocusScope {
   }
 
   function startVoice() {
-    if (!root.chat || root.recordingVoice) return
+    if (!root.chat || root.recordingVoice || !root.canWrite) return
     root.recordingNow = Date.now()
     client.request("voice.start", { chatId: root.chat.id }, function (answer) {
       if (!answer.ok) root.flash("Could not record: " + (answer.error || "no microphone"))
@@ -307,7 +333,7 @@ FocusScope {
   }
 
   function composerAction(action, item) {
-    if (!root.chat) return
+    if (!root.chat || !root.canWrite) return
     if (action === "later") root.openSendMenu(item)
     else if (action === "attach") root.attach(true)
     else if (action === "emoji") root.openEmoji()
@@ -1606,7 +1632,7 @@ FocusScope {
     Rectangle {
       Layout.fillWidth: true
       Layout.preferredHeight: visible ? Style.space(40) : 0
-      visible: !!root.replyTo || !!root.editing || root.notice !== "" || !!root.prompt
+      visible: !!root.prompt || root.notice !== "" || (root.composerBlock === "" && (!!root.replyTo || !!root.editing))
       color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.04)
 
       Rectangle {
@@ -2035,11 +2061,51 @@ FocusScope {
       }
     }
 
+    // ------------------------------------------------ where you cannot write
+    Rectangle {
+      Layout.fillWidth: true
+      Layout.preferredHeight: visible ? Style.space(58) : 0
+      visible: !!root.chat && root.composerBlock !== "" && !root.showTopics && !root.scheduledOpen
+      color: "transparent"
+
+      Rectangle { width: parent.width; height: 1; color: app.border; opacity: 0.35 }
+
+      Row {
+        anchors.centerIn: parent
+        spacing: Style.space(14)
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.composerBlock === "join" ? (root.chat && root.chat.kind === "channel" ? "You are not in this channel" : "You are not in this group")
+              : root.composerBlock === "channel" ? "Only the channel's admins post here"
+              : root.composerBlock === "left" ? "You left this group: someone in it can add you back"
+              : "You can't send messages here"
+          textFormat: Text.PlainText
+          color: app.muted
+          font.family: app.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+        Button {
+          id: blockButton
+          anchors.verticalCenter: parent.verticalCenter
+          visible: root.composerBlock === "join" || root.composerBlock === "channel"
+          app: root.app
+          primary: root.composerBlock === "join"
+          text: root.composerBlock === "join" ? (root.chat && root.chat.kind === "channel" ? "Join channel" : "Join group")
+              : (root.chat && root.chat.muted ? "Unmute" : "Mute")
+          onClicked: {
+            if (root.composerBlock === "join") root.joinChat()
+            else if (root.chat) app.toggleMute(root.chat.id)
+          }
+        }
+      }
+    }
+
     // ------------------------------------------------ composer
     Rectangle {
       Layout.fillWidth: true
       // With scheduled messages listed, only while one of them is being edited.
-      visible: !root.showTopics && (!root.scheduledOpen || root.editingId > 0)
+      visible: !root.showTopics && (!root.scheduledOpen || root.editingId > 0) && root.composerBlock === ""
       // 20 of outer margin and 16 of inner padding around the text, plus room for the caret.
       Layout.preferredHeight: Math.min(Style.space(180), composer.implicitHeight + Style.space(40))
       color: "transparent"

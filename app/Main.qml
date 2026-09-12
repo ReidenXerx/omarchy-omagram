@@ -440,6 +440,11 @@ Scope {
     })
   }
 
+  // A chat that may be in none of your lists: a public one found by name, or one a link leads to.
+  function knowChat(chat) {
+    if (chat && chat.id) omagram.chats = Model.upsertKnown(omagram.chats, chat)
+  }
+
   function toggleMute(chatId) {
     var chat = Model.findChat(omagram.chats, chatId)
     if (chat) omagram.muteChat(chatId, chat.muted ? 0 : Model.MUTE_FOREVER)
@@ -517,7 +522,9 @@ Scope {
     if (chatId !== omagram.openChatId) omagram.openTopic = null
     if (omagram.openChatId && omagram.openChatId !== chatId) service.request("chat.close", { chatId: omagram.openChatId })
     omagram.openChatId = chatId
-    service.request("chat.open", { chatId: chatId })
+    service.request("chat.open", { chatId: chatId }, function (answer) {
+      if (answer.ok && answer.result.chat) omagram.knowChat(answer.result.chat)
+    })
     var chat = Model.findChat(omagram.chats, chatId)
     if (chat && chat.forum && !omagram.openTopic) return   // a forum opens on its topics
     omagram.keepMessagesOf(omagram.openKey)

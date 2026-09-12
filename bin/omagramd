@@ -298,6 +298,16 @@ def album_groups(kinds):
     return [items[n:n + FILES_MAX] for items in buckets.values() for n in range(0, len(items), FILES_MAX)]
 
 
+JOIN_RESULTS = {"chatJoinResultSuccess": "joined", "chatJoinResultRequestSent": "requested",
+                "chatJoinResultGuardBotApprovalRequired": "guardBot", "chatJoinResultDeclined": "declined"}
+
+
+def join_result(event, chat_id=0):
+    """What joining came to: joined, a request for the admins to approve, a guard bot to satisfy
+    first (its page opens only in another Telegram app), or declined by that bot."""
+    return {"chatId": model._int(event.get("chat_id")) or chat_id, "state": JOIN_RESULTS.get(event.get("@type"), "")}
+
+
 def mention_links(entities):
     """A Markdown link to tg://user?id=N, as suggestions put in for someone with no username, is a
     mention of that person by name."""
@@ -1000,6 +1010,10 @@ class Daemon:
             ids = [model._int(i) for i in model._list(event.get("chat_ids"), 100)]
             views = (self.state.chat_view(i) for i in ids if i)
             return {"query": query, "server": server, "chats": [v for v in views if v]}
+        # Groups, channels and bots anyone can find by name: the ones you are not in yet.
+        if args.get("public") is True:
+            self.td_send({"@type": "searchPublicChats", "query": query, "type_filter": None}, client, rid, found)
+            return
         self.td_send({"@type": "searchChatsOnServer" if server else "searchChats", "query": query,
                       "type_filter": None, "limit": limit}, client, rid, found)
 
@@ -1221,7 +1235,7 @@ class Daemon:
 
     def cmd_chat_join_link(self, client, rid, args):
         self.td_send({"@type": "joinChatByInviteLink", "invite_link": arg_str(args, "link", model.URL_MAX)},
-                     client, rid, lambda chat: {"chatId": model._int(chat.get("id"))})
+                     client, rid, join_result)
 
     def cmd_bot_start(self, client, rid, args):
         chat_id = arg_int(args, "chatId")
@@ -1334,6 +1348,15 @@ class Daemon:
             self.td_send({"@type": "getSupergroupFullInfo", "supergroup_id": chat["supergroupId"]}, client, rid, supergroup)
         else:
             self.respond(client, rid, base)
+
+    def cmd_chat_join(self, client, rid, args):
+        """Joins a group or channel you opened by its name or a link. A basic group you left takes
+        someone in it to add you back."""
+        chat_id = arg_int(args, "chatId")
+        chat = self.state.chats.get(chat_id)
+        if chat is None or not chat["supergroupId"]:
+            raise BadRequest("only public groups and channels can be joined")
+        self.td_send({"@type": "joinChat", "chat_id": chat_id}, client, rid, lambda event: join_result(event, chat_id))
 
     def cmd_chat_mentions(self, client, rid, args):
         """Who can be mentioned in a group, matching what is typed after @ (a name or username)."""
@@ -1951,7 +1974,11 @@ class Daemon:
         self.td_send(query, client, rid, messages)
 
     def cmd_chat_open(self, client, rid, args):
-        self.td_send({"@type": "openChat", "chat_id": arg_int(args, "chatId")}, client, rid)
+        """Opens a chat to read, and answers with the chat: one found by name or reached by a link may
+        be in none of your lists, so the window has not heard of it."""
+        chat_id = arg_int(args, "chatId")
+        self.td_send({"@type": "openChat", "chat_id": chat_id}, client, rid,
+                     lambda _event: {"chat": self.state.chat_view(chat_id)})
 
     def cmd_chat_close(self, client, rid, args):
         self.td_send({"@type": "closeChat", "chat_id": arg_int(args, "chatId")}, client, rid)
@@ -2289,6 +2316,7 @@ COMMANDS = {
     "chat.mentions": ("cmd_chat_mentions", True),
     "chat.commands": ("cmd_chat_commands", True),
     "message.sendFiles": ("cmd_message_send_files", True),
+    "chat.join": ("cmd_chat_join", True),
     "story.get": ("cmd_story_get", True),
     "story.open": ("cmd_story_open", True),
     "story.close": ("cmd_story_close", True),

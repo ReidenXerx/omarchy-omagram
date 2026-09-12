@@ -237,6 +237,41 @@ var NO_MESSAGE = { id: 0, chatId: 0, date: 0, editDate: 0, outgoing: false, pinn
                    sending: null, replyTo: null, forward: null, albumId: "", reactions: [], views: 0, markup: null,
                    topicId: 0, sendAt: 0, content: { kind: "text", text: "", entities: [] } }
 
+// What stands where the message box would be when you cannot write: "join" for a group or channel you
+// are not in, "left" for a basic group you left (only someone in it can add you back), "channel" for a
+// channel only its admins post in, "banned" when you were removed; "" when you can write (or it is not
+// known yet). A channel's discussion group may take comments from people who have not joined it.
+function composerBlock(chat) {
+  if (!isObject(chat) || (chat.kind !== "group" && chat.kind !== "channel")) return ""
+  if (chat.myStatus === "left") return !chat.supergroup ? "left" : (chat.joinToWrite === false ? "" : "join")
+  if (chat.myStatus === "banned") return "banned"
+  if (chat.kind === "channel" && (chat.myStatus === "member" || chat.myStatus === "restricted")) return "channel"
+  return ""
+}
+
+// Telegram looks public chats up by name from four characters (five with an @ in front).
+function publicQuery(query) {
+  var q = String(query || "").trim()
+  var n = Array.from(q).length
+  return n > 4 || (n === 4 && q[0] !== "@")
+}
+
+// Under a public chat found by search: its username and its size.
+function publicChatDetail(chat) {
+  if (!isObject(chat)) return ""
+  var size = chat.kind === "private" ? (chat.bot ? "bot" : "") : memberCountText(chat.memberCount, chat.kind === "channel")
+  return [chat.username ? "@" + chat.username : "", size].filter(function (s) { return s !== "" }).join("  ·  ")
+}
+
+// What a join came to, as the service reports it (chat.join, chat.joinLink).
+function joinText(state, channel) {
+  if (state === "joined") return channel ? "You joined the channel" : "You joined the group"
+  if (state === "requested") return "Your request to join is sent: an admin will let you in"
+  if (state === "guardBot") return "A bot guards this chat: join it from another Telegram app"
+  if (state === "declined") return "The chat's bot turned down your request to join"
+  return "Could not join"
+}
+
 // ---------------------------------------------------------------- files waiting to be sent
 
 var PHOTO_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"]

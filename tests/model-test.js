@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -531,6 +531,27 @@ test("suggestions complete @someone and a /command at the cursor", () => {
 test("files waiting to be sent are photos, videos, music or files by name", () => {
   eq(["/a/cat.JPG", "/a/clip.mp4", "/a/song.flac", "/a/report.pdf", "/a/film.webm", "", null].map(M.attachmentKind),
      ["photo", "video", "audio", "file", "file", "file", "file"])
+})
+
+test("the message box gives way where you cannot write", () => {
+  const chats = [{ kind: "channel", supergroup: true, myStatus: "left" }, { kind: "group", supergroup: true, myStatus: "left" },
+    { kind: "group", supergroup: true, myStatus: "left", joinToWrite: false }, { kind: "group", supergroup: false, myStatus: "left" },
+    { kind: "channel", supergroup: true, myStatus: "member" }, { kind: "channel", supergroup: true, myStatus: "admin" },
+    { kind: "group", supergroup: true, myStatus: "member" }, { kind: "group", supergroup: true, myStatus: "banned" },
+    { kind: "private", myStatus: "" }, { kind: "channel", myStatus: "" }, null]
+  eq(chats.map(c => M.composerBlock(c)), ["join", "join", "", "left", "channel", "", "", "banned", "", "", ""])
+  eq(["joined", "requested", "guardBot", "declined", ""].map(s => M.joinText(s, true)),
+     ["You joined the channel", "Your request to join is sent: an admin will let you in",
+      "A bot guards this chat: join it from another Telegram app", "The chat's bot turned down your request to join", "Could not join"])
+  eq(M.joinText("joined", false), "You joined the group")
+})
+
+test("public chats are looked up by name from four characters", () => {
+  eq(["abc", "abcd", "@abc", "@abcd", "  news  ", "", "дом", "дома"].map(q => M.publicQuery(q)),
+     [false, true, false, true, true, false, false, true])
+  eq(M.publicChatDetail({ kind: "channel", username: "news", memberCount: 5120 }), "@news  ·  5120 subscribers")
+  eq(M.publicChatDetail({ kind: "private", username: "helper_bot", bot: true }), "@helper_bot  ·  bot")
+  eq(M.publicChatDetail({ kind: "group", username: "", memberCount: 0 }), "Group")
 })
 
 test("forum topics: where their messages are kept, their order and icons", () => {

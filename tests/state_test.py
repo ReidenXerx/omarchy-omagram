@@ -463,6 +463,12 @@ class GroupsAndTopics(unittest.TestCase):
         s.apply({"@type": "updateBasicGroup", "basic_group": {"@type": "basicGroup", "id": 5, "member_count": 3,
                                                               "status": {"@type": "chatMemberStatusLeft"}}})
         self.assertEqual((s.chat_view(-5)["memberCount"], s.chat_view(-5)["myStatus"]), (3, "left"))
+        self.assertEqual([(s.chat_view(c)["supergroup"], s.chat_view(c)["joinToWrite"]) for c in (-10077, -5)], [(True, True), (False, True)])
+        # A channel's discussion group that takes comments from people who have not joined it.
+        s.apply({"@type": "updateSupergroup", "supergroup": {"@type": "supergroup", "id": 78, "has_linked_chat": True,
+                                                             "join_to_send_messages": False, "status": {"@type": "chatMemberStatusLeft"}}})
+        s.apply({"@type": "updateNewChat", "chat": chat(-10078, "Comments", kind={"@type": "chatTypeSupergroup", "supergroup_id": 78})})
+        self.assertEqual((s.chat_view(-10078)["myStatus"], s.chat_view(-10078)["joinToWrite"]), ("left", False))
         for junk in ({"@type": "updateSupergroup", "supergroup": "x"}, {"@type": "updateBasicGroup"},
                      {"@type": "updateSupergroup", "supergroup": {"@type": "supergroup", "id": -1}}):
             self.assertEqual(s.apply(junk), [])

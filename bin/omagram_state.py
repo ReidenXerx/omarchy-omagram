@@ -947,6 +947,10 @@ class State:
             "myStatus": group.get("status", ""),
             "username": group.get("username", "") if chat["supergroupId"] else self.users.get(chat["userId"], {}).get("username", ""),
             "forum": group.get("forum", False),
+            # A supergroup or channel can be joined, a basic group you left cannot; a channel's
+            # discussion group may take messages from people who have not joined it.
+            "supergroup": chat["supergroupId"] != 0,
+            "joinToWrite": not (chat["kind"] == "group" and group.get("linked", False) and not group.get("joinToSend", False)),
             "hasScheduled": chat["hasScheduled"],
             # A secret chat: pending until the other side accepts, then ready, or closed. Its key
             # fingerprint is for the info page only.
@@ -1122,7 +1126,9 @@ class State:
         self._keep_group(self.supergroups, gid, {"memberCount": max(0, _int(g.get("member_count"))),
                                                  "status": MEMBER_STATUSES.get(_obj(g.get("status")).get("@type"), ""),
                                                  "username": _str(usernames[0], NAME_MAX) if usernames else "",
-                                                 "forum": g.get("is_forum") is True})
+                                                 "forum": g.get("is_forum") is True,
+                                                 "linked": g.get("has_linked_chat") is True,
+                                                 "joinToSend": g.get("join_to_send_messages") is True})
         return self._group_chat_events("supergroupId", gid)
 
     def _on_updateChatHasScheduledMessages(self, u):
