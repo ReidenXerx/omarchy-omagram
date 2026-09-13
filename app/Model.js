@@ -1282,6 +1282,96 @@ function profileChat(profile) {
            title: [profile.firstName, profile.lastName].filter(function (part) { return !!part }).join(" ") }
 }
 
+// ---------------------------------------------------------------- privacy and security
+
+var PRIVACY_CHOICES = ["everybody", "contacts", "nobody"]
+
+// Who may see or do something, with the people and chats you made exceptions for.
+function privacyText(view) {
+  if (view === null) return "Telegram did not say"
+  if (!isObject(view)) return "Loading…"
+  var text = ({ everybody: "Everybody", contacts: "My contacts", nobody: "Nobody" })[view.base] || "Nobody"
+  var except = []
+  if (view.allowed > 0) except.push(view.allowed + " more allowed")
+  if (view.restricted > 0) except.push(view.restricted + " kept out")
+  return except.length ? text + " · " + except.join(", ") : text
+}
+
+// Enter on a privacy row: the next choice. Finding you by your number is for everybody or contacts only.
+function nextPrivacy(settingId, base) {
+  var choices = settingId === "findByPhone" ? ["everybody", "contacts"] : PRIVACY_CHOICES
+  return choices[(choices.indexOf(base) + 1) % choices.length]
+}
+
+var ACCOUNT_TTL_DAYS = [30, 90, 180, 365, 548, 730]
+
+function ttlText(days) {
+  var d = Number(days) || 0
+  if (d <= 0) return "Loading…"
+  if (d >= 700) return "2 years"
+  if (d >= 540) return "18 months"
+  if (d >= 360) return "1 year"
+  if (d >= 170) return "6 months"
+  if (d >= 85) return "3 months"
+  return "1 month"
+}
+
+function nextTtl(days) {
+  var d = Number(days) || 0
+  for (var i = 0; i < ACCOUNT_TTL_DAYS.length; i++) if (ACCOUNT_TTL_DAYS[i] > d + 5) return ACCOUNT_TTL_DAYS[i]
+  return ACCOUNT_TTL_DAYS[0]
+}
+
+function passwordText(state) {
+  if (!isObject(state)) return "Loading…"
+  if (state.emailCodePattern) return "Waiting for the code sent to " + state.emailCodePattern
+  if (!state.hasPassword) return "Off: the code Telegram sends is all it takes to sign in"
+  return "On" + (state.hint ? " · hint: " + state.hint : "") + (state.hasRecoveryEmail ? " · recovery email set" : "")
+}
+
+function blockedText(blocked) {
+  if (!isObject(blocked)) return "Loading…"
+  var n = Math.max(0, Number(blocked.total) | 0)
+  return n === 0 ? "Nobody" : n + (n === 1 ? " person or chat" : " people and chats")
+}
+
+// Changing two-step verification, one field at a time: turning it on, changing the password,
+// turning it off, or typing the code Telegram emailed.
+function passwordSteps(kind) {
+  var current = { key: "oldPassword", label: "Your current password", secret: true }
+  var fresh = [{ key: "newPassword", label: "A new password", secret: true },
+               { key: "repeat", label: "The new password again", secret: true },
+               { key: "hint", label: "A hint for it (you can leave this empty)", placeholder: "not the password itself" }]
+  if (kind === "on") return fresh.concat([{ key: "email", label: "A recovery email (you can leave this empty)", placeholder: "for when you forget the password" }])
+  if (kind === "change") return [current].concat(fresh)
+  if (kind === "off") return [current]
+  if (kind === "code") return [{ key: "code", label: "The code Telegram emailed you", placeholder: "from the email" }]
+  return []
+}
+
+function passwordStepProblem(step, text, values) {
+  var t = String(text === undefined || text === null ? "" : text)
+  if (!isObject(step)) return ""
+  if (step.key === "oldPassword" || step.key === "newPassword") return t === "" ? "Type the password" : (t.length > 256 ? "At most 256 characters" : "")
+  if (step.key === "repeat") return t !== (isObject(values) ? values.newPassword : undefined) ? "That is not the same password" : ""
+  if (step.key === "hint") {
+    if (t.trim() !== "" && isObject(values) && t.trim() === values.newPassword) return "A hint cannot be the password itself"
+    return t.length > 64 ? "At most 64 characters" : ""
+  }
+  if (step.key === "email") return t.trim() === "" || /^[^@ ]+@[^@ ]+[.][^@ ]+$/.test(t.trim()) ? "" : "That does not look like an email address"
+  if (step.key === "code") return t.trim() === "" ? "Type the code" : ""
+  return ""
+}
+
+function passwordError(error) {
+  var e = String(error || "")
+  if (/PASSWORD_HASH_INVALID|wrong password/i.test(e)) return "That password is not right"
+  if (/EMAIL_INVALID/.test(e)) return "Telegram does not accept that email address"
+  if (/CODE_INVALID|EMAIL_HASH_EXPIRED|CODE_EXPIRED/.test(e)) return "That code is not right, or it has expired"
+  if (/FLOOD_WAIT|too many/i.test(e)) return "Too many tries: Telegram asks you to wait"
+  return e || "Telegram did not take the change"
+}
+
 // A signed-in device: "Telegram Desktop 5.1", then "PC · Windows 11 · Kyiv · active 5 minutes ago".
 function sessionTitle(session) {
   if (!isObject(session)) return ""

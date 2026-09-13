@@ -575,6 +575,40 @@ class Extras(unittest.TestCase):
         self.assertIsNone(s.story_view("junk"))
 
 
+class Privacy(unittest.TestCase):
+    def rules(self, *rules):
+        return {"@type": "userPrivacySettingRules", "rules": list(rules)}
+
+    def test_who_in_general_and_the_exceptions(self):
+        allow_users = {"@type": "userPrivacySettingRuleAllowUsers", "user_ids": [5, 6]}
+        keep_out = {"@type": "userPrivacySettingRuleRestrictUsers", "user_ids": [9]}
+        groups = {"@type": "userPrivacySettingRuleAllowChatMembers", "chat_ids": [-100]}
+        contacts = {"@type": "userPrivacySettingRuleAllowContacts"}
+        everyone = {"@type": "userPrivacySettingRuleAllowAll"}
+        self.assertEqual(model.privacy_view(self.rules(allow_users, keep_out, groups, contacts)),
+                         {"base": "contacts", "allowed": 3, "restricted": 1})
+        self.assertEqual(model.privacy_view(self.rules(everyone)), {"base": "everybody", "allowed": 0, "restricted": 0})
+        self.assertEqual(model.privacy_view(self.rules()), {"base": "nobody", "allowed": 0, "restricted": 0}, "no rule, no one")
+        self.assertEqual(model.privacy_view("junk"), {"base": "nobody", "allowed": 0, "restricted": 0})
+
+        self.assertEqual(model.privacy_rules(self.rules(allow_users, keep_out, contacts), "everybody")["rules"],
+                         [keep_out, everyone], "allowing someone means nothing once everybody is")
+        self.assertEqual(model.privacy_rules(self.rules(allow_users, keep_out, contacts), "nobody")["rules"],
+                         [allow_users, {"@type": "userPrivacySettingRuleRestrictAll"}])
+        self.assertEqual(model.privacy_rules(self.rules(keep_out, everyone, allow_users, "junk"), "contacts")["rules"],
+                         [keep_out, allow_users, contacts])
+
+    def test_two_step_verification(self):
+        state = model.password_view({"@type": "passwordState", "has_password": True, "password_hint": "cat",
+                                     "has_recovery_email_address": False, "pending_reset_date": 0,
+                                     "recovery_email_address_code_info": {"@type": "emailAddressAuthenticationCodeInfo",
+                                                                          "email_address_pattern": "a***@m***.com", "length": 6}})
+        self.assertEqual(state, {"hasPassword": True, "hint": "cat", "hasRecoveryEmail": False,
+                                 "emailCodePattern": "a***@m***.com", "emailCodeLength": 6, "resetDate": 0})
+        self.assertEqual(model.password_view(None), {"hasPassword": False, "hint": "", "hasRecoveryEmail": False,
+                                                     "emailCodePattern": "", "emailCodeLength": 0, "resetDate": 0})
+
+
 class Bounds(unittest.TestCase):
     def test_users_are_capped_but_never_someone_a_chat_is_with(self):
         from unittest import mock

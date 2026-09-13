@@ -1210,6 +1210,76 @@ class ChatsAndAccount(Harness):
         self.assertFalse(self.request(self.conn, 167, "profile.setPhoto", path="me.png")["ok"])
         self.assertEqual(list((self.root / "rec").glob("profile-*")), [], "nothing is left behind")
 
+    def test_privacy_and_security(self):
+        before = self.sent_count("getUserPrivacySettingRules")
+        self.send(self.conn, {"id": 170, "cmd": "privacy.get", "args": {}})
+        self.wait(lambda: self.sent_count("getUserPrivacySettingRules") >= before + 9)
+        for q in [q for q in self.fake.sent if q.get("@type") == "getUserPrivacySettingRules"][before:]:
+            if q["setting"]["@type"] == "userPrivacySettingShowBirthdate":
+                self.td_event({"@type": "error", "code": 400, "message": "nope", "@extra": q["@extra"], "@client_id": 1})
+            else:
+                self.answer(q, {"@type": "userPrivacySettingRules", "rules": [{"@type": "userPrivacySettingRuleAllowContacts"}]})
+        settings = self.read(self.conn, lambda v: v.get("id") == 170)["result"]["settings"]
+        self.assertEqual(sorted(settings), sorted(["status", "photo", "phone", "findByPhone", "bio", "birthdate", "forwards", "calls", "invites"]))
+        self.assertEqual((settings["status"], settings["birthdate"]), ({"base": "contacts", "allowed": 0, "restricted": 0}, None))
+
+        rules = {"@type": "userPrivacySettingRules", "rules": [
+            {"@type": "userPrivacySettingRuleAllowUsers", "user_ids": [5]},
+            {"@type": "userPrivacySettingRuleRestrictUsers", "user_ids": [9]},
+            {"@type": "userPrivacySettingRuleAllowContacts"}]}
+        before = self.sent_count("getUserPrivacySettingRules")
+        self.send(self.conn, {"id": 171, "cmd": "privacy.set", "args": {"setting": "status", "base": "everybody"}})
+        q = self.next_query("getUserPrivacySettingRules", before)
+        sets = self.sent_count("setUserPrivacySettingRules")
+        self.answer(q, rules)
+        q = self.next_query("setUserPrivacySettingRules", sets)
+        self.answer(q, {"@type": "ok"})
+        r = self.read(self.conn, lambda v: v.get("id") == 171)["result"]
+        self.assertEqual((q["setting"], [rule["@type"] for rule in q["rules"]["rules"]], r),
+                         ({"@type": "userPrivacySettingShowStatus"}, ["userPrivacySettingRuleRestrictUsers", "userPrivacySettingRuleAllowAll"],
+                          {"setting": "status", "base": "everybody", "allowed": 0, "restricted": 1}))
+        for rid, args in ((172, {"setting": "findByPhone", "base": "nobody"}), (173, {"setting": "wallpaper", "base": "nobody"}),
+                          (174, {"setting": "status", "base": "friends"})):
+            self.assertFalse(self.request(self.conn, rid, "privacy.set", **args)["ok"], args)
+
+        q, r = self.call(175, "blocked.list", "getBlockedMessageSenders", {"@type": "messageSenders", "total_count": 3, "senders": [
+            {"@type": "messageSenderUser", "user_id": 500}, {"@type": "messageSenderChat", "chat_id": -10077},
+            {"@type": "messageSenderUser", "user_id": 0}]})
+        self.assertEqual((q["block_list"], q["offset"], q["limit"]), ({"@type": "blockListMain"}, 0, 100))
+        self.assertEqual((r["result"]["total"], r["result"]["senders"]),
+                         (3, [{"type": "user", "id": 500, "name": "Ann"}, {"type": "chat", "id": -10077, "name": "Club"}]))
+        q, _ = self.call(176, "blocked.unblock", "setMessageSenderBlockList", {"@type": "ok"}, type="user", id=500)
+        self.assertEqual((q["sender_id"], q["block_list"]), ({"@type": "messageSenderUser", "user_id": 500}, None))
+        q, _ = self.call(177, "blocked.unblock", "setMessageSenderBlockList", {"@type": "ok"}, type="chat", id=-10077)
+        self.assertEqual(q["sender_id"], {"@type": "messageSenderChat", "chat_id": -10077})
+        self.assertFalse(self.request(self.conn, 178, "blocked.unblock", type="user", id=-5)["ok"])
+
+        state = {"@type": "passwordState", "has_password": False, "password_hint": "", "has_recovery_email_address": False,
+                 "recovery_email_address_code_info": None, "pending_reset_date": 0}
+        _, r = self.call(179, "password.get", "getPasswordState", state)
+        self.assertFalse(r["result"]["hasPassword"])
+        pending = dict(state, has_password=True, password_hint="pet", recovery_email_address_code_info={
+            "@type": "emailAddressAuthenticationCodeInfo", "email_address_pattern": "a***@m.com", "length": 6})
+        q, r = self.call(180, "password.set", "setPassword", pending, oldPassword="", newPassword="s3cret-Pw", hint="pet", email="ann@example.com")
+        self.assertEqual((q["old_password"], q["new_password"], q["new_hint"], q["set_recovery_email_address"], q["new_recovery_email_address"]),
+                         ("", "s3cret-Pw", "pet", True, "ann@example.com"))
+        self.assertEqual((r["result"]["hasPassword"], r["result"]["emailCodePattern"]), (True, "a***@m.com"))
+        q, _ = self.call(181, "password.set", "setPassword", state, oldPassword="s3cret-Pw", newPassword="", hint="")
+        self.assertEqual((q["new_password"], q["new_hint"], q["set_recovery_email_address"]), ("", "", False))
+        for rid, args in ((182, {"oldPassword": "", "newPassword": "s3cret-Pw", "hint": "s3cret-Pw"}),
+                          (183, {"oldPassword": "", "newPassword": "s3cret-Pw", "hint": "", "email": "not an email"}),
+                          (184, {"oldPassword": "", "newPassword": "s3cret-Pw" * 40, "hint": ""})):
+            answer = self.request(self.conn, rid, "password.set", **args)
+            self.assertFalse(answer["ok"], rid)
+            self.assertNotIn("s3cret", answer["error"], "what was typed is never said back")
+        q, _ = self.call(185, "password.checkEmailCode", "checkRecoveryEmailAddressCode", state, code=" 123456 ")
+        self.assertEqual(q["code"], "123456")
+        _, r = self.call(186, "account.ttl", "getAccountTtl", {"@type": "accountTtl", "days": 180})
+        self.assertEqual(r["result"], {"days": 180})
+        q, r = self.call(187, "account.setTtl", "setAccountTtl", {"@type": "ok"}, days=365)
+        self.assertEqual((q["ttl"], r["result"]), ({"@type": "accountTtl", "days": 365}, {"days": 365}))
+        self.assertFalse(self.request(self.conn, 188, "account.setTtl", days=10)["ok"])
+
     def test_mention_and_command_suggestions(self):
         def member(uid):
             return {"@type": "chatMember", "member_id": {"@type": "messageSenderUser", "user_id": uid},

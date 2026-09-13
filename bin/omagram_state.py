@@ -446,6 +446,74 @@ def session_view(value):
             "location": _str(s.get("location"), NAME_MAX), "type": device if device in SESSION_DEVICES else "unknown"}
 
 
+PRIVACY_SETTINGS = {   # the privacy settings Settings shows, by the ids the window uses
+    "status": "userPrivacySettingShowStatus",
+    "photo": "userPrivacySettingShowProfilePhoto",
+    "phone": "userPrivacySettingShowPhoneNumber",
+    "findByPhone": "userPrivacySettingAllowFindingByPhoneNumber",
+    "bio": "userPrivacySettingShowBio",
+    "birthdate": "userPrivacySettingShowBirthdate",
+    "forwards": "userPrivacySettingShowLinkInForwardedMessages",
+    "calls": "userPrivacySettingAllowCalls",
+    "invites": "userPrivacySettingAllowChatInvites",
+}
+PRIVACY_BASES = {"userPrivacySettingRuleAllowAll": "everybody", "userPrivacySettingRuleAllowContacts": "contacts",
+                 "userPrivacySettingRuleRestrictAll": "nobody"}
+PRIVACY_RULES_MAX = 64
+PRIVACY_IDS_MAX = 10000
+
+
+def privacy_rule_list(value):
+    rules = (_obj(raw) for raw in _list(_obj(value, "userPrivacySettingRules").get("rules"), PRIVACY_RULES_MAX))
+    return [r for r in rules if isinstance(r.get("@type"), str) and r["@type"].startswith("userPrivacySettingRule")]
+
+
+def privacy_view(value):
+    """A privacy setting as Settings shows it: who in general -- everybody, your contacts or nobody (what no
+    rule allows is not allowed) -- and how many people and chats are exceptions either way."""
+    base, allowed, restricted = "", 0, 0
+    for rule in privacy_rule_list(value):
+        kind = rule["@type"]
+        if kind in PRIVACY_BASES:
+            base = base or PRIVACY_BASES[kind]
+            continue
+        count = len(_list(rule.get("user_ids"), PRIVACY_IDS_MAX)) + len(_list(rule.get("chat_ids"), PRIVACY_IDS_MAX))
+        if kind.startswith("userPrivacySettingRuleAllow"):
+            allowed += count
+        else:
+            restricted += count
+    return {"base": base or "nobody", "allowed": allowed, "restricted": restricted}
+
+
+def privacy_rules(value, base):
+    """The rules again with `base` as the general rule, after the exceptions that still mean something:
+    people allowed when not everybody is, people kept out when not nobody is."""
+    general = {"everybody": "userPrivacySettingRuleAllowAll", "contacts": "userPrivacySettingRuleAllowContacts",
+               "nobody": "userPrivacySettingRuleRestrictAll"}[base]
+    kept = []
+    for rule in privacy_rule_list(value):
+        kind = rule["@type"]
+        if kind in PRIVACY_BASES:
+            continue
+        allows = kind.startswith("userPrivacySettingRuleAllow")
+        if (allows and base == "everybody") or (not allows and base == "nobody"):
+            continue
+        kept.append(rule)
+    return {"@type": "userPrivacySettingRules", "rules": kept + [{"@type": general}]}
+
+
+def password_view(value):
+    """Two-step verification: whether a password is set, its hint, the recovery email, and a code
+    Telegram emailed that still waits to be typed."""
+    p = _obj(value, "passwordState")
+    code = _obj(p.get("recovery_email_address_code_info"), "emailAddressAuthenticationCodeInfo")
+    return {"hasPassword": p.get("has_password") is True, "hint": _str(p.get("password_hint"), NAME_MAX),
+            "hasRecoveryEmail": p.get("has_recovery_email_address") is True,
+            "emailCodePattern": _str(code.get("email_address_pattern"), NAME_MAX) if code else "",
+            "emailCodeLength": max(0, _int(code.get("length"))) if code else 0,
+            "resetDate": max(0, _int(p.get("pending_reset_date")))}
+
+
 NOTIFICATION_FLAGS = ("use_default_mute_for", "use_default_sound", "use_default_show_preview", "show_preview",
                       "use_default_mute_stories", "mute_stories", "use_default_story_sound",
                       "use_default_show_story_poster", "show_story_poster",

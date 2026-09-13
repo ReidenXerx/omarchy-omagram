@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -559,6 +559,30 @@ test("your profile: what can go to Telegram, its refusals in words, what each ro
      ["Ann", "None", "@ann_lee", "None", "+15550100", "None"])
   eq(M.profileValue(null, "bio"), "Loading…")
   eq([M.profileChat(Object.assign({}, p, { lastName: "Lee" })).title, M.profileChat(null)], ["Ann Lee", null])
+})
+
+test("privacy and security in words, and the next choice", () => {
+  eq([{ base: "contacts", allowed: 2, restricted: 1 }, { base: "everybody", allowed: 0, restricted: 0 }, null, undefined].map(v => M.privacyText(v)),
+     ["My contacts · 2 more allowed, 1 kept out", "Everybody", "Telegram did not say", "Loading…"])
+  eq([["status", "everybody"], ["status", "contacts"], ["status", "nobody"], ["findByPhone", "contacts"], ["bio", ""]]
+       .map(([id, base]) => M.nextPrivacy(id, base)), ["contacts", "nobody", "everybody", "everybody", "everybody"])
+  eq([30, 90, 183, 365, 548, 730, 0].map(d => M.ttlText(d)), ["1 month", "3 months", "6 months", "1 year", "18 months", "2 years", "Loading…"])
+  eq([30, 90, 183, 365, 548, 730, 0].map(d => M.nextTtl(d)), [90, 180, 365, 548, 730, 30, 30])
+  eq([null, { hasPassword: false }, { hasPassword: true, hint: "pet", hasRecoveryEmail: true }, { hasPassword: true, emailCodePattern: "a***@m.com" }]
+       .map(s => M.passwordText(s)),
+     ["Loading…", "Off: the code Telegram sends is all it takes to sign in", "On · hint: pet · recovery email set",
+      "Waiting for the code sent to a***@m.com"])
+  eq([null, { total: 0 }, { total: 1 }, { total: 4 }].map(b => M.blockedText(b)), ["Loading…", "Nobody", "1 person or chat", "4 people and chats"])
+  eq(["on", "change", "off", "code"].map(k => M.passwordSteps(k).map(s => s.key)),
+     [["newPassword", "repeat", "hint", "email"], ["oldPassword", "newPassword", "repeat", "hint"], ["oldPassword"], ["code"]])
+  const steps = M.passwordSteps("on")
+  eq([M.passwordStepProblem(steps[0], ""), M.passwordStepProblem(steps[1], "a", { newPassword: "b" }), M.passwordStepProblem(steps[1], "b", { newPassword: "b" }),
+      M.passwordStepProblem(steps[2], "b", { newPassword: "b" }), M.passwordStepProblem(steps[3], "nope"), M.passwordStepProblem(steps[3], ""),
+      M.passwordStepProblem(steps[3], "ann@example.com")],
+     ["Type the password", "That is not the same password", "", "A hint cannot be the password itself",
+      "That does not look like an email address", "", ""])
+  eq(["PASSWORD_HASH_INVALID", "CODE_INVALID", "", "odd"].map(e => M.passwordError(e)),
+     ["That password is not right", "That code is not right, or it has expired", "Telegram did not take the change", "odd"])
 })
 
 test("voice and video messages play at 1×, 1.5× or 2×", () => {

@@ -231,6 +231,11 @@ PROFILE_NAME_MAX = 64
 BIO_MAX = 140            # Telegram allows 70 characters, or 140 with Premium
 USERNAME_MAX = 32
 USERNAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{4,31}")
+PASSWORD_MAX = 256
+HINT_MAX = 64
+EMAIL_MAX = 256
+EMAIL = re.compile(r"[^@ ]+@[^@ ]+[.][^@ ]+")
+ACCOUNT_TTL_DAYS = (30, 730)   # Telegram deletes an unused account after a month to two years
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
 MEDIA_FILTERS = {"photos": "searchMessagesFilterPhotoAndVideo", "files": "searchMessagesFilterDocument",
@@ -1639,6 +1644,100 @@ class Daemon:
             self.td_send({"@type": "deleteProfilePhoto", "profile_photo_id": photo_id}, client, rid)
         self.about_me(client, rid, got)
 
+    # ---------------------------------------------------------------- privacy and security
+
+    def cmd_privacy_get(self, client, rid, args):
+        """Every privacy setting Settings shows, asked for at once; null for one Telegram did not answer."""
+        views = {}
+
+        def settle(setting_id, view):
+            views[setting_id] = view
+            if len(views) == len(model.PRIVACY_SETTINGS):
+                self.respond(client, rid, {"settings": {k: views[k] for k in model.PRIVACY_SETTINGS}})
+
+        for setting_id, kind in model.PRIVACY_SETTINGS.items():
+            self.td_send({"@type": "getUserPrivacySettingRules", "setting": {"@type": kind}},
+                         transform=lambda event, s=setting_id: settle(s, model.privacy_view(event)),
+                         failed=lambda _error, s=setting_id: settle(s, None))
+
+    def cmd_privacy_set(self, client, rid, args):
+        """Who in general may see or do something; the exceptions you made stay where they still count."""
+        setting_id, base = args.get("setting"), args.get("base")
+        kind = model.PRIVACY_SETTINGS.get(setting_id) if isinstance(setting_id, str) else None
+        if kind is None:
+            raise BadRequest("that is not a privacy setting Omagram shows")
+        choices = ("everybody", "contacts") if setting_id == "findByPhone" else ("everybody", "contacts", "nobody")
+        if base not in choices:
+            raise BadRequest(f"{setting_id} is one of {', '.join(choices)}")
+        setting = {"@type": kind}
+
+        def got(event):
+            rules = model.privacy_rules(event, base)
+            self.td_send({"@type": "setUserPrivacySettingRules", "setting": setting, "rules": rules}, client, rid,
+                         lambda _ok: dict(model.privacy_view(rules), setting=setting_id))
+
+        def failed(error):
+            self.respond_error(client, rid, model._str(error.get("message"), 200) or "Telegram did not say the setting's rules")
+        self.td_send({"@type": "getUserPrivacySettingRules", "setting": setting}, transform=got, failed=failed)
+
+    def cmd_blocked_list(self, client, rid, args):
+        offset = arg_int(args, "offset", 0, 100000, 0)
+
+        def senders(event):
+            out = []
+            for raw in model._list(event.get("senders"), 100):
+                sender, name = self.state.sender(raw)
+                if sender["id"] and sender["type"] in ("user", "chat"):
+                    out.append(dict(sender, name=name or ("Deleted account" if sender["type"] == "user" else "Chat")))
+            return {"total": max(0, model._int(event.get("total_count"))), "offset": offset, "senders": out}
+        self.td_send({"@type": "getBlockedMessageSenders", "block_list": {"@type": "blockListMain"}, "offset": offset,
+                      "limit": 100}, client, rid, senders)
+
+    def cmd_blocked_unblock(self, client, rid, args):
+        kind, sender_id = args.get("type"), arg_int(args, "id")
+        if kind == "user" and sender_id > 0:
+            sender = {"@type": "messageSenderUser", "user_id": sender_id}
+        elif kind == "chat" and sender_id < 0:
+            sender = {"@type": "messageSenderChat", "chat_id": sender_id}
+        else:
+            raise BadRequest("a blocked sender is a user or a chat")
+        self.td_send({"@type": "setMessageSenderBlockList", "sender_id": sender, "block_list": None}, client, rid)
+
+    def cmd_password_get(self, client, rid, args):
+        self.td_send({"@type": "getPasswordState"}, client, rid, model.password_view)
+
+    def cmd_password_set(self, client, rid, args):
+        """Turns two-step verification on (no old password), changes the password, or turns it off (no new
+        one). The passwords go to TDLib and nowhere else: never into an error message or a log."""
+        old = arg_str(args, "oldPassword", PASSWORD_MAX, 0)
+        new = arg_str(args, "newPassword", PASSWORD_MAX, 0)
+        hint = arg_str(args, "hint", HINT_MAX, 0).strip() if new else ""
+        email = arg_str(args, "email", EMAIL_MAX, 0).strip() if args.get("email") is not None else ""
+        if hint and hint == new:
+            raise BadRequest("the hint cannot be the password itself")
+        if email and not EMAIL.fullmatch(email):
+            raise BadRequest("that is not an email address")
+        self.td_send({"@type": "setPassword", "old_password": old, "new_password": new, "new_hint": hint,
+                      "set_recovery_email_address": bool(email), "new_recovery_email_address": email},
+                     client, rid, model.password_view)
+
+    def cmd_password_check_email_code(self, client, rid, args):
+        code = arg_str(args, "code", 32).strip()
+        if not code:
+            raise BadRequest("the code from the email is needed")
+        self.td_send({"@type": "checkRecoveryEmailAddressCode", "code": code}, client, rid, model.password_view)
+
+    def cmd_password_resend_email_code(self, client, rid, args):
+        self.td_send({"@type": "resendRecoveryEmailAddressCode"}, client, rid, model.password_view)
+
+    def cmd_account_ttl(self, client, rid, args):
+        self.td_send({"@type": "getAccountTtl"}, client, rid, lambda event: {"days": max(0, model._int(event.get("days")))})
+
+    def cmd_account_set_ttl(self, client, rid, args):
+        days = arg_int(args, "days", *ACCOUNT_TTL_DAYS)
+        self.td_send({"@type": "setAccountTtl", "ttl": {"@type": "accountTtl", "days": days}}, client, rid,
+                     lambda _ok: {"days": days})
+
     # ---------------------------------------------------------------- devices and storage
 
     def cmd_sessions_list(self, client, rid, args):
@@ -2455,6 +2554,16 @@ COMMANDS = {
     "profile.setUsername": ("cmd_profile_set_username", True),
     "profile.setPhoto": ("cmd_profile_set_photo", True),
     "profile.deletePhoto": ("cmd_profile_delete_photo", True),
+    "privacy.get": ("cmd_privacy_get", True),
+    "privacy.set": ("cmd_privacy_set", True),
+    "blocked.list": ("cmd_blocked_list", True),
+    "blocked.unblock": ("cmd_blocked_unblock", True),
+    "password.get": ("cmd_password_get", True),
+    "password.set": ("cmd_password_set", True),
+    "password.checkEmailCode": ("cmd_password_check_email_code", True),
+    "password.resendEmailCode": ("cmd_password_resend_email_code", True),
+    "account.ttl": ("cmd_account_ttl", True),
+    "account.setTtl": ("cmd_account_set_ttl", True),
     "topics.list": ("cmd_topics_list", True),
     "topic.history": ("cmd_topic_history", True),
     "chat.scheduled": ("cmd_chat_scheduled", True),

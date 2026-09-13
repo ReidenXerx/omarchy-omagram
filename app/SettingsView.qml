@@ -39,7 +39,8 @@ FocusScope {
   readonly property var globalStatus: settings.app ? settings.app.globalStatus : ({})
   readonly property var rows: settings.buildRows()
   readonly property var current: settings.rows[settings.cursor] || null
-  readonly property var accountKinds: ["profilePhoto", "profileField", "profilePhone", "storage", "sessions", "session", "otherSessions", "logout"]
+  readonly property var accountKinds: ["profilePhoto", "profileField", "profilePhone", "privacy", "blocked", "blockedSender", "password",
+                                       "passwordOff", "passwordCode", "accountTtl", "storage", "sessions", "session", "otherSessions", "logout"]
 
   signal closed()
 
@@ -49,9 +50,12 @@ FocusScope {
     settings.error = ""
     settings.confirm = null
     settings.editing = null
+    settings.flow = null
+    settings.editorError = ""
     settings.nowMs = Date.now()
     settings.forceActiveFocus()
     settings.loadProfile()
+    settings.loadPrivacy()
     settings.loadStorage()
     settings.loadSessions()
   }
@@ -76,9 +80,26 @@ FocusScope {
                { kind: "profileField", field: "username", label: "Username" },
                { kind: "profileField", field: "bio", label: "Bio" },
                { kind: "profilePhone", label: "Phone number" },
-               { kind: "header", title: "Account", note: "" },
-               { kind: "storage", label: "Storage on this computer" },
-               { kind: "sessions", label: "Devices signed in" }]
+               { kind: "header", title: "Privacy and security", note: "" },
+               { kind: "privacy", id: "status", label: "Last seen and online" },
+               { kind: "privacy", id: "photo", label: "Profile photo" },
+               { kind: "privacy", id: "phone", label: "Phone number" },
+               { kind: "privacy", id: "findByPhone", label: "Finding you by your number" },
+               { kind: "privacy", id: "bio", label: "Bio" },
+               { kind: "privacy", id: "birthdate", label: "Date of birth" },
+               { kind: "privacy", id: "forwards", label: "Your name on messages others forward" },
+               { kind: "privacy", id: "calls", label: "Calls" },
+               { kind: "privacy", id: "invites", label: "Adding you to groups and channels" },
+               { kind: "blocked", label: "Blocked" }]
+    if (settings.blockedOpen && settings.blocked)
+      for (var b = 0; b < settings.blocked.senders.length; b++) out.push({ kind: "blockedSender", sender: settings.blocked.senders[b] })
+    out.push({ kind: "password", label: "Two-step verification" })
+    if (settings.password && settings.password.emailCodePattern) out.push({ kind: "passwordCode", label: "Type the code from the email" })
+    if (settings.password && settings.password.hasPassword) out.push({ kind: "passwordOff", label: "Turn two-step verification off" })
+    out.push({ kind: "accountTtl", label: "Delete my account if I am away for" },
+             { kind: "header", title: "Account", note: "" },
+             { kind: "storage", label: "Storage on this computer" },
+             { kind: "sessions", label: "Devices signed in" })
     if (settings.sessionsOpen) {
       for (var i = 0; i < settings.sessions.length; i++) out.push({ kind: "session", session: settings.sessions[i] })
       if (settings.sessions.some(function (s) { return !s.current })) out.push({ kind: "otherSessions", label: "Sign out every other device" })
@@ -211,10 +232,14 @@ FocusScope {
 
   function cancelEditing() {
     settings.editing = null
+    settings.flow = null          // with what was typed for two-step verification
+    settings.editorError = ""
+    editor.text = ""
     settings.forceActiveFocus()
   }
 
   function saveEditing() {
+    if (settings.flow) { settings.flowNext(); return }
     var editing = settings.editing
     var profile = settings.profile
     if (!editing || !profile) return
@@ -268,6 +293,102 @@ FocusScope {
     })
   }
 
+  // ---------------------------------------------------------------- privacy and security
+
+  property var privacy: ({})         // setting id -> { base, allowed, restricted }, or null when Telegram did not say
+  property var blocked: null         // { total, senders }
+  property bool blockedOpen: false
+  property var password: null        // what password.get last said
+  property int accountTtl: 0
+  property var flow: null            // two-step verification being changed: { kind, steps, step, values }
+  property string editorError: ""
+
+  function loadPrivacy() {
+    settings.app.request("privacy.get", {}, function (answer) { if (answer.ok) settings.privacy = answer.result.settings || ({}) })
+    settings.app.request("password.get", {}, function (answer) { if (answer.ok) settings.password = answer.result })
+    settings.app.request("account.ttl", {}, function (answer) { if (answer.ok) settings.accountTtl = answer.result.days || 0 })
+    settings.loadBlocked()
+  }
+
+  function loadBlocked() {
+    settings.app.request("blocked.list", {}, function (answer) { if (answer.ok) settings.blocked = answer.result })
+  }
+
+  function changePrivacy(row) {
+    var current = settings.privacy[row.id]
+    if (!current) { settings.error = "Telegram has not said who can see that yet"; return }
+    settings.error = ""
+    settings.app.request("privacy.set", { setting: row.id, base: Model.nextPrivacy(row.id, current.base) }, function (answer) {
+      if (!answer.ok) { settings.error = answer.error || "Telegram did not take the change"; return }
+      var next = {}
+      for (var k in settings.privacy) next[k] = settings.privacy[k]
+      next[row.id] = answer.result
+      settings.privacy = next
+    })
+  }
+
+  function askUnblock(sender) {
+    settings.ask("Unblock " + sender.name + "?", function () {
+      settings.app.request("blocked.unblock", { type: sender.type, id: sender.id }, function (answer) {
+        if (!answer.ok) settings.error = answer.error || "Could not unblock"
+        settings.loadBlocked()
+      })
+    })
+  }
+
+  function changeAccountTtl() {
+    settings.app.request("account.setTtl", { days: Model.nextTtl(settings.accountTtl) }, function (answer) {
+      if (answer.ok) settings.accountTtl = answer.result.days
+      else settings.error = answer.error || "Telegram did not take the change"
+    })
+  }
+
+  // Two-step verification is changed one field at a time in the bar above the list; what is typed
+  // is kept only until it is sent, or the change is left with Esc.
+  function startPasswordFlow(kind) {
+    settings.error = ""
+    settings.confirm = null
+    settings.flow = { kind: kind, steps: Model.passwordSteps(kind), step: 0, values: {} }
+    settings.showFlowStep()
+  }
+
+  function showFlowStep() {
+    var step = settings.flow.steps[settings.flow.step]
+    settings.editorError = ""
+    settings.editing = { field: step.key, label: step.label, secret: step.secret === true, placeholder: step.placeholder || "" }
+    editor.text = ""
+    editor.forceActiveFocus()
+  }
+
+  function flowNext() {
+    var flow = settings.flow
+    var step = flow.steps[flow.step]
+    var problem = Model.passwordStepProblem(step, editor.text, flow.values)
+    if (problem !== "") { settings.editorError = problem; return }
+    flow.values[step.key] = step.secret ? editor.text : editor.text.trim()
+    if (flow.step + 1 < flow.steps.length) {
+      flow.step++
+      settings.showFlowStep()
+      return
+    }
+    var values = flow.values
+    var kind = flow.kind
+    settings.cancelEditing()
+    if (kind === "code") {
+      settings.app.request("password.checkEmailCode", { code: values.code }, settings.passwordAnswered)
+      return
+    }
+    var args = { oldPassword: values.oldPassword || "", newPassword: kind === "off" ? "" : values.newPassword, hint: values.hint || "" }
+    if (values.email) args.email = values.email
+    settings.app.request("password.set", args, settings.passwordAnswered)
+  }
+
+  function passwordAnswered(answer) {
+    if (!answer.ok) { settings.error = Model.passwordError(answer.error); return }
+    settings.password = answer.result
+    if (answer.result.emailCodePattern) settings.startPasswordFlow("code")
+  }
+
   FileDialog {
     id: photoDialog
     title: "Your new profile photo"
@@ -299,6 +420,22 @@ FocusScope {
       photoDialog.open()
     } else if (row.kind === "profilePhone") {
       settings.error = "Your phone number is changed in Telegram's app on your phone."
+    } else if (row.kind === "privacy") {
+      settings.changePrivacy(row)
+    } else if (row.kind === "blocked") {
+      settings.blockedOpen = !settings.blockedOpen
+      if (settings.blockedOpen) settings.loadBlocked()
+    } else if (row.kind === "blockedSender") {
+      settings.askUnblock(row.sender)
+    } else if (row.kind === "password") {
+      settings.startPasswordFlow(settings.password && settings.password.hasPassword ? "change" : "on")
+    } else if (row.kind === "passwordOff") {
+      settings.ask("Turn two-step verification off? Signing in on a new device then takes only the code Telegram sends.",
+                   function () { settings.startPasswordFlow("off") })
+    } else if (row.kind === "passwordCode") {
+      settings.startPasswordFlow("code")
+    } else if (row.kind === "accountTtl") {
+      settings.changeAccountTtl()
     } else if (row.kind === "storage") {
       settings.ask("Clear the cache? Downloaded photos, videos and files are deleted from this computer; they download again when you open them.", function () {
         settings.app.request("storage.clear", {}, function (answer) {
@@ -499,10 +636,12 @@ FocusScope {
         anchors.margins: Style.space(12)
         app: settings.app
         label: settings.editing ? settings.editing.label + "   ·   Enter saves   ·   Esc cancels" : ""
-        placeholder: settings.editing && settings.editing.field === "username" ? "a name people can find you by"
-                   : (settings.editing && settings.editing.field === "bio" ? "a few words about you" : "")
-        maximumLength: settings.editing && settings.editing.field === "bio" ? 140 : 64
-        error: settings.editing ? Model.profileProblem(settings.editing.field, editor.text) : ""
+        placeholder: settings.editing && settings.editing.placeholder ? settings.editing.placeholder
+                   : (settings.editing && settings.editing.field === "username" ? "a name people can find you by"
+                      : (settings.editing && settings.editing.field === "bio" ? "a few words about you" : ""))
+        secret: !!settings.editing && settings.editing.secret === true
+        maximumLength: settings.flow ? 256 : (settings.editing && settings.editing.field === "bio" ? 140 : 64)
+        error: !settings.editing ? "" : (settings.flow ? settings.editorError : Model.profileProblem(settings.editing.field, editor.text))
         onAccepted: settings.saveEditing()
         Keys.onEscapePressed: settings.cancelEditing()
       }
@@ -543,7 +682,8 @@ FocusScope {
         width: list.width
         height: header ? Style.space(modelData.note ? 58 : 44)
               : (account ? Style.space(modelData.kind === "profilePhoto" ? 66
-                                       : (["session", "storage", "profileField", "profilePhone"].indexOf(modelData.kind) >= 0 ? 58 : 44))
+                                       : (["session", "storage", "profileField", "profilePhone", "privacy", "blocked", "password", "accountTtl"]
+                                            .indexOf(modelData.kind) >= 0 ? 58 : 44))
                          : Style.space(clashes.length || modelData.kind === "global" ? 58 : 42))
         radius: Style.cornerRadius
         color: row.isCursor && !row.header ? settings.app.selected
@@ -576,7 +716,7 @@ FocusScope {
         ColumnLayout {
           visible: row.account
           anchors.fill: parent
-          anchors.leftMargin: Style.space(row.modelData.kind === "session" ? 30 : 14)
+          anchors.leftMargin: Style.space(row.modelData.kind === "session" || row.modelData.kind === "blockedSender" ? 30 : 14)
           anchors.rightMargin: Style.space(14)
           anchors.topMargin: Style.space(6)
           anchors.bottomMargin: Style.space(6)
@@ -600,14 +740,18 @@ FocusScope {
               elide: Text.ElideRight
               textFormat: Text.PlainText
               text: row.modelData.kind === "session" ? Model.sessionTitle(row.modelData.session)
+                  : row.modelData.kind === "blockedSender" ? row.modelData.sender.name
                   : row.modelData.label + (row.modelData.kind === "sessions" && settings.sessions.length ? "  (" + settings.sessions.length + ")" : "")
-              color: row.modelData.kind === "logout" || row.modelData.kind === "otherSessions" ? settings.app.urgent : settings.app.foreground
+              color: ["logout", "otherSessions", "passwordOff"].indexOf(row.modelData.kind) >= 0 ? settings.app.urgent : settings.app.foreground
               font.family: settings.app.fontFamily
-              font.pixelSize: row.modelData.kind === "session" ? Style.font.bodySmall : Style.font.body
+              font.pixelSize: row.modelData.kind === "session" || row.modelData.kind === "blockedSender" ? Style.font.bodySmall : Style.font.body
             }
             Text {
               textFormat: Text.PlainText
-              text: ({ profileField: "Enter changes it",
+              text: ({ profileField: "Enter changes it", privacy: "Enter changes it", accountTtl: "Enter changes it",
+                       blocked: settings.blockedOpen ? "Enter hides them" : "Enter shows them", blockedSender: "Enter unblocks",
+                       password: settings.password && settings.password.hasPassword ? "Enter changes the password" : "Enter turns it on",
+                       passwordOff: "Enter", passwordCode: "Enter",
                        profilePhoto: settings.profile && (settings.profile.photo || settings.profile.photoId)
                                      ? "Enter changes it  ·  Backspace removes it" : "Enter sets one",
                        storage: "Enter clears the cache", sessions: settings.sessionsOpen ? "Enter hides them" : "Enter shows them",
@@ -628,6 +772,10 @@ FocusScope {
                 : row.modelData.kind === "session" ? Model.sessionDetail(row.modelData.session, settings.nowMs)
                 : row.modelData.kind === "profileField" ? Model.profileValue(settings.profile, row.modelData.field)
                 : row.modelData.kind === "profilePhone" ? Model.profileValue(settings.profile, "phone")
+                : row.modelData.kind === "privacy" ? Model.privacyText(settings.privacy[row.modelData.id])
+                : row.modelData.kind === "blocked" ? Model.blockedText(settings.blocked)
+                : row.modelData.kind === "password" ? Model.passwordText(settings.password)
+                : row.modelData.kind === "accountTtl" ? Model.ttlText(settings.accountTtl)
                 : row.modelData.kind === "profilePhoto" ? (settings.photoBusy ? "Setting your new photo…" : Model.profileValue(settings.profile, "photo"))
                 : ""
             color: settings.app.muted
