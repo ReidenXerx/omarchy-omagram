@@ -10,7 +10,8 @@ import "../app/Keymap.js" as Keymap
 
 // The quick view: find a chat, read its latest messages and answer without leaving what you are doing -- in
 // words, with a sticker, a voice message or a round video message -- and listen to the voice and round video
-// messages people sent, seeing their stickers (bigger under the pointer). The same view is the quick-reply
+// messages people sent, seeing their stickers (bigger under the pointer) and their photos and videos over the
+// whole screen (MediaViewer.qml, in a window of its own). The same view is the quick-reply
 // overlay, wide, with the chats beside the chat, and the bar's panel, compact, where the chat takes the chats'
 // place.
 //
@@ -41,6 +42,7 @@ Item {
   signal dismissRequested()
   signal openInWindowRequested(real chatId)
   signal tabRequested(int direction)
+  signal focusReturned()   // a full-screen photo or video closed: a host that let the keyboard go takes it back
 
   function ink(c) { return Qt.rgba(c.r, c.g, c.b, 1) }
 
@@ -96,6 +98,13 @@ Item {
   readonly property var recording: quick.service && quick.service.recording ? quick.service.recording : ({ state: "idle" })
   readonly property bool recordingHere: quick.recording.state !== "idle" && quick.replyChatId !== 0 && quick.recording.chatId === quick.replyChatId
   readonly property Item focusItem: quick.replyChatId ? composer : search
+  property bool loadingOlder: false
+  property bool historyComplete: false   // nothing older is left in the chat shown
+  property real viewingId: 0             // the message whose photo or video is open over the whole screen
+  property real pendingMediaId: 0        // a message whose photo or video opens as soon as the history holds it
+  readonly property var mediaItems: quick.history.filter(function (m) {
+    return !!m && !!m.content && !!m.content.media && ["photo", "video", "gif"].indexOf(m.content.kind) >= 0
+  })
 
   onQueryChanged: quick.cursor = 0
   onShownChatIdChanged: historyDelay.restart()
@@ -111,8 +120,9 @@ Item {
   // ---------------------------------------------------------------- opening and closing
 
   // Each time it shows: `chatId` answers that chat straight away. Without one it opens on the chat it was
-  // closed in, with the words not yet sent, when that was within the hour; otherwise on finding a chat.
-  function reset(chatId) {
+  // closed in, with the words not yet sent, when that was within the hour; otherwise on finding a chat. A
+  // `messageId` with the chat opens that message's photo or video over the whole screen once it has loaded.
+  function reset(chatId, messageId) {
     quick.nowMs = Date.now()
     quick.status = ""
     quick.sending = false
@@ -121,9 +131,11 @@ Item {
     quick.stickersOpen = false
     quick.hoverSticker = null
     quick.asked = ({})
+    quick.viewingId = 0
     search.text = ""
     composer.text = ""
     var id = Number(chatId)
+    quick.pendingMediaId = Number.isSafeInteger(id) && id !== 0 && Number.isSafeInteger(Number(messageId)) ? Number(messageId) : 0
     var s = quick.service
     var last = s && s.quickChatId && Date.now() - s.quickClosedAt < quick.rememberMs ? s.quickChatId : 0
     if (!Number.isSafeInteger(id) || id === 0) id = last
@@ -142,6 +154,7 @@ Item {
   // It is hidden: a recording half made is thrown away, what is playing goes on, and where it was is kept.
   function leave() {
     if (quick.recordingHere) quick.stopRecording(false)
+    quick.viewingId = 0
     if (quick.service) {
       quick.service.quickChatId = quick.replyChatId
       quick.service.quickDraft = quick.replyChatId ? composer.text : ""
@@ -354,6 +367,38 @@ Item {
     else if (["photo", "video", "gif", "videoNote"].indexOf(kind) >= 0) quick.fetch(quick.stillOf(kind, media))
   }
 
+  // Wanted now, ahead of anything else coming down: a photo opened over the whole screen, a video to play.
+  function fetchNow(file) {
+    var known = quick.fileOf(file)
+    if (!quick.service || !known || known.path) return
+    quick.service.request("file.download", { fileId: known.id, priority: 32 }, function (answer) {
+      if (answer.ok && answer.result && answer.result.id && quick.service.noteFile) quick.service.noteFile(answer.result)
+    })
+  }
+
+  // ---------------------------------------------------------------- over the whole screen
+
+  function openMedia(message) {
+    var kind = message && message.content ? message.content.kind : ""
+    if (message && message.id && ["photo", "video", "gif"].indexOf(kind) >= 0) quick.viewingId = message.id
+  }
+
+  function closeMedia() {
+    if (!quick.viewingId) return
+    quick.viewingId = 0
+    quick.focusReturned()
+    Qt.callLater(function () { if (quick.focusItem) quick.focusItem.forceActiveFocus() })
+  }
+
+  // A window of its own over the whole screen, with the keyboard (MediaWindow.qml): loaded from its file only
+  // while a photo or video is open, so nothing about it is needed before.
+  Loader { id: mediaWindow }
+
+  onViewingIdChanged: {
+    if (quick.viewingId && !mediaWindow.item) mediaWindow.setSource(Qt.resolvedUrl("MediaWindow.qml"), { host: quick })
+    else if (!quick.viewingId && mediaWindow.item) mediaWindow.source = ""
+  }
+
   // ---------------------------------------------------------------- history
 
   // A short pause, so holding an arrow key does not ask for every chat it passes.
@@ -366,12 +411,16 @@ Item {
   function loadHistory() {
     var chatId = quick.shownChatId
     var serial = ++quick.historySerial
+    quick.loadingOlder = false
     if (!chatId || !quick.ready || !quick.opened) {
       quick.history = []
       quick.historyChatId = 0
       return
     }
-    if (chatId !== quick.historyChatId) quick.history = []
+    if (chatId !== quick.historyChatId) {
+      quick.history = []
+      quick.historyComplete = false
+    }
     quick.fetchHistory(chatId, 0, serial)
   }
 
@@ -382,11 +431,42 @@ Item {
       if (serial !== quick.historySerial) return   // a newer chat was chosen meanwhile
       quick.historyChatId = chatId
       var incoming = answer.ok ? (answer.result.messages || []) : []
+      var before = fromMessageId ? quick.history.length : 0
       var merged = Model.mergeMessages(fromMessageId ? quick.history : [], incoming)
       quick.history = merged
+      if (answer.ok && merged.length === before) quick.historyComplete = true
+      var asked = quick.pendingMediaId ? Model.findMessage(merged, quick.pendingMediaId) : null
+      if (asked) {
+        quick.pendingMediaId = 0
+        quick.openMedia(asked)
+      }
       messageList.positionViewAtEnd()
       if (!fromMessageId && merged.length > 0 && merged.length < 12) quick.fetchHistory(chatId, Model.oldestId(merged), serial)
+      else Qt.callLater(quick.fillHistory)
     })
+  }
+
+  // Older messages, a page at a time, as you scroll up to them: they arrive above what you are reading, which
+  // stays where it is. When nothing older comes back, the chat's start is reached.
+  function loadOlder() {
+    var chatId = quick.historyChatId
+    if (!chatId || quick.loadingOlder || quick.historyComplete || quick.history.length === 0 || !quick.ready) return
+    var serial = quick.historySerial
+    quick.loadingOlder = true
+    quick.service.request("chat.history", { chatId: chatId, fromMessageId: Model.oldestId(quick.history), limit: 30 }, function (answer) {
+      if (serial !== quick.historySerial) return   // another chat since: loadHistory put the flag down
+      quick.loadingOlder = false
+      if (!answer.ok) return
+      var before = quick.history.length
+      quick.history = Model.mergeMessages(quick.history, answer.result.messages || [])
+      if (quick.history.length === before) quick.historyComplete = true
+      else Qt.callLater(quick.fillHistory)
+    })
+  }
+
+  // A page too short to fill the pane leaves nothing to scroll up by: then the next one comes by itself.
+  function fillHistory() {
+    if (messageList.count > 0 && messageList.contentHeight < messageList.height) quick.loadOlder()
   }
 
   // Rows by message id, edited in place as in the window's chat: a new array as the model rebuilt every row.
@@ -432,7 +512,11 @@ Item {
 
         TextInput {
           id: search
-          anchors.fill: parent
+          anchors.left: parent.left
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+          anchors.right: openOmagram.left
+          anchors.rightMargin: Style.space(8)
           verticalAlignment: TextInput.AlignVCenter
           color: quick.text
           selectionColor: quick.selected
@@ -469,6 +553,58 @@ Item {
             textFormat: Text.PlainText
             color: quick.muted
             font: search.font
+          }
+        }
+
+        // Omagram's mark in the corner: the whole window, without a chat.
+        Item {
+          id: openOmagram
+          objectName: "openOmagram"
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: Style.space(28)
+          height: Style.space(28)
+
+          Rectangle {
+            anchors.fill: parent
+            radius: Style.cornerRadius
+            color: openOmagramArea.containsMouse ? Qt.rgba(quick.text.r, quick.text.g, quick.text.b, 0.08) : "transparent"
+          }
+          RingMark {
+            anchors.centerIn: parent
+            size: Style.space(18)
+            color: openOmagramArea.containsMouse ? quick.text : quick.muted
+          }
+          MouseArea {
+            id: openOmagramArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: quick.openInWindowRequested(0)
+          }
+        }
+
+        Rectangle {
+          visible: openOmagramArea.containsMouse
+          z: 2
+          anchors.right: openOmagram.left
+          anchors.rightMargin: Style.space(6)
+          anchors.verticalCenter: parent.verticalCenter
+          width: openOmagramLabel.implicitWidth + Style.space(14)
+          height: openOmagramLabel.implicitHeight + Style.space(8)
+          radius: height / 2
+          color: quick.background
+          border.width: 1
+          border.color: Qt.rgba(quick.text.r, quick.text.g, quick.text.b, 0.16)
+
+          Text {
+            id: openOmagramLabel
+            anchors.centerIn: parent
+            text: "Open Omagram"
+            textFormat: Text.PlainText
+            color: quick.text
+            font.family: quick.fontFamily
+            font.pixelSize: Style.font.caption
           }
         }
 
@@ -666,7 +802,13 @@ Item {
         ListView {
           id: messageList
 
-          WheelScroll { view: messageList }
+          WheelScroll {
+            view: messageList
+            onScrolled: {
+              messageList.followsEnd = messageList.atYEnd
+              if (messageList.contentY <= messageList.originY + Style.space(200) && messageList.count > 0) quick.loadOlder()
+            }
+          }
           anchors.fill: parent
           clip: true
           spacing: Style.space(8)
@@ -674,9 +816,13 @@ Item {
           boundsBehavior: Flickable.StopAtBounds
 
           // Kept at its newest messages while a recording bar or the stickers take room from it, unless you
-          // scrolled up.
+          // scrolled up; near its top, older messages come.
           property bool followsEnd: true
-          onContentYChanged: messageList.followsEnd = messageList.atYEnd
+          onContentYChanged: {
+            messageList.followsEnd = messageList.atYEnd
+            if (messageList.moving && messageList.contentY <= messageList.originY + Style.space(200) && messageList.count > 0) quick.loadOlder()
+          }
+          onAtYBeginningChanged: if (atYBeginning && count > 0 && moving) quick.loadOlder()
           onHeightChanged: if (messageList.followsEnd) messageList.positionViewAtEnd()
 
           delegate: Column {
@@ -758,6 +904,7 @@ Item {
             }
 
             // A photo, a video or a GIF: small and sharp, its tiny blurred copy standing in until the picture is here.
+            // A click opens it over the whole screen.
             Item {
               id: shot
               readonly property bool wanted: ["photo", "video", "gif"].indexOf(line.kind) >= 0 && !!line.media
@@ -831,7 +978,7 @@ Item {
               MouseArea {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
-                onClicked: quick.openInWindowRequested(line.message.chatId)
+                onClicked: quick.openMedia(line.message)
               }
             }
 
@@ -963,6 +1110,30 @@ Item {
             source: quick.hoverSticker ? quick.stickerSource(quick.hoverSticker) : ""
             sourceSize.width: 384
             sourceSize.height: 384
+          }
+        }
+
+        Rectangle {
+          visible: quick.loadingOlder
+          z: 5
+          anchors.top: parent.top
+          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.topMargin: Style.space(4)
+          width: olderText.implicitWidth + Style.space(16)
+          height: olderText.implicitHeight + Style.space(8)
+          radius: height / 2
+          color: quick.background
+          border.width: 1
+          border.color: Qt.rgba(quick.text.r, quick.text.g, quick.text.b, 0.16)
+
+          Text {
+            id: olderText
+            anchors.centerIn: parent
+            text: "Loading older messages…"
+            textFormat: Text.PlainText
+            color: quick.muted
+            font.family: quick.fontFamily
+            font.pixelSize: Style.font.caption
           }
         }
 

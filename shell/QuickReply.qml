@@ -9,6 +9,8 @@ import qs.Ui
 //
 //   omarchy-shell shell toggle reidenxerx.omagram '{}'              find a chat
 //   omarchy-shell shell toggle reidenxerx.omagram '{"chatId":<id>}'  answer that chat
+//   omarchy-shell shell toggle reidenxerx.omagram '{"chatId":<id>,"messageId":<id>}'  and show that message's
+//                                                                       photo or video over the whole screen
 Item {
   id: overlay
 
@@ -42,7 +44,7 @@ Item {
     try { payload = JSON.parse(payloadJson || "{}") || {} } catch (e) { payload = {} }
     overlay.findService()
     overlay.opened = true
-    view.reset(payload.chatId)
+    view.reset(payload.chatId, payload.messageId)
   }
 
   function close() {

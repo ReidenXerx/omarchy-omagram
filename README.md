@@ -81,7 +81,7 @@ key, and desktop notifications you can answer without leaving what you are doing
   read**, **Mute for an hour** and **👍** (a reaction to the message) work without opening anything.
   Each person has a quiet sound of their own, two or three soft low pops picked from who they are,
   so you can tell who wrote without looking and a busy day never rings in your ears; Settings picks
-  what makes the pop (Pop, Drop or Knock, or none) and a person's info can play theirs or give them
+  what makes them (Drop, Pop or Knock, or none) and a person's info can play theirs or give them
   another. Not while Do Not Disturb is on.
   Telegram's own mute settings and Omarchy's Do Not Disturb apply.
 - **In the bar** — Omagram's mark, with a dot while unmuted chats have unread messages. Left
@@ -90,8 +90,10 @@ key, and desktop notifications you can answer without leaving what you are doing
   latest messages and answer without leaving what you are doing — in words, with one of your
   recent stickers, or with a voice or round video message recorded on the spot (`Enter` sends it,
   `Esc` throws it away). Voice and round video messages play right there, a sticker someone sent
-  shows bigger under the pointer, and photos, videos and GIFs show as small sharp pictures. Close
-  it in a chat and for the next hour it opens there again, with anything you had not sent.
+  shows bigger under the pointer, and photos, videos and GIFs show as small sharp pictures that open
+  over the whole screen (a video plays in your own video player). Scroll up for older messages.
+  Close it in a chat and for the next hour it opens there again, with anything you had not sent;
+  Omagram's mark in its corner opens the whole window.
 
 Calls cannot be taken in Omagram: TDLib carries a call's signalling but no voice engine. An
 incoming call is shown so you can decline it or answer in another Telegram app.
@@ -243,7 +245,8 @@ In the quick view: type to search, `↑` `↓` or `Ctrl+J` `Ctrl+K` to choose, `
 `Enter` again to send. In a chat, `Ctrl+R` records a voice message and `Ctrl+Shift+R` a round
 video message (`Enter` sends it, `Esc` throws it away), `Ctrl+S` opens your recent stickers,
 `Ctrl+P` plays the newest voice or round video message (again to stop), `Ctrl+O` opens the chat
-in the window and `Esc` goes back.
+in the window and `Esc` goes back. Over a photo or video: `←` `→` step through them, `Enter` plays
+a video in your video player, `o` opens the chat in the window and `Esc` closes.
 
 ## How it is put together
 

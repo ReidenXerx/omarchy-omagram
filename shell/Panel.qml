@@ -49,6 +49,7 @@ Panel {
       selected: Style.hoverFillFor(root.barForeground, Color.accent)
       onDismissRequested: root.close()
       onTabRequested: function (direction) { root.switchPanel(direction) }
+      onFocusReturned: panel.beginFocusPrime()   // the full-screen view had the keyboard: take it back
       onOpenInWindowRequested: function (chatId) {
         if (!root.omagram) return
         if (chatId) root.omagram.openChat(chatId)

@@ -38,7 +38,8 @@ var SECTIONS = [
   { id: "poll", title: "Making a poll", scope: "poll", app: "window" },
   { id: "topics", title: "A forum's topics", scope: "topics", app: "window" },
   { id: "quick", title: "Quick view: finding a chat", scope: "quick", app: "shell" },
-  { id: "quickMessage", title: "Quick view: in a chat", scope: "quickMessage", app: "shell" }
+  { id: "quickMessage", title: "Quick view: in a chat", scope: "quickMessage", app: "shell" },
+  { id: "quickMedia", title: "Quick view: a photo or video over the whole screen", scope: "quickMedia", app: "shell" }
 ]
 
 var ACTIONS = [
@@ -215,7 +216,13 @@ var ACTIONS = [
   { id: "quickMessage.voice", label: "Record a voice message: Enter sends it, Esc throws it away", keys: ["Ctrl+R"] },
   { id: "quickMessage.videoNote", label: "Record a round video message: Enter sends it, Esc throws it away", keys: ["Ctrl+Shift+R"] },
   { id: "quickMessage.play", label: "Listen to the newest voice or round video message, or stop", keys: ["Ctrl+P"] },
-  { id: "quickMessage.stickers", label: "Stickers to send", keys: ["Ctrl+S"] }
+  { id: "quickMessage.stickers", label: "Stickers to send", keys: ["Ctrl+S"] },
+
+  { id: "quickMedia.previous", label: "The photo or video before", keys: ["Left", "H"] },
+  { id: "quickMedia.next", label: "The next photo or video", keys: ["Right", "L"] },
+  { id: "quickMedia.play", label: "Play the video in your video player", keys: ["Return", "Enter", "Space"] },
+  { id: "quickMedia.openInWindow", label: "Open the chat in the window", keys: ["O"] },
+  { id: "quickMedia.close", label: "Close", keys: ["Esc", "Q"] }
 ]
 
 var MODIFIER_KEYS = [0x01000020, 0x01000021, 0x01000022, 0x01000023, 0x01001103, 0x01000024, 0x01000025]
