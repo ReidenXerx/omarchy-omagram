@@ -1355,8 +1355,7 @@ function profileChat(profile) {
 
 // ---------------------------------------------------------------- a sound for each person
 
-var SOUND_STYLES = [["glass", "Glass", "a soft bell"], ["wood", "Wood", "a small marimba"], ["pluck", "Pluck", "a plucked string"],
-                    ["dot", "Dot", "short digital dots"], ["air", "Air", "a breathy chime"]]
+var SOUND_STYLES = [["pop", "Pop", "soft and round"], ["drop", "Drop", "a drop of water"], ["knock", "Knock", "a knuckle on wood"]]
 
 function soundStyleText(style) {
   for (var i = 0; i < SOUND_STYLES.length; i++) if (SOUND_STYLES[i][0] === style) return SOUND_STYLES[i][1] + ", " + SOUND_STYLES[i][2]

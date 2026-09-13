@@ -912,7 +912,7 @@ class Daemon:
         """A person's own sound, quietly: made once in the background and kept, then played with pw-play. Not while
         Omarchy's Do Not Disturb is on, and not again and again for a busy chat; `force` is for hearing it on purpose."""
         settings = self.prefs.get("sounds") or {}
-        style = settings.get("style", "glass")
+        style = settings.get("style", prefs.SOUND_DEFAULT)
         if style not in sounds.STYLES or not seed:
             return
         if not force:

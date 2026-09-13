@@ -1,8 +1,10 @@
 """omagram_sounds -- a quiet notification sound of its own for every person, made from who they are.
 
-A person's sound is two to four notes of a pentatonic scale picked from their Telegram id: the same
-person always sounds the same, and two people rarely do. The style is the instrument it is played on,
-and yours to choose. Everything is made here with the standard library, into a short mono WAV.
+A person's sound is two or three soft pops on notes of a pentatonic scale picked from their Telegram id:
+the same person always sounds the same, and two people rarely do. Pops, not chimes: low, round and over
+in a moment. A high ringing tone startles, and heard all day it wears you down; a low short one is simply
+noticed. The style is what makes the pop, and yours to choose. Everything is made here with the standard
+library, into a short mono WAV.
 """
 import array
 import hashlib
@@ -13,7 +15,7 @@ import wave
 
 sys.dont_write_bytecode = True
 
-RATE = 32000                  # samples a second: bells and plucks stay well under its 16 kHz
+RATE = 32000                  # samples a second, far above anything these sounds hold
 PEAK = 0.28                   # about -11 dBFS: a notification, not an alarm
 LENGTH_MAX = 1.2              # seconds
 FADE_OUT = 0.06               # seconds: every sound ends on a short fade, so nothing clicks
@@ -21,8 +23,8 @@ SCALE = (0, 2, 4, 7, 9)       # major pentatonic: any of its notes sound well to
 STABLE = (0, 2, 3)            # its root, third and fifth: where a melody comes to rest
 DEGREES = 8                   # the scale's notes over two octaves, less the top two
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-STYLES = {"glass": "a soft bell", "wood": "a small marimba", "pluck": "a plucked string",
-          "dot": "short digital dots", "air": "a breathy chime"}
+STYLES = {"pop": "soft and round", "drop": "a drop of water", "knock": "a knuckle on wood"}
+DEFAULT_STYLE = "pop"
 
 
 class Dice:
@@ -60,10 +62,11 @@ def note_name(midi):
 
 def motif(seed, variant=0):
     """This person's notes: which, when (seconds from the start) and how hard. `seed` is who they are,
-    a Telegram id; `variant` gives them another sound when their first one is not liked."""
+    a Telegram id; `variant` gives them another sound when their first one is not liked. A style sounds
+    the notes lower than they are written here (its `shift`)."""
     dice = Dice(f"omagram-sound:{seed}:{variant}")
-    root = 62 + dice.next() % 11                        # the key: D4 up to C5
-    count = dice.pick((2, 3, 3, 3, 4, 4))
+    root = 62 + dice.next() % 11                        # the key: D4 up to C5, as written
+    count = dice.pick((2, 2, 3, 3, 3))                   # two or three: enough to know who, not a tune to sit through
     gap = dice.between(0.085, 0.15)                      # seconds from one note to the next
     swing = dice.between(0.0, 0.3)                       # every second note a little late
     degrees = [dice.pick((0, 1, 2, 2, 3, 4))]
@@ -85,103 +88,79 @@ def motif(seed, variant=0):
     return {"seed": str(seed), "variant": variant, "root": root, "notes": notes}
 
 
-# ---------------------------------------------------------------- instruments
+# ---------------------------------------------------------------- what makes the pop
 
-def _bell(out, start, freq, velocity, ring, _noise):
-    """Glass: a sine bent by a quicker one (FM), bright as it is struck and pure as it fades."""
-    w = 2 * math.pi * freq / RATE
-    for n in range(min(len(out) - start, int(ring * RATE))):
-        t = n / RATE
-        env = min(1.0, t / 0.002) * math.exp(-t / 0.3)
-        index = 1.1 * math.exp(-t / 0.05)
-        overtone = 0.12 * math.exp(-t / 0.09) * math.sin(2 * w * n)
-        out[start + n] += velocity * env * (math.sin(w * n + index * math.sin(3.5 * w * n)) + overtone)
+def _soft_noise(noise, cutoff):
+    """White noise through a one-pole low-pass: a breath, with nothing hissing above `cutoff`."""
+    a = math.exp(-2 * math.pi * cutoff / RATE)
+    y = 0.0
+    while True:
+        y = (1 - a) * noise.between(-1.0, 1.0) + a * y
+        yield y
 
 
-def _mallet(out, start, freq, velocity, ring, _noise):
-    """Wood: a marimba bar's first partials, the upper ones dying almost at once."""
-    partials = [(2 * math.pi * freq * ratio / RATE, level, tau)
-                for ratio, level, tau in ((1.0, 1.0, 0.16), (3.98, 0.3, 0.04), (9.2, 0.07, 0.015))
-                if freq * ratio < RATE * 0.45]
-    for n in range(min(len(out) - start, int(ring * RATE))):
-        t = n / RATE
-        attack = min(1.0, t / 0.001)
-        out[start + n] += velocity * attack * sum(level * math.exp(-t / tau) * math.sin(w * n) for w, level, tau in partials)
-
-
-def _string(out, start, freq, velocity, ring, noise):
-    """Pluck: a string (Karplus-Strong), set going by a softened burst of noise."""
-    period = RATE / freq - 0.5                            # the averaging below delays by half a sample
-    burst = int(period) + 1
-    raw = [noise.between(-1.0, 1.0) for _ in range(burst)]
-    excite = [(raw[i - 1] + 2 * raw[i] + raw[(i + 1) % burst]) / 4 for i in range(burst)]
-    size = min(len(out) - start, int(ring * RATE))
-    line = [0.0] * size
-    for n in range(size):
-        x = excite[n] * velocity if n < burst else 0.0
-        back = n - period
-        if back >= 1:
-            i = int(back)
-            frac = back - i
-            now = line[i] + (line[i + 1] - line[i]) * frac
-            before = line[i - 1] + (line[i] - line[i - 1]) * frac
-            x += 0.993 * 0.5 * (now + before)
-        line[n] = x
-        out[start + n] += 0.8 * x
-
-
-def _dot(out, start, freq, velocity, ring, _noise):
-    """Dot: a short pure tone with a tick at its start, settling a hair in pitch as it lands."""
+def _pop(out, start, freq, velocity, ring, noise):
+    """Pop: a breath of soft noise, then a round low tone that falls into its note as it starts -- chpok."""
+    breath = _soft_noise(noise, 1500)
+    lead = 0.005                                          # the tone comes just after the breath
     phase = 0.0
     for n in range(min(len(out) - start, int(ring * RATE))):
         t = n / RATE
-        phase += 2 * math.pi * freq * (1 + 0.02 * math.exp(-t / 0.006)) / RATE
-        env = min(1.0, t / 0.0015) * math.exp(-t / 0.03)
-        tick = 0.35 * math.exp(-t / 0.0012) * math.sin(3 * phase)
-        out[start + n] += velocity * (env * math.sin(phase) + tick)
+        value = 1.2 * math.exp(-t / 0.004) * next(breath) if t < 0.02 else 0.0
+        if t >= lead:
+            u = t - lead
+            phase += 2 * math.pi * freq * (1 + 0.5 * math.exp(-u / 0.008)) / RATE
+            body = min(1.0, u / 0.002) * math.exp(-u / 0.04)
+            value += body * (math.sin(phase) + 0.18 * math.exp(-u / 0.01) * math.sin(2 * phase))
+        out[start + n] += velocity * value
 
 
-def _air(out, start, freq, velocity, ring, _noise):
-    """Air: a round tone that swells in and hangs, with a slow shimmer."""
+def _drop(out, start, freq, velocity, ring, _noise):
+    """Drop: a round tone that rises into its note, like a drop falling into water -- bloop."""
     phase = 0.0
     for n in range(min(len(out) - start, int(ring * RATE))):
         t = n / RATE
-        wobble = 1 + 0.0023 * math.sin(2 * math.pi * 5.2 * t) * min(1.0, t / 0.12)
-        phase += 2 * math.pi * freq * wobble / RATE
-        swell = 0.5 - 0.5 * math.cos(math.pi * min(1.0, t / 0.02))
-        env = swell * math.exp(-t / 0.3)
-        out[start + n] += velocity * env * (math.sin(phase) + 0.18 * math.sin(2 * phase) + 0.05 * math.sin(3 * phase))
+        phase += 2 * math.pi * freq * (1 - 0.3 * math.exp(-t / 0.02)) / RATE
+        body = min(1.0, t / 0.004) * math.exp(-t / 0.055)
+        out[start + n] += velocity * body * (math.sin(phase) + 0.1 * math.sin(2 * phase))
 
 
-SHAPES = {   # how long a note rings, how its notes are spaced, where the top is softened, and a repeat
-    "glass": {"voice": _bell, "ring": 0.9, "spacing": 1.0, "cutoff": 7000, "echo": None},
-    "wood": {"voice": _mallet, "ring": 0.5, "spacing": 0.9, "cutoff": 6500, "echo": None},
-    "pluck": {"voice": _string, "ring": 0.7, "spacing": 1.0, "cutoff": 5500, "echo": None},
-    "dot": {"voice": _dot, "ring": 0.16, "spacing": 0.85, "cutoff": 8000, "echo": (0.11, 0.35)},
-    "air": {"voice": _air, "ring": 0.8, "spacing": 1.15, "cutoff": 4500, "echo": None},
+def _knock(out, start, freq, velocity, ring, noise):
+    """Knock: a knuckle on a wooden table -- a short wooden tone over a soft thud."""
+    modes = [(2 * math.pi * freq * ratio / RATE, level, tau)
+             for ratio, level, tau in ((1.0, 1.0, 0.035), (2.57, 0.4, 0.014), (4.9, 0.12, 0.006))]
+    thud = _soft_noise(noise, 700)
+    for n in range(min(len(out) - start, int(ring * RATE))):
+        t = n / RATE
+        value = sum(level * math.exp(-t / tau) * math.sin(w * n) for w, level, tau in modes)
+        if t < 0.03:
+            value += 2.0 * math.exp(-t / 0.006) * next(thud)
+        out[start + n] += velocity * min(1.0, t / 0.0008) * value
+
+
+SHAPES = {   # how long a pop sounds, how far apart they fall, how much lower than written, where the top is softened
+    "pop": {"voice": _pop, "ring": 0.25, "spacing": 1.0, "shift": -9, "cutoff": 3000},
+    "drop": {"voice": _drop, "ring": 0.32, "spacing": 1.1, "shift": -5, "cutoff": 2400},
+    "knock": {"voice": _knock, "ring": 0.2, "spacing": 0.95, "shift": -9, "cutoff": 3500},
 }
 
 
 # ---------------------------------------------------------------- the sound
 
 def render(m, style):
-    """A person's notes played in a style: 16-bit mono WAV bytes, ready to play."""
+    """A person's notes in a style: 16-bit mono WAV bytes, ready to play."""
     if style not in SHAPES:
         raise ValueError(f"no such style: {style}")
     shape = SHAPES[style]
     notes = m["notes"]
     last = notes[-1]["at"] * shape["spacing"]
-    tail = shape["ring"] + (shape["echo"][0] if shape["echo"] else 0.0)
-    out = [0.0] * int(min(LENGTH_MAX, last + tail + FADE_OUT) * RATE)
+    out = [0.0] * int(min(LENGTH_MAX, last + shape["ring"] + FADE_OUT) * RATE)
     noise = Dice(f"omagram-noise:{m['seed']}:{m['variant']}")
-    strikes = [(note["at"] * shape["spacing"], note["midi"], note["velocity"]) for note in notes]
-    if shape["echo"]:
-        delay, level = shape["echo"]
-        strikes.append((last + delay, notes[-1]["midi"], notes[-1]["velocity"] * level))
-    for at, midi, velocity in strikes:
-        start = int(at * RATE)
+    for note in notes:
+        start = int(note["at"] * shape["spacing"] * RATE)
         if start < len(out):
-            shape["voice"](out, start, 440.0 * 2 ** ((midi - 69) / 12), velocity, shape["ring"], noise)
+            freq = 440.0 * 2 ** ((note["midi"] + shape["shift"] - 69) / 12)
+            shape["voice"](out, start, freq, note["velocity"], shape["ring"], noise)
     finish(out, shape["cutoff"])
     return wav_bytes(out)
 

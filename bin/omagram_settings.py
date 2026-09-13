@@ -31,7 +31,8 @@ DOWNLOADS_DEFAULT = {"photos": True, "gifs": True, "videos": 0, "files": 0}
 EMOJI_KINDS = ("emoji", "symbols", "kaomoji")   # the emoji panel's recents are "<kind>:<what it types>"
 EMOJI_RECENTS_MAX = 80
 EMOJI_TEXT_MAX = 80
-SOUND_STYLES = ("glass", "wood", "pluck", "dot", "air")   # the instrument each person's sound is played on; or "off"
+SOUND_STYLES = ("pop", "drop", "knock")   # what makes each person's sound; or "off"
+SOUND_DEFAULT = "pop"
 SOUND_VARIANTS_MAX = 500
 PERSON_ID = re.compile(r"-?[0-9]{1,19}")
 ACTION_ID = re.compile(r"[a-z][A-Za-z]{0,20}\.[a-z][A-Za-z]{0,40}")
@@ -63,7 +64,7 @@ BINDS_MAX = 4 * 1024 * 1024
 
 def empty():
     return {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1, "autoDownload": dict(DOWNLOADS_DEFAULT),
-            "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}, "sounds": {"style": "glass", "variants": {}}}
+            "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}, "sounds": {"style": SOUND_DEFAULT, "variants": {}}}
 
 
 # ---------------------------------------------------------------- key combinations for Hyprland
@@ -202,7 +203,7 @@ def check(value, strict=True):
     if not isinstance(sounds, dict):
         bad("sounds must be an object")
         sounds = {}
-    style = sounds.get("style", "glass")
+    style = sounds.get("style", SOUND_DEFAULT)
     if style not in SOUND_STYLES + ("off",):
         bad("sounds.style is " + ", ".join(SOUND_STYLES) + " or off")
     else:

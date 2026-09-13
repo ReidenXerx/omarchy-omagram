@@ -565,8 +565,9 @@ test("your profile: what can go to Telegram, its refusals in words, what each ro
 })
 
 test("a sound for each person: the instrument, round and round", () => {
-  eq([M.soundStyleText("glass"), M.soundStyleText("off"), M.soundStyleText("junk")], ["Glass, a soft bell", "Off", "Off"])
-  eq(["glass", "air", "off", "junk"].map(M.nextSoundStyle), ["wood", "off", "glass", "glass"])
+  eq([M.soundStyleText("pop"), M.soundStyleText("off"), M.soundStyleText("junk"), M.soundStyleText("glass")],
+     ["Pop, soft and round", "Off", "Off", "Off"])
+  eq(["pop", "knock", "off", "junk"].map(M.nextSoundStyle), ["drop", "off", "pop", "pop"])
 })
 
 test("emoji by name while typing, and the emoji picker's own search and data", () => {

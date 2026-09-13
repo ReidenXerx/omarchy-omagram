@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""A sound of their own for every person: the same person always the same, people apart, every style quiet and clean."""
+"""A sound of their own for every person: the same person always the same, people apart, every style low, short and clean."""
 import array
 import io
+import math
 import pathlib
 import sys
 import unittest
@@ -9,6 +10,7 @@ import wave
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "bin"))
+import omagram_settings as prefs  # noqa: E402
 import omagram_sounds as sounds  # noqa: E402
 
 
@@ -23,6 +25,24 @@ def samples_of(data):
     return shape, pcm
 
 
+def brightness(pcm):
+    """Roughly where a sound's energy sits, in Hz: its RMS frequency, from the energy of its first difference."""
+    energy = sum(v * v for v in pcm) or 1
+    change = sum((pcm[i] - pcm[i - 1]) ** 2 for i in range(1, len(pcm)))
+    return sounds.RATE / (2 * math.pi) * math.sqrt(change / energy)
+
+
+def spent_by(pcm, share=0.9):
+    """Seconds until `share` of a sound's energy has passed."""
+    total = sum(v * v for v in pcm) or 1
+    run = 0
+    for i, v in enumerate(pcm):
+        run += v * v
+        if run >= share * total:
+            return i / sounds.RATE
+    return len(pcm) / sounds.RATE
+
+
 class Melodies(unittest.TestCase):
     def test_a_person_always_sounds_the_same_and_people_sound_apart(self):
         self.assertEqual(sounds.motif(184467), sounds.motif(184467))
@@ -32,11 +52,11 @@ class Melodies(unittest.TestCase):
         tunes = {tuple(n["midi"] for n in sounds.motif(seed)["notes"]) for seed in range(1, 201)}
         self.assertGreater(len(tunes), 120, "most people differ by the notes alone, not only their timing")
 
-    def test_a_melody_is_a_few_notes_of_the_scale_and_comes_to_rest(self):
+    def test_a_melody_is_two_or_three_notes_of_the_scale_and_comes_to_rest(self):
         for seed in range(1, 400):
             m = sounds.motif(seed)
             notes = m["notes"]
-            self.assertTrue(2 <= len(notes) <= 4, seed)
+            self.assertTrue(2 <= len(notes) <= 3, seed)
             self.assertGreater(len({n["midi"] for n in notes}), 1, seed)
             self.assertEqual([n["at"] for n in notes], sorted(n["at"] for n in notes))
             for n in notes:
@@ -44,7 +64,7 @@ class Melodies(unittest.TestCase):
                 self.assertTrue(62 <= n["midi"] <= 88, seed)
                 self.assertTrue(0 <= n["degree"] < sounds.DEGREES)
             self.assertIn(notes[-1]["degree"] % 5, sounds.STABLE, seed)
-            self.assertLess(notes[-1]["at"], 0.7)
+            self.assertLess(notes[-1]["at"], 0.5)
 
     def test_note_names(self):
         self.assertEqual([sounds.note_name(m) for m in (60, 69, 61, 88)], ["C4", "A4", "C#4", "E6"])
@@ -57,16 +77,31 @@ class Rendering(unittest.TestCase):
             self.assertEqual(shape, (1, 2, sounds.RATE), style)
             peak = max(abs(v) for v in pcm) / 32767
             self.assertTrue(0.2 <= peak <= sounds.PEAK + 0.005, (style, peak))
-            self.assertTrue(0.15 <= len(pcm) / sounds.RATE <= sounds.LENGTH_MAX, (style, len(pcm)))
+            self.assertTrue(0.15 <= len(pcm) / sounds.RATE <= 0.8, (style, len(pcm)))
             self.assertLess(abs(pcm[0]) + abs(pcm[-1]), 60, style)
 
+    def test_pops_not_chimes_low_and_over_in_a_moment(self):
+        """What wears people down is a high tone that rings on: every style sits low, and a pop is spent in a tenth of
+        a second. (The bell and the plucked string these replaced sat at 800 and 1500 Hz and rang for 400 ms.)"""
+        for style in sounds.STYLES:
+            for seed in (1, 4242, 90211833, 5550173):
+                _shape, pcm = samples_of(sounds.sound(seed, style))
+                self.assertLess(brightness(pcm), 900, (style, seed))
+            highest = {"seed": "1", "variant": 0, "root": 72, "notes": [{"midi": 88, "degree": 7, "at": 0.0, "velocity": 1.0}]}
+            _shape, pcm = samples_of(sounds.render(highest, style))
+            self.assertLess(spent_by(pcm), 0.12, style)
+            self.assertLess(brightness(pcm), 1300, style)
+
     def test_the_same_person_in_the_same_style_is_the_same_file(self):
-        self.assertEqual(sounds.sound(77, "pluck"), sounds.sound(77, "pluck"))
-        self.assertNotEqual(sounds.sound(77, "pluck"), sounds.sound(78, "pluck"))
+        self.assertEqual(sounds.sound(77, "pop"), sounds.sound(77, "pop"))
+        self.assertNotEqual(sounds.sound(77, "pop"), sounds.sound(78, "pop"))
 
     def test_an_unknown_style_is_refused(self):
         with self.assertRaises(ValueError):
-            sounds.sound(1, "trumpet")
+            sounds.sound(1, "glass")
+
+    def test_the_settings_offer_exactly_these_styles(self):
+        self.assertEqual((prefs.SOUND_STYLES, prefs.SOUND_DEFAULT), (tuple(sounds.STYLES), sounds.DEFAULT_STYLE))
 
 
 if __name__ == "__main__":
