@@ -236,12 +236,16 @@ FocusScope {
     }
 
     // The proxy in use, and the way to stop using it when it does not get through.
-    Row {
+    Flow {
       visible: !!view.proxy && !view.proxyInstead
+      width: parent.width
       spacing: Style.space(10)
 
       Text {
-        anchors.verticalCenter: parent.verticalCenter
+        width: Math.min(implicitWidth, parent.width)
+        height: Math.max(implicitHeight, stopProxyButton.height)
+        verticalAlignment: Text.AlignVCenter
+        wrapMode: Text.WordWrap
         text: view.proxy ? "Through the proxy " + view.proxy.server + ":" + view.proxy.port
                            + (Model.connectionText(app.connection) ? "  ·  " + Model.connectionText(app.connection) : "") : ""
         textFormat: Text.PlainText
@@ -250,6 +254,7 @@ FocusScope {
         font.pixelSize: Style.font.bodySmall
       }
       Button {
+        id: stopProxyButton
         app: view.app
         text: "Stop using it"
         onClicked: view.stopProxy()
