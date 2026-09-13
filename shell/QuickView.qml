@@ -82,7 +82,10 @@ Item {
   property var stickers: []
   property int stickerCursor: 0
   property var hoverSticker: null
-  property var asked: ({})   // sticker pictures already asked for, by file id
+  property var asked: ({})   // pictures already asked for, by file id
+  readonly property int rememberMs: 60 * 60 * 1000   // how long a closed quick view keeps its chat
+  // Round corners and circles take a shader, which the software renderer lacks: there pictures stay square.
+  readonly property bool rounded: GraphicsInfo.api !== GraphicsInfo.Software
   property string toolHint: ""   // what the tool under the pointer is, and its key
   // The keys that work where your typing goes.
   readonly property string keysHint: quick.replyChatId
@@ -107,7 +110,8 @@ Item {
 
   // ---------------------------------------------------------------- opening and closing
 
-  // A fresh start each time it shows; `chatId` answers that chat straight away.
+  // Each time it shows: `chatId` answers that chat straight away. Without one it opens on the chat it was
+  // closed in, with the words not yet sent, when that was within the hour; otherwise on finding a chat.
   function reset(chatId) {
     quick.nowMs = Date.now()
     quick.status = ""
@@ -120,14 +124,29 @@ Item {
     search.text = ""
     composer.text = ""
     var id = Number(chatId)
-    if (Number.isSafeInteger(id) && id !== 0) quick.reply(id)
-    else Qt.callLater(function () { search.forceActiveFocus() })
+    var s = quick.service
+    var last = s && s.quickChatId && Date.now() - s.quickClosedAt < quick.rememberMs ? s.quickChatId : 0
+    if (!Number.isSafeInteger(id) || id === 0) id = last
+    if (id) {
+      quick.reply(id)
+      if (id === last && s.quickDraft) {
+        composer.text = s.quickDraft
+        composer.cursorPosition = composer.text.length
+      }
+    } else {
+      Qt.callLater(function () { search.forceActiveFocus() })
+    }
     historyDelay.restart()   // the chat shown may be the one from last time, so nothing else would ask for it
   }
 
-  // It is hidden: a recording half made is thrown away. What is playing goes on.
+  // It is hidden: a recording half made is thrown away, what is playing goes on, and where it was is kept.
   function leave() {
     if (quick.recordingHere) quick.stopRecording(false)
+    if (quick.service) {
+      quick.service.quickChatId = quick.replyChatId
+      quick.service.quickDraft = quick.replyChatId ? composer.text : ""
+      quick.service.quickClosedAt = Date.now()
+    }
     quick.replyChatId = 0
     quick.sending = false
     quick.stickersOpen = false
@@ -294,20 +313,45 @@ Item {
   function stickerPicture(media) {
     if (!media) return null
     if (media.format === "webp") return media.file
+    return quick.stillThumb(media)
+  }
+
+  // The still picture of a photo, video, GIF or round video: a photo's preview size (the whole photo, from an
+  // older service), otherwise its thumbnail when that is a picture.
+  function stillOf(kind, media) {
+    if (!media) return null
+    if (kind === "photo") return media.preview ? media.preview.file : media.file
+    return quick.stillThumb(media)
+  }
+
+  function stillThumb(media) {
     return media.thumb && ["webp", "jpeg", "png"].indexOf(media.thumb.format) >= 0 ? media.thumb.file : null
   }
 
+  function urlOf(file) {
+    var known = quick.fileOf(file)
+    return known && known.path ? Model.fileUrl(known.path) : ""
+  }
+
   function stickerSource(media) {
-    var file = quick.fileOf(quick.stickerPicture(media))
-    return file && file.path ? Model.fileUrl(file.path) : ""
+    return quick.urlOf(quick.stickerPicture(media))
   }
 
   // Asked for once each time the view opens, as rows and cells appear, when not here yet.
-  function fetchSticker(media) {
-    var known = quick.fileOf(quick.stickerPicture(media))
+  function fetch(file) {
+    var known = quick.fileOf(file)
     if (!quick.service || !known || known.path || known.active || quick.asked[known.id]) return
     quick.asked[known.id] = true
     quick.service.download(known.id)
+  }
+
+  function fetchSticker(media) {
+    quick.fetch(quick.stickerPicture(media))
+  }
+
+  function fetchPicture(kind, media) {
+    if (kind === "sticker") quick.fetch(quick.stickerPicture(media))
+    else if (["photo", "video", "gif", "videoNote"].indexOf(kind) >= 0) quick.fetch(quick.stillOf(kind, media))
   }
 
   // ---------------------------------------------------------------- history
@@ -644,14 +688,14 @@ Item {
             onFoundChanged: if (line.found) line.kept = line.found
             Component.onCompleted: {
               line.kept = line.found
-              if (line.kind === "sticker") quick.fetchSticker(line.media)
+              quick.fetchPicture(line.kind, line.media)
             }
             readonly property var message: line.found || line.kept || Model.NO_MESSAGE
             readonly property var content: line.message.content || ({})
             readonly property string kind: line.content.kind || ""
             readonly property var media: line.content.media || null
-            readonly property bool drawn: ["sticker", "voice", "videoNote", "photo"].indexOf(line.kind) >= 0
-            onMediaChanged: if (line.kind === "sticker") quick.fetchSticker(line.media)
+            readonly property bool drawn: ["sticker", "voice", "videoNote", "photo", "video", "gif"].indexOf(line.kind) >= 0
+            onMediaChanged: quick.fetchPicture(line.kind, line.media)
             width: ListView.view.width
             spacing: Style.space(3)
 
@@ -713,13 +757,82 @@ Item {
               }
             }
 
-            // A photo: its tiny preview, enough to tell what it is.
-            Image {
-              visible: line.kind === "photo" && !!line.media && !!line.media.mini
-              width: visible ? Math.min(parent.width, Style.space(96) * (line.media.width || 1) / Math.max(1, line.media.height || 1)) : 0
-              height: visible ? Style.space(96) : 0
-              fillMode: Image.PreserveAspectCrop
-              source: visible ? Model.miniUrl(line.media.mini) : ""
+            // A photo, a video or a GIF: small and sharp, its tiny blurred copy standing in until the picture is here.
+            Item {
+              id: shot
+              readonly property bool wanted: ["photo", "video", "gif"].indexOf(line.kind) >= 0 && !!line.media
+              readonly property var box: shot.wanted
+                ? Model.fitSize(line.media.width || 320, line.media.height || 240, Math.min(line.width, Style.space(220)), Style.space(128))
+                : ({ width: 0, height: 0 })
+              visible: shot.wanted
+              width: shot.box.width
+              height: shot.box.height
+
+              Item {
+                id: shotFace
+                anchors.fill: parent
+                visible: !quick.rounded
+
+                Image {
+                  anchors.fill: parent
+                  visible: shotSharp.status !== Image.Ready
+                  fillMode: Image.PreserveAspectCrop
+                  source: shot.wanted ? Model.miniUrl(line.media.mini) : ""
+                }
+                Image {
+                  id: shotSharp
+                  anchors.fill: parent
+                  asynchronous: true
+                  fillMode: Image.PreserveAspectCrop
+                  source: shot.wanted ? quick.urlOf(quick.stillOf(line.kind, line.media)) : ""
+                  sourceSize.width: Math.round(shot.width * 2)
+                  sourceSize.height: Math.round(shot.height * 2)
+                }
+              }
+              Rectangle {
+                id: shotCorners
+                anchors.fill: parent
+                radius: Style.cornerRadius
+                visible: false
+                layer.enabled: true
+              }
+              MultiEffect {
+                anchors.fill: parent
+                visible: quick.rounded && shot.wanted
+                source: shotFace
+                maskEnabled: true
+                maskSource: shotCorners
+                maskThresholdMin: 0.5
+                maskSpreadAtMin: 1.0
+              }
+
+              // md-play U+F040A and how long a video is; a GIF says so.
+              Rectangle {
+                visible: line.kind === "video" || line.kind === "gif"
+                anchors.left: parent.left
+                anchors.bottom: parent.bottom
+                anchors.margins: Style.space(6)
+                height: Style.space(18)
+                width: shotBadge.implicitWidth + Style.space(12)
+                radius: height / 2
+                color: Qt.rgba(0, 0, 0, 0.6)
+
+                Text {
+                  id: shotBadge
+                  anchors.centerIn: parent
+                  text: line.kind === "gif" ? "GIF" : String.fromCodePoint(0xF040A) + " " + quick.duration(line.media ? line.media.duration : 0)
+                  textFormat: Text.PlainText
+                  color: "white"
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: quick.openInWindowRequested(line.message.chatId)
+              }
             }
 
             // A voice or round video message: listen to it here.
@@ -745,9 +858,10 @@ Item {
                   Image {
                     id: noteFace
                     anchors.fill: parent
-                    visible: false
+                    visible: !quick.rounded && line.kind === "videoNote"
                     fillMode: Image.PreserveAspectCrop
-                    source: line.kind === "videoNote" && line.media && line.media.mini ? Model.miniUrl(line.media.mini) : ""
+                    source: line.kind !== "videoNote" || !line.media ? ""
+                          : (quick.urlOf(quick.stillOf("videoNote", line.media)) || Model.miniUrl(line.media.mini))
                   }
                   Rectangle {
                     id: noteMask
@@ -758,7 +872,7 @@ Item {
                   }
                   MultiEffect {
                     anchors.fill: parent
-                    visible: line.kind === "videoNote" && noteFace.status === Image.Ready
+                    visible: quick.rounded && line.kind === "videoNote" && noteFace.status === Image.Ready
                     source: noteFace
                     maskEnabled: true
                     maskSource: noteMask
@@ -902,7 +1016,7 @@ Item {
             Image {
               id: cameraFace
               anchors.fill: parent
-              visible: false
+              visible: !quick.rounded
               cache: false
               asynchronous: false
               retainWhileLoading: true
@@ -919,6 +1033,7 @@ Item {
             }
             MultiEffect {
               anchors.fill: parent
+              visible: quick.rounded
               source: cameraFace
               maskEnabled: true
               maskSource: cameraMask

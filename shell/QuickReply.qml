@@ -46,6 +46,7 @@ Item {
   }
 
   function close() {
+    if (!overlay.opened) return   // the shell can ask a closed overlay to close: nothing to put away then
     overlay.opened = false
     view.leave()
   }

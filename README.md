@@ -1,3 +1,5 @@
+<img src="assets/omagram.svg" alt="" width="96" align="right">
+
 # Omagram
 
 **An unofficial Telegram client for [Omarchy](https://omarchy.org).** Omagram is not made,
@@ -77,17 +79,19 @@ key, and desktop notifications you can answer without leaving what you are doing
   them anywhere, with the chat's photo beside them, or a thumbnail of a photo, sticker or video
   just sent. **Open** opens the chat; **Reply** opens the quick view on it; **Mark as
   read**, **Mute for an hour** and **👍** (a reaction to the message) work without opening anything.
-  Each person has a quiet sound of their own, a few notes picked from who they are, so you can tell
-  who wrote without looking; Settings picks the instrument (or turns it off) and a person's info can
-  play theirs or give them another. Not while Do Not Disturb is on.
+  Each person has a quiet sound of their own, two or three soft low pops picked from who they are,
+  so you can tell who wrote without looking and a busy day never rings in your ears; Settings picks
+  what makes the pop (Pop, Drop or Knock, or none) and a person's info can play theirs or give them
+  another. Not while Do Not Disturb is on.
   Telegram's own mute settings and Omarchy's Do Not Disturb apply.
-- **In the bar** — a message icon with a dot while unmuted chats have unread messages. Left
+- **In the bar** — Omagram's mark, with a dot while unmuted chats have unread messages. Left
   click opens the quick view under it; right click opens the window.
 - **Quick view** — in the bar's panel, or as an overlay on a key: find a chat by typing, read its
   latest messages and answer without leaving what you are doing — in words, with one of your
   recent stickers, or with a voice or round video message recorded on the spot (`Enter` sends it,
-  `Esc` throws it away). Voice and round video messages play right there, and a sticker someone
-  sent shows bigger under the pointer.
+  `Esc` throws it away). Voice and round video messages play right there, a sticker someone sent
+  shows bigger under the pointer, and photos, videos and GIFs show as small sharp pictures. Close
+  it in a chat and for the next hour it opens there again, with anything you had not sent.
 
 Calls cannot be taken in Omagram: TDLib carries a call's signalling but no voice engine. An
 incoming call is shown so you can decline it or answer in another Telegram app.

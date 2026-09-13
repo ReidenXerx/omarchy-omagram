@@ -32,6 +32,11 @@ Item {
   property var playing: ({ fileId: 0 })
   property var recording: ({ state: "idle" })
   property var files: ({})
+  // Where the quick view was when it closed, in the panel or the overlay alike: the chat and the words not yet
+  // sent. It opens there again within the hour, so a conversation carried on through it picks up where it was.
+  property real quickChatId: 0
+  property string quickDraft: ""
+  property real quickClosedAt: 0
 
   function noteFile(file) {
     if (!file || !file.id) return

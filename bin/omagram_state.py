@@ -649,6 +649,7 @@ MINI_MAX = 16 * 1024          # base64 length of a minithumbnail (a tiny JPEG)
 WAVEFORM_MAX = 256            # base64 length of a voice waveform
 WAVEFORM_BARS = 48
 PHOTO_SIDE_MAX = 1280
+PHOTO_PREVIEW_SIDE = 320      # a photo's small preview: the smallest size with a side at least this long
 DURATION_MAX = 7 * 24 * 3600
 STICKER_FORMATS = {"stickerFormatWebp": "webp", "stickerFormatTgs": "tgs", "stickerFormatWebm": "webm"}
 THUMBNAIL_FORMATS = {"thumbnailFormatJpeg": "jpeg", "thumbnailFormatGif": "gif", "thumbnailFormatMpeg4": "mp4",
@@ -734,17 +735,32 @@ def _duration(obj):
     return max(0, min(_int(obj.get("duration")), DURATION_MAX))
 
 
-def best_photo_size(sizes):
+def _photo_sizes(sizes):
     usable = []
     for raw in _list(sizes, 16):
         size = _obj(raw, "photoSize")
         w, h = _dims(size)
         if size and w and h and _obj(size.get("photo"), "file"):
             usable.append((w, h, size))
+    return usable
+
+
+def best_photo_size(sizes):
+    usable = _photo_sizes(sizes)
     if not usable:
         return None
     fitting = [u for u in usable if max(u[0], u[1]) <= PHOTO_SIDE_MAX]
     return max(fitting or usable, key=lambda u: u[0] * u[1] if fitting else -(u[0] * u[1]))
+
+
+def preview_photo_size(sizes):
+    """The smallest size with a side of PHOTO_PREVIEW_SIDE or more, else the largest: a sharp small picture
+    for the quick view without fetching the whole photo."""
+    usable = _photo_sizes(sizes)
+    big = [u for u in usable if max(u[0], u[1]) >= PHOTO_PREVIEW_SIDE]
+    if big:
+        return min(big, key=lambda u: u[0] * u[1])
+    return max(usable, key=lambda u: u[0] * u[1]) if usable else None
 
 
 def media_for(kind, c, files_root):
@@ -754,7 +770,9 @@ def media_for(kind, c, files_root):
         if best is None:
             return None
         w, h, size = best
+        pw, ph, small = preview_photo_size(photo.get("sizes"))
         return {"file": file_view(size.get("photo"), files_root), "width": w, "height": h,
+                "preview": {"file": file_view(small.get("photo"), files_root), "width": pw, "height": ph},
                 "mini": minithumbnail(photo.get("minithumbnail"))}
     if kind == "sticker":
         s = _obj(c.get("sticker"), "sticker")

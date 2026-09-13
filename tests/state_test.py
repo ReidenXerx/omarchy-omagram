@@ -471,6 +471,9 @@ class Media(unittest.TestCase):
                            {"@type": "minithumbnail", "width": 40, "height": 40, "data": "AAAA"}},
                            "caption": {"text": "hi"}}, ROOT_FILES)
         self.assertEqual((c["media"]["width"], c["media"]["file"]["id"], c["media"]["mini"]["data"]), (1280, 4, "AAAA"))
+        self.assertEqual((c["media"]["preview"]["file"]["id"], c["media"]["preview"]["width"]), (2, 320), "a small sharp picture too")
+        small = [{"@type": "photoSize", "width": w, "height": w * 2 // 3, "photo": tdfile(w)} for w in (90, 160)]
+        self.assertEqual(model.preview_photo_size(small)[0], 160, "or the largest there is")
         huge = [{"@type": "photoSize", "width": w, "height": w, "photo": tdfile(w)} for w in (4000, 2560)]
         self.assertEqual(model.best_photo_size(huge)[0], 2560)
         self.assertIsNone(model.best_photo_size([{"@type": "photoSize", "width": 0, "height": 5, "photo": tdfile(1)}, "x"]))
