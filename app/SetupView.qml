@@ -40,12 +40,22 @@ FocusScope {
       y: Math.max(Style.space(40), (view.height - implicitHeight) / 2)
       spacing: Style.spacing.md
 
-      Text {
-        text: "Omagram"
-        color: app.foreground
-        font.family: app.fontFamily
-        font.pixelSize: Style.font.displayLarge
-        font.bold: true
+      Row {
+        spacing: Style.space(14)
+
+        RingMark {
+          anchors.verticalCenter: parent.verticalCenter
+          size: Math.round(Style.font.displayLarge * 1.35)
+          color: app.foreground
+        }
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Omagram"
+          color: app.foreground
+          font.family: app.fontFamily
+          font.pixelSize: Style.font.displayLarge
+          font.bold: true
+        }
       }
 
       Text {

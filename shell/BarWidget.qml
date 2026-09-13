@@ -1,8 +1,9 @@
 import QtQuick
 import qs.Commons
 import qs.Ui
+import "../app" as App
 
-// Omagram in the bar: a message glyph with a dot while unmuted chats have unread messages.
+// Omagram in the bar: its mark, with a dot while unmuted chats have unread messages.
 // Left click opens the quick panel (recent chats, reply without leaving what you are doing),
 // right click opens the window.
 BarWidget {
@@ -67,10 +68,18 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    // md-message_text_outline (U+F036A), checked against the font's cmap: a neutral message
-    // glyph, not Telegram's paper plane, which the API terms keep for Telegram itself.
-    text: "󰍪"
+    // Omagram's own mark, the Ring (app/RingMark.qml), in the bar's text colour like every status glyph --
+    // not Telegram's paper plane, which the API terms keep for Telegram itself.
     foreground: root.bar ? root.bar.barForeground : Color.foreground
+    iconComponent: Component {
+      Item {
+        App.RingMark {
+          anchors.centerIn: parent
+          size: Style.space(16)   // measured: the same ink as the message glyph it replaced, 13 px across in a 27 px slot
+          color: button.foreground
+        }
+      }
+    }
     tooltipText: !root.ready ? "Omagram"
                : (root.unread > 0 ? "Omagram: " + root.unread + " unread" : "Omagram: no unread messages")
     onPressed: function (b) {
