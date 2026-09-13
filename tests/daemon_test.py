@@ -310,6 +310,53 @@ class Service(Harness):
         self.td_event(auth_update("authorizationStateWaitOtherDeviceConfirmation", link="https://example.com/not-a-login"))
         self.assertEqual(self.read(conn, lambda v: v.get("event") == "auth")["auth"].get("image", ""), "")
 
+    def test_proxies_work_before_sign_in_and_keep_their_secrets(self):
+        self.conn = self.connect()
+        secret = "dd0123456789abcdef0123456789abcdef"
+        mtproto = {"@type": "proxy", "server": "proxy.example.com", "port": 443, "type": {"@type": "proxyTypeMtproto", "secret": secret}}
+        q, r = self.call(40, "proxy.add", "addProxy", {"@type": "addedProxy", "id": 1, "is_enabled": True, "last_used_date": 0, "proxy": mtproto},
+                         type="mtproto", server="proxy.example.com", port=443, secret=secret)
+        self.assertEqual((q["proxy"], q["enable"]), (mtproto, True))
+        self.assertEqual(r["result"]["proxy"], {"id": 1, "server": "proxy.example.com", "port": 443, "type": "mtproto", "username": "",
+                                                "enabled": True, "lastUsed": 0})
+        self.assertNotIn(secret, json.dumps(r))
+        q, _ = self.call(41, "proxy.add", "addProxy", {"@type": "addedProxy", "id": 2, "proxy": mtproto},
+                         type="socks5", server="10.0.0.1", port=1080, username="ann", password="pw")
+        self.assertEqual(q["proxy"]["type"], {"@type": "proxyTypeSocks5", "username": "ann", "password": "pw"})
+        for rid, bad in enumerate(({"type": "socks5", "server": "bad host", "port": 1080}, {"type": "socks5", "server": "a", "port": 0},
+                                   {"type": "mtproto", "server": "a", "port": 443, "secret": "short"}, {"type": "vpn", "server": "a", "port": 1}),
+                                  start=42):
+            self.assertFalse(self.request(self.conn, rid, "proxy.add", **bad)["ok"], bad)
+        listed = {"@type": "addedProxies", "proxies": [{"@type": "addedProxy", "id": 1, "is_enabled": True, "proxy": mtproto}]}
+        _, r = self.call(50, "proxies.list", "getProxies", listed)
+        self.assertEqual(([p["id"] for p in r["result"]["proxies"]], r["result"]["connection"]), ([1], ""))
+        self.assertNotIn(secret, json.dumps(r))
+        q, _ = self.call(51, "proxy.enable", "enableProxy", {"@type": "ok"}, id=1)
+        self.assertEqual(q["proxy_id"], 1)
+        self.call(52, "proxy.disable", "disableProxy", {"@type": "ok"})
+        q, _ = self.call(53, "proxy.remove", "removeProxy", {"@type": "ok"}, id=1)
+        self.assertEqual(q["proxy_id"], 1)
+        # A ping looks the proxy up first: the window never holds its secret.
+        lists = self.sent_count("getProxies")
+        self.send(self.conn, {"id": 54, "cmd": "proxy.ping", "args": {"id": 1}})
+        self.answer(self.next_query("getProxies", lists), listed)
+        ping = self.next_query("pingProxy", 0)
+        self.assertEqual(ping["proxy"], mtproto)
+        self.answer(ping, {"@type": "seconds", "seconds": 0.25})
+        self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 54)["result"], {"seconds": 0.25})
+        # A proxy link: TDLib reads it, and the proxy it describes is added and used.
+        reads, adds = self.sent_count("getInternalLinkType"), self.sent_count("addProxy")
+        self.send(self.conn, {"id": 55, "cmd": "proxy.addLink", "args": {"link": "https://t.me/proxy?server=proxy.example.com&port=443&secret=" + secret}})
+        self.answer(self.next_query("getInternalLinkType", reads), {"@type": "internalLinkTypeProxy", "proxy": mtproto})
+        added = self.next_query("addProxy", adds)
+        self.answer(added, {"@type": "addedProxy", "id": 3, "is_enabled": True, "proxy": mtproto})
+        self.assertEqual((added["proxy"], added["enable"], self.read(self.conn, lambda v: v.get("id") == 55)["result"]["proxy"]["id"]),
+                         (mtproto, True, 3))
+        reads = self.sent_count("getInternalLinkType")
+        self.send(self.conn, {"id": 56, "cmd": "proxy.addLink", "args": {"link": "https://t.me/durov"}})
+        self.answer(self.next_query("getInternalLinkType", reads), {"@type": "internalLinkTypePublicChat", "chat_username": "durov"})
+        self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 56)["error"], "That is not a proxy link")
+
     def test_account_commands_need_a_signed_in_session(self):
         conn = self.connect()
         for rid, cmd in enumerate(("chats.load", "chat.history", "message.send", "auth.logout"), start=20):
@@ -919,6 +966,15 @@ class MessageActions(Harness):
         self.answer(q, {"@type": "chatInviteLinkInfo", "title": "Club", "member_count": 12, "chat_id": 0})
         self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 62)["result"],
                          {"kind": "invite", "link": "https://t.me/+abc", "title": "Club", "members": 12, "chatId": 0})
+        # a proxy link: the window asks before it is used
+        before = self.sent_count("getInternalLinkType")
+        link = "https://t.me/proxy?server=p.example.com&port=443&secret=dd00aa"
+        self.send(self.conn, {"id": 169, "cmd": "link.open", "args": {"url": link}})
+        q = self.next_query("getInternalLinkType", before)
+        self.answer(q, {"@type": "internalLinkTypeProxy", "proxy": {"@type": "proxy", "server": "p.example.com", "port": 443,
+                                                                    "type": {"@type": "proxyTypeMtproto", "secret": "dd00aa"}}})
+        self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 169)["result"],
+                         {"kind": "proxy", "link": link, "server": "p.example.com", "port": 443, "type": "mtproto"})
         # TDLib does not recognise it: it is a web page after all
         before = self.sent_count("getInternalLinkType")
         self.send(self.conn, {"id": 63, "cmd": "link.open", "args": {"url": "https://t.me/"}})

@@ -632,6 +632,14 @@ FocusScope {
                             else root.flash(joined.error || "Could not join")
                           })
                         } }
+      } else if (r.kind === "proxy") {
+        root.prompt = { text: "Connect to Telegram through the " + (Model.PROXY_TYPE_NAMES[r.type] || "") + " proxy " + r.server + ":" + r.port + "?",
+                        action: "Use it",
+                        run: function () {
+                          client.request("proxy.addLink", { link: r.link }, function (added) {
+                            root.flash(added.ok ? "Connecting through " + r.server + ":" + r.port : (added.error || "Could not add the proxy"))
+                          })
+                        } }
       }
     })
   }

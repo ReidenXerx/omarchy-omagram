@@ -249,6 +249,10 @@ POLL_EXPLANATION_MAX = 200
 LINK_PREVIEWS = ("below", "above", "none")   # where a message's link preview goes
 DAY = 86400
 AUTO_DELETE_MAX = 365 * DAY   # messages disappear after whole days up to a year; in a secret chat, any seconds
+PROXY_SERVER = re.compile(r"[-A-Za-z0-9.:]{1,253}")   # a host name or an IP address; the port is its own field
+PROXY_SECRET = re.compile(r"[-A-Za-z0-9_=]{16,512}")  # hexadecimal, or base64url as proxy links carry it
+PROXY_LOGIN_MAX = 255
+PROXIES_MAX = 100
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
 MEDIA_FILTERS = {"photos": "searchMessagesFilterPhotoAndVideo", "files": "searchMessagesFilterDocument",
@@ -1043,7 +1047,8 @@ class Daemon:
         answer = {"version": VERSION, "auth": self.auth, "meId": self.state.me_id,
                   "chats": self.state.chat_list("main", 100), "open": target,
                   "folders": self.state.folders, "mainPosition": self.state.main_position,
-                  "settings": self.prefs, "globalStatus": self.global_status, "calls": list(self.state.calls.values())}
+                  "settings": self.prefs, "globalStatus": self.global_status, "calls": list(self.state.calls.values()),
+                  "connection": self.state.connection}
         if client.window:
             answer["allChats"] = self.state.all_chats()   # the window's tabs need every list
             answer["stories"] = self.state.story_list()
@@ -1346,6 +1351,11 @@ class Daemon:
                 self.td_send({"@type": "getMessageLinkInfo", "url": model._str(event.get("url"), model.URL_MAX)}, client, rid,
                              lambda info: {"kind": "chat", "chatId": model._int(info.get("chat_id")),
                                            "messageId": model._int(model._obj(info.get("message"), "message").get("id"))})
+            elif t == "internalLinkTypeProxy":   # asked about first; its secret stays here
+                proxy = model._obj(event.get("proxy"), "proxy")
+                self.respond(client, rid, {"kind": "proxy", "link": url, "server": model._str(proxy.get("server"), model.PROXY_SERVER_MAX),
+                                           "port": max(0, model._int(proxy.get("port"))),
+                                           "type": model.PROXY_TYPES.get(model._obj(proxy.get("type")).get("@type"), "")})
             elif t == "internalLinkTypeChatInvite":
                 link = model._str(event.get("invite_link"), model.URL_MAX)
                 self.td_send({"@type": "checkChatInviteLink", "invite_link": link}, client, rid,
@@ -1862,6 +1872,84 @@ class Daemon:
         self.td_send({"@type": "setDefaultMessageAutoDeleteTime",
                       "message_auto_delete_time": {"@type": "messageAutoDeleteTime", "time": seconds}},
                      client, rid, lambda _ok: {"seconds": seconds})
+
+    # ---------------------------------------------------------------- proxies (before sign-in too: where
+    # Telegram is blocked, a proxy is how signing in gets through)
+
+    def cmd_proxies_list(self, client, rid, args):
+        """The proxies you added, the one in use marked, and how TDLib is reaching Telegram right now."""
+        def listed(event):
+            views = (model.proxy_view(p) for p in model._list(event.get("proxies"), PROXIES_MAX))
+            return {"proxies": [v for v in views if v], "connection": self.state.connection}
+        self.td_send({"@type": "getProxies"}, client, rid, listed)
+
+    def proxy_arg(self, args):
+        """A proxy as typed: server, port, type (socks5, http or mtproto), and its login or secret."""
+        server = arg_str(args, "server", model.PROXY_SERVER_MAX)
+        if not PROXY_SERVER.fullmatch(server):
+            raise BadRequest("server is a host name or an IP address")
+        kind = args.get("type")
+        if kind == "mtproto":
+            secret = arg_str(args, "secret", 512)
+            if not PROXY_SECRET.fullmatch(secret):
+                raise BadRequest("an MTProto proxy's secret is hexadecimal or base64url")
+            proxy_type = {"@type": "proxyTypeMtproto", "secret": secret}
+        elif kind in ("socks5", "http"):
+            username = arg_str(args, "username", PROXY_LOGIN_MAX, 0) if "username" in args else ""
+            password = arg_str(args, "password", PROXY_LOGIN_MAX, 0) if "password" in args else ""
+            proxy_type = {"@type": "proxyTypeSocks5", "username": username, "password": password}
+            if kind == "http":
+                http_only = args.get("httpOnly", False)
+                if not isinstance(http_only, bool):
+                    raise BadRequest("httpOnly is true or false")
+                proxy_type = {"@type": "proxyTypeHttp", "username": username, "password": password, "http_only": http_only}
+        else:
+            raise BadRequest("type is socks5, http or mtproto")
+        return {"@type": "proxy", "server": server, "port": arg_int(args, "port", 1, 65535), "type": proxy_type}
+
+    def cmd_proxy_add(self, client, rid, args):
+        """Adds a proxy, and uses it from now on."""
+        self.td_send({"@type": "addProxy", "proxy": self.proxy_arg(args), "enable": True, "comment": ""}, client, rid,
+                     lambda added: {"proxy": model.proxy_view(added)})
+
+    def cmd_proxy_add_link(self, client, rid, args):
+        """Adds the proxy a t.me/proxy or t.me/socks link describes, and uses it."""
+        link = arg_str(args, "link", model.URL_MAX)
+
+        def refused(_error=None):
+            self.respond_error(client, rid, "That is not a proxy link")
+
+        def classified(event):
+            if event.get("@type") != "internalLinkTypeProxy":
+                refused()
+                return
+            self.td_send({"@type": "addProxy", "proxy": model._obj(event.get("proxy"), "proxy"), "enable": True, "comment": ""},
+                         client, rid, lambda added: {"proxy": model.proxy_view(added)})
+        self.td_send({"@type": "getInternalLinkType", "link": link}, transform=classified, failed=refused)
+
+    def cmd_proxy_enable(self, client, rid, args):
+        self.td_send({"@type": "enableProxy", "proxy_id": arg_int(args, "id", 1, INT32_MAX)}, client, rid)
+
+    def cmd_proxy_disable(self, client, rid, args):
+        self.td_send({"@type": "disableProxy"}, client, rid)
+
+    def cmd_proxy_remove(self, client, rid, args):
+        self.td_send({"@type": "removeProxy", "proxy_id": arg_int(args, "id", 1, INT32_MAX)}, client, rid)
+
+    def cmd_proxy_ping(self, client, rid, args):
+        """How long a request to Telegram takes through a proxy you added, in seconds."""
+        proxy_id = arg_int(args, "id", 1, INT32_MAX)
+
+        def listed(event):
+            for raw in model._list(event.get("proxies"), PROXIES_MAX):
+                added = model._obj(raw, "addedProxy")
+                if model._int(added.get("id")) == proxy_id:
+                    self.td_send({"@type": "pingProxy", "proxy": added.get("proxy")}, client, rid,
+                                 lambda answer: {"seconds": max(0.0, float(answer.get("seconds") or 0))})
+                    return
+            self.respond_error(client, rid, "There is no such proxy")
+        self.td_send({"@type": "getProxies"}, transform=listed,
+                     failed=lambda error: self.respond_error(client, rid, model._str(error.get("message"), 200)))
 
     # ---------------------------------------------------------------- notifications by type of chat
 
@@ -2915,6 +3003,13 @@ COMMANDS = {
     "chat.setAutoDelete": ("cmd_chat_set_auto_delete", True),
     "autoDelete.default": ("cmd_auto_delete_default", True),
     "autoDelete.setDefault": ("cmd_auto_delete_set_default", True),
+    "proxies.list": ("cmd_proxies_list", False),
+    "proxy.add": ("cmd_proxy_add", False),
+    "proxy.addLink": ("cmd_proxy_add_link", False),
+    "proxy.enable": ("cmd_proxy_enable", False),
+    "proxy.disable": ("cmd_proxy_disable", False),
+    "proxy.remove": ("cmd_proxy_remove", False),
+    "proxy.ping": ("cmd_proxy_ping", False),
     "message.sendPoll": ("cmd_message_send_poll", True),
     "message.sendContact": ("cmd_message_send_contact", True),
     "message.sendLocation": ("cmd_message_send_location", True),

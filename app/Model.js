@@ -1333,6 +1333,68 @@ function profileChat(profile) {
            title: [profile.firstName, profile.lastName].filter(function (part) { return !!part }).join(" ") }
 }
 
+// ---------------------------------------------------------------- proxies
+
+var PROXY_TYPE_NAMES = { socks5: "SOCKS5", http: "HTTP", mtproto: "MTProto" }
+
+// "proxy.example.com:1080", "1.2.3.4:443" or "[2001:db8::1]:443" as { server, port }; null when it is not that.
+function parseProxyAddress(text) {
+  var t = String(text || "").trim()
+  var colon = t.lastIndexOf(":")
+  if (colon <= 0) return null
+  var server = t.slice(0, colon)
+  var port = t.slice(colon + 1)
+  if (server.charAt(0) === "[" && server.charAt(server.length - 1) === "]") server = server.slice(1, -1)
+  if (!/^[-A-Za-z0-9.:]{1,253}$/.test(server) || !/^[0-9]{1,5}$/.test(port)) return null
+  var n = Number(port)
+  return n >= 1 && n <= 65535 ? { server: server, port: n } : null
+}
+
+// t.me/proxy?…, t.me/socks?… (telegram.me and telegram.dog too), tg://proxy?… and tg://socks?…
+function isProxyLink(text) {
+  return /^((https?:[/][/])?(www[.])?(t[.]me|telegram[.]me|telegram[.]dog)[/]|tg:[/][/])(proxy|socks)[?]/i.test(String(text || "").trim())
+}
+
+function proxyLinkUrl(text) {
+  var t = String(text || "").trim()
+  return /^(https?|tg):/i.test(t) ? t : "https://" + t
+}
+
+// What adding a proxy asks, one field at a time.
+function proxySteps(kind) {
+  var address = { key: "address", label: "The server and its port", placeholder: "proxy.example.com:1080" }
+  if (kind === "mtproto") return [address, { key: "secret", label: "The secret", secret: true, placeholder: "as the proxy's owner gave it" }]
+  if (kind === "socks5" || kind === "http")
+    return [address, { key: "username", label: "Username (you can leave this empty)" },
+            { key: "password", label: "Password (you can leave this empty)", secret: true }]
+  if (kind === "link") return [{ key: "link", label: "The proxy link", placeholder: "https://t.me/proxy?server=…" }]
+  return []
+}
+
+function proxyStepProblem(step, text) {
+  var t = String(text === undefined || text === null ? "" : text)
+  if (!isObject(step)) return ""
+  if (step.key === "address") return parseProxyAddress(t) ? "" : "Type the server and its port, like proxy.example.com:1080"
+  if (step.key === "secret") return /^[-A-Za-z0-9_=]{16,512}$/.test(t.trim()) ? "" : "The secret is the long code the proxy's owner gave"
+  if (step.key === "username" || step.key === "password") return t.length > 255 ? "At most 255 characters" : ""
+  if (step.key === "link") return isProxyLink(t) ? "" : "A proxy link starts with t.me/proxy or t.me/socks"
+  return ""
+}
+
+// A proxy's line: "SOCKS5 · 123 ms · in use". `ping` is { seconds }, { error: true }, or nothing yet.
+function proxyText(proxy, ping, connection) {
+  if (!isObject(proxy)) return ""
+  var parts = [PROXY_TYPE_NAMES[proxy.type] || "Proxy"]
+  if (isObject(ping)) parts.push(ping.error ? "not answering" : Math.round(Number(ping.seconds) * 1000) + " ms")
+  if (proxy.enabled) parts.push(["network", "proxy", "connecting"].indexOf(connection) >= 0 ? "connecting…" : "in use")
+  return parts.join(" · ")
+}
+
+function connectionText(state) {
+  return ({ network: "Waiting for the network…", proxy: "Connecting to the proxy…", connecting: "Connecting…",
+            updating: "Updating…", ready: "Connected" })[state] || ""
+}
+
 // ---------------------------------------------------------------- a link's preview while typing, disappearing messages
 
 // The first thing in typed text that may be a link, so Telegram is asked for a preview only when it changes; "" when none.

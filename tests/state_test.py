@@ -385,6 +385,19 @@ class Messages(unittest.TestCase):
                                         "type": {"@type": "linkPreviewTypeUnsupported"}}
         self.assertEqual(s.message(m)["content"]["linkPreview"]["above"], True)
 
+    def test_proxies_and_the_connection(self):
+        s = model.State()
+        added = {"@type": "addedProxy", "id": 3, "last_used_date": 1789000000, "is_enabled": True, "comment": "",
+                 "proxy": {"@type": "proxy", "server": "proxy.example.com", "port": 1080,
+                           "type": {"@type": "proxyTypeSocks5", "username": "ann", "password": "hunter2"}}}
+        view = model.proxy_view(added)
+        self.assertEqual(view, {"id": 3, "server": "proxy.example.com", "port": 1080, "type": "socks5", "username": "ann",
+                                "enabled": True, "lastUsed": 1789000000})
+        self.assertNotIn("hunter2", repr(view))
+        self.assertIsNone(model.proxy_view({"@type": "addedProxy", "id": 4}))
+        connecting = {"@type": "updateConnectionState", "state": {"@type": "connectionStateConnectingToProxy"}}
+        self.assertEqual((s.apply(connecting), s.apply(connecting), s.connection), ([{"event": "connection", "state": "proxy"}], [], "proxy"))
+
     def test_a_sticker_knows_its_set(self):
         media = model.media_for("sticker", {"sticker": {"@type": "sticker", "set_id": "9223372036854775807", "emoji": "🐼",
                                                         "sticker": {"@type": "file", "id": 5, "size": 10}}}, "")

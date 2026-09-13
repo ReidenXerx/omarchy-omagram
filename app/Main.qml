@@ -80,6 +80,7 @@ Scope {
   }
   property var globalShortcuts: ({})
   property var globalStatus: ({})
+  property string connection: ""           // how the service reaches Telegram: "proxy", "connecting", "ready"…
   property bool settingsOpen: false
 
   // Voice and video messages, videos and music play at 1×, 1.5× or 2× (Qt keeps a voice's pitch);
@@ -96,6 +97,7 @@ Scope {
     omagram.shortcuts = view.settings.shortcuts || ({})
     omagram.globalShortcuts = view.settings.globalShortcuts || ({})
     omagram.globalStatus = view.globalStatus || ({})
+    omagram.connection = view.connection || ""
     omagram.playbackRate = Model.playbackRate(view.settings.playbackRate)
     omagram.autoDownloadRules = view.settings.autoDownload || null
   }
@@ -315,6 +317,7 @@ Scope {
   }
 
   function onEvent(name, e) {
+    if (name === "connection") { omagram.connection = e.state || ""; return }
     if (name === "auth") {
       omagram.auth = e.auth
       if (e.auth.state !== "ready") {

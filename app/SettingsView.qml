@@ -40,7 +40,7 @@ FocusScope {
   readonly property var rows: settings.buildRows()
   readonly property var current: settings.rows[settings.cursor] || null
   readonly property var accountKinds: ["profilePhoto", "profileField", "profilePhone", "privacy", "blocked", "blockedSender", "password",
-                                       "passwordOff", "passwordCode", "accountTtl", "autoDelete", "scope", "previews", "download", "folder", "newFolder",
+                                       "passwordOff", "passwordCode", "accountTtl", "autoDelete", "proxy", "proxyAdd", "scope", "previews", "download", "folder", "newFolder",
                                        "folderName", "folderFlag", "folderChat", "folderAdd", "folderSave", "folderDelete",
                                        "storage", "sessions", "session", "otherSessions", "logout"]
 
@@ -60,6 +60,7 @@ FocusScope {
     settings.loadProfile()
     settings.loadPrivacy()
     settings.loadNotifications()
+    settings.loadProxies()
     settings.loadFolders()
     settings.loadStorage()
     settings.loadSessions()
@@ -117,6 +118,15 @@ FocusScope {
              { kind: "header", title: "Chat folders", note: "Enter opens a folder  ·  [ and ] move it earlier or later" })
     for (var f = 0; f < settings.folders.length; f++) out.push({ kind: "folder", folder: settings.folders[f], label: settings.folders[f].name })
     out.push({ kind: "newFolder", label: "New folder" },
+             { kind: "header", title: "Connection",
+               note: (Model.connectionText(settings.app.connection) ? Model.connectionText(settings.app.connection) + "  ·  " : "")
+                     + "Enter uses a proxy or stops using it  ·  Backspace removes it" })
+    for (var p = 0; p < settings.proxies.length; p++)
+      out.push({ kind: "proxy", proxy: settings.proxies[p], label: settings.proxies[p].server + ":" + settings.proxies[p].port })
+    out.push({ kind: "proxyAdd", type: "socks5", label: "Add a SOCKS5 proxy" },
+             { kind: "proxyAdd", type: "mtproto", label: "Add an MTProto proxy" },
+             { kind: "proxyAdd", type: "http", label: "Add an HTTP proxy" },
+             { kind: "proxyAdd", type: "link", label: "Add a proxy from its link" },
              { kind: "header", title: "Account", note: "" },
              { kind: "storage", label: "Storage on this computer" },
              { kind: "sessions", label: "Devices signed in" })
@@ -215,6 +225,7 @@ FocusScope {
   function removeLast() {
     var row = settings.current
     if (row && row.kind === "profilePhoto") { settings.askRemovePhoto(); return }
+    if (row && row.kind === "proxy") { settings.askRemoveProxy(row.proxy); return }
     if (!settings.editable(row)) return
     if (row.kind === "global") {
       settings.send(settings.overrides, settings.withGlobal(row.id, ""))
@@ -328,7 +339,7 @@ FocusScope {
   property var password: null        // what password.get last said
   property int accountTtl: 0
   property int defaultAutoDelete: -1 // seconds; -1 until Telegram has said
-  property var flow: null            // two-step verification being changed: { kind, steps, step, values }
+  property var flow: null            // two-step verification being changed, or a proxy added: { kind, steps, step, values }
   property string editorError: ""
 
   function loadPrivacy() {
@@ -400,7 +411,7 @@ FocusScope {
   function flowNext() {
     var flow = settings.flow
     var step = flow.steps[flow.step]
-    var problem = Model.passwordStepProblem(step, editor.text, flow.values)
+    var problem = flow.kind === "proxy" ? Model.proxyStepProblem(step, editor.text) : Model.passwordStepProblem(step, editor.text, flow.values)
     if (problem !== "") { settings.editorError = problem; return }
     flow.values[step.key] = step.secret ? editor.text : editor.text.trim()
     if (flow.step + 1 < flow.steps.length) {
@@ -411,6 +422,10 @@ FocusScope {
     var values = flow.values
     var kind = flow.kind
     settings.cancelEditing()
+    if (kind === "proxy") {
+      settings.addProxy(flow.proxyType, values)
+      return
+    }
     if (kind === "code") {
       settings.app.request("password.checkEmailCode", { code: values.code }, settings.passwordAnswered)
       return
@@ -602,6 +617,69 @@ FocusScope {
     onDismissed: settings.forceActiveFocus()
   }
 
+  // ---------------------------------------------------------------- proxies
+
+  property var proxies: []           // what proxies.list said: never a password or secret
+  property var proxyPings: ({})      // proxy id -> { seconds } or { error: true }
+
+  function loadProxies() {
+    settings.app.request("proxies.list", {}, function (answer) {
+      if (!answer.ok) return
+      settings.proxies = answer.result.proxies || []
+      settings.proxies.forEach(function (p) { settings.pingProxy(p.id) })
+    })
+  }
+
+  function pingProxy(id) {
+    settings.app.request("proxy.ping", { id: id }, function (answer) {
+      var pings = Object.assign({}, settings.proxyPings)
+      pings[id] = answer.ok ? { seconds: answer.result.seconds } : { error: true }
+      settings.proxyPings = pings
+    })
+  }
+
+  // Enter on a proxy: use it, or stop using it.
+  function toggleProxy(proxy) {
+    settings.error = ""
+    settings.app.request(proxy.enabled ? "proxy.disable" : "proxy.enable", proxy.enabled ? {} : { id: proxy.id }, function (answer) {
+      if (!answer.ok) settings.error = answer.error || "Telegram did not take the change"
+      settings.loadProxies()
+    })
+  }
+
+  function askRemoveProxy(proxy) {
+    settings.ask("Remove the proxy " + proxy.server + ":" + proxy.port + "?", function () {
+      settings.app.request("proxy.remove", { id: proxy.id }, function (answer) {
+        if (!answer.ok) settings.error = answer.error || "Telegram did not take the change"
+        settings.loadProxies()
+      })
+    })
+  }
+
+  // A proxy is added one field at a time in the bar above the list, as two-step verification is changed.
+  function startProxyFlow(kind) {
+    settings.error = ""
+    settings.confirm = null
+    settings.flow = { kind: "proxy", proxyType: kind, steps: Model.proxySteps(kind), step: 0, values: {} }
+    settings.showFlowStep()
+  }
+
+  function addProxy(kind, values) {
+    var args
+    if (kind === "link") {
+      args = { link: Model.proxyLinkUrl(values.link) }
+    } else {
+      var address = Model.parseProxyAddress(values.address)
+      args = { type: kind, server: address.server, port: address.port }
+      if (kind === "mtproto") args.secret = values.secret.trim()
+      else { args.username = values.username || ""; args.password = values.password || "" }
+    }
+    settings.app.request(kind === "link" ? "proxy.addLink" : "proxy.add", args, function (answer) {
+      if (!answer.ok) settings.error = answer.error || "Telegram did not take the proxy"
+      settings.loadProxies()
+    })
+  }
+
   // ---------------------------------------------------------------- the account
 
   function ask(text, run) {
@@ -642,6 +720,10 @@ FocusScope {
       settings.changeAccountTtl()
     } else if (row.kind === "autoDelete") {
       settings.changeDefaultAutoDelete()
+    } else if (row.kind === "proxy") {
+      settings.toggleProxy(row.proxy)
+    } else if (row.kind === "proxyAdd") {
+      settings.startProxyFlow(row.type)
     } else if (row.kind === "scope") {
       settings.changeScope(row.id, { muted: !(settings.scopes[row.id] && settings.scopes[row.id].muted) })
     } else if (row.kind === "previews") {
@@ -872,7 +954,7 @@ FocusScope {
                    : (settings.editing && settings.editing.field === "username" ? "a name people can find you by"
                       : (settings.editing && settings.editing.field === "bio" ? "a few words about you" : ""))
         secret: !!settings.editing && settings.editing.secret === true
-        maximumLength: settings.flow ? 256 : (settings.editing && settings.editing.field === "bio" ? 140 : 64)
+        maximumLength: settings.flow ? (settings.flow.kind === "proxy" ? 2048 : 256) : (settings.editing && settings.editing.field === "bio" ? 140 : 64)
         error: !settings.editing ? "" : (settings.flow ? settings.editorError : Model.profileProblem(settings.editing.field, editor.text))
         onAccepted: settings.saveEditing()
         Keys.onEscapePressed: settings.cancelEditing()
@@ -914,7 +996,7 @@ FocusScope {
         width: list.width
         height: header ? Style.space(modelData.note ? 58 : 44)
               : (account ? Style.space(modelData.kind === "profilePhoto" ? 66
-                                       : (["session", "storage", "profileField", "profilePhone", "privacy", "blocked", "password", "accountTtl", "autoDelete",
+                                       : (["session", "storage", "profileField", "profilePhone", "privacy", "blocked", "password", "accountTtl", "autoDelete", "proxy",
                                            "scope", "previews", "download", "folder", "folderName", "folderFlag"]
                                             .indexOf(modelData.kind) >= 0 ? 58 : 44))
                          : Style.space(clashes.length || modelData.kind === "global" ? 58 : 42))
@@ -983,7 +1065,7 @@ FocusScope {
             }
             Text {
               textFormat: Text.PlainText
-              text: ({ profileField: "Enter changes it", privacy: "Enter changes it", accountTtl: "Enter changes it", autoDelete: "Enter changes it",
+              text: ({ profileField: "Enter changes it", privacy: "Enter changes it", accountTtl: "Enter changes it", autoDelete: "Enter changes it", proxy: "Enter uses it or stops", proxyAdd: "Enter",
                        scope: "Enter changes it", previews: "Enter changes it", download: "Enter changes it",
                        folder: "Enter opens it", newFolder: "Enter", folderName: "Enter changes it", folderFlag: "Enter changes it",
                        folderChat: "Enter takes it off", folderAdd: "Enter", folderSave: "Enter", folderDelete: "Enter",
@@ -1015,6 +1097,7 @@ FocusScope {
                 : row.modelData.kind === "password" ? Model.passwordText(settings.password)
                 : row.modelData.kind === "accountTtl" ? Model.ttlText(settings.accountTtl)
                 : row.modelData.kind === "autoDelete" ? (settings.defaultAutoDelete < 0 ? "Loading…" : Model.autoDeleteText(settings.defaultAutoDelete))
+                : row.modelData.kind === "proxy" ? Model.proxyText(row.modelData.proxy, settings.proxyPings[row.modelData.proxy.id], settings.app.connection)
                 : row.modelData.kind === "scope" ? Model.scopeText(settings.scopes[row.modelData.id])
                 : row.modelData.kind === "previews" ? Model.previewsText(settings.scopes)
                 : row.modelData.kind === "download" ? Model.downloadText(settings.app.autoDownloadRules, row.modelData.id)

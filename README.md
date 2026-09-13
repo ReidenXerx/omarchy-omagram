@@ -54,6 +54,10 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   the message text; what downloads by itself (photos, GIFs and round video messages; videos and files
   up to 10 or 50 MB); how much Omagram keeps on this computer (and clears the cache), every device
   signed in to your account (sign any of them out), and signs you out here.
+- **Proxies** — Settings → Connection adds SOCKS5, HTTP and MTProto proxies, or one from its
+  t.me/proxy link, shows how fast each answers and which is in use; `Backspace` removes one. The
+  sign-in screen takes a proxy link too, for where Telegram is blocked, and a proxy link in a chat
+  asks before it is used.
 - **Secret chats** — start one from a person's info. Like every Telegram secret chat it lives on
   this computer only; its info shows the encryption key to compare with the other device.
 - **Stories** — the stories of the people and channels you follow, above the chat list

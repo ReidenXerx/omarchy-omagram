@@ -29,6 +29,10 @@ MEMBER_STATUSES = {"chatMemberStatusCreator": "owner", "chatMemberStatusAdminist
                    "chatMemberStatusMember": "member", "chatMemberStatusRestricted": "restricted",
                    "chatMemberStatusLeft": "left", "chatMemberStatusBanned": "banned"}
 SECRET_STATES = {"secretChatStatePending": "pending", "secretChatStateReady": "ready", "secretChatStateClosed": "closed"}
+CONNECTION_STATES = {"connectionStateWaitingForNetwork": "network", "connectionStateConnectingToProxy": "proxy",
+                     "connectionStateConnecting": "connecting", "connectionStateUpdating": "updating", "connectionStateReady": "ready"}
+PROXY_TYPES = {"proxyTypeSocks5": "socks5", "proxyTypeHttp": "http", "proxyTypeMtproto": "mtproto"}
+PROXY_SERVER_MAX = 253
 CALL_STATES = {"callStatePending": "pending", "callStateExchangingKeys": "connecting", "callStateReady": "ready",
                "callStateHangingUp": "ending", "callStateDiscarded": "ended", "callStateError": "failed"}
 CALLS_MAX = 16
@@ -527,6 +531,18 @@ def password_view(value):
             "resetDate": max(0, _int(p.get("pending_reset_date")))}
 
 
+def proxy_view(value):
+    """A proxy you added, without its password or secret: those stay with TDLib."""
+    p = _obj(value, "addedProxy")
+    proxy = _obj(p.get("proxy"), "proxy") if p else {}
+    if not proxy:
+        return None
+    kind = _obj(proxy.get("type"))
+    return {"id": _int(p.get("id")), "server": _str(proxy.get("server"), PROXY_SERVER_MAX), "port": max(0, _int(proxy.get("port"))),
+            "type": PROXY_TYPES.get(kind.get("@type"), ""), "username": _str(kind.get("username"), NAME_MAX),
+            "enabled": p.get("is_enabled") is True, "lastUsed": max(0, _int(p.get("last_used_date")))}
+
+
 FOLDER_FLAGS = {"includeContacts": "include_contacts", "includeNonContacts": "include_non_contacts",
                 "includeGroups": "include_groups", "includeChannels": "include_channels", "includeBots": "include_bots",
                 "excludeMuted": "exclude_muted", "excludeRead": "exclude_read", "excludeArchived": "exclude_archived"}
@@ -860,6 +876,7 @@ class State:
         self.calls = {}            # call id -> the call as the "call" event shows it, while it lasts
         self.active_stories = {}   # chat id -> its active stories, as the "stories" event shows them
         self.me_id = 0
+        self.connection = ""        # how TDLib reaches Telegram: "network", "proxy", "connecting", "updating", "ready"
         self.folders = []          # [{"id", "name", "icon"}] in Telegram's order
         self.main_position = 0     # where "All chats" sits among the folders
         # TDLib's files directory: only paths inside it are ever handed to the UI.
@@ -1256,6 +1273,13 @@ class State:
             return []
         chat["mentions"] = max(0, _int(u.get("unread_mention_count")))
         return self._chat_event(chat["id"])
+
+    def _on_updateConnectionState(self, u):
+        state = CONNECTION_STATES.get(_obj(u.get("state")).get("@type"), "")
+        if state == self.connection:
+            return []
+        self.connection = state
+        return [{"event": "connection", "state": state}]
 
     def _on_updateChatMessageAutoDeleteTime(self, u):
         chat = self._chat(_int(u.get("chat_id")))
