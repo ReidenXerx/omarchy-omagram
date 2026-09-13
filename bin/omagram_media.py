@@ -195,6 +195,32 @@ def video_note_argv(source, target):
             "-c:a", "aac", "-b:a", "64k", "-ac", "1", "-movflags", "+faststart", str(target)]
 
 
+NOTE_CAMERA = "/dev/video0"
+NOTE_PREVIEW_SIDE = 160         # the picture the quick view shows while a round video records
+NOTE_PREVIEW_RATE = 8           # times a second it is rewritten
+
+
+def camera_inputs(camera=NOTE_CAMERA):
+    """The camera and the default microphone, each for at most a video message's length."""
+    return ["-t", str(NOTE_MAX_SECONDS), "-f", "v4l2", "-framerate", "30", "-i", camera,
+            "-t", str(NOTE_MAX_SECONDS), "-f", "pulse", "-i", "default"]
+
+
+def video_capture_argv(target, preview, inputs=None):
+    """Record a round video message straight from the camera and the microphone: the middle square of
+    the picture at Telegram's size into `target`, and a small copy rewritten several times a second into
+    `preview`, for the quick view to show in its circle while it records. An interrupt (SIGINT) finishes
+    both. `inputs` stand in for the camera and microphone (tests use made-up ones)."""
+    ffmpeg = str(safe.tool("ffmpeg"))
+    graph = (f"[0:v]crop='min(iw,ih)':'min(iw,ih)',scale={NOTE_SIZE}:{NOTE_SIZE},split=2[note][look];"
+             f"[look]fps={NOTE_PREVIEW_RATE},scale={NOTE_PREVIEW_SIDE}:{NOTE_PREVIEW_SIDE}[small]")
+    return ([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin"] + (inputs or camera_inputs())
+            + ["-filter_complex", graph,
+               "-map", "[note]", "-map", "1:a", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
+               "-c:a", "aac", "-b:a", "64k", "-ac", "1", str(target),
+               "-map", "[small]", "-f", "image2", "-update", "1", "-q:v", "6", str(preview)])
+
+
 def prepare_video_note(source, target):
     """Convert the camera recording into a Telegram video message; returns its duration."""
     r = safe.run(video_note_argv(source, target), timeout=TRANSCODE_TIMEOUT, max_output=64 * 1024)

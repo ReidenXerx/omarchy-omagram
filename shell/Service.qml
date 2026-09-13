@@ -26,6 +26,26 @@ Item {
   readonly property bool connected: client.connected
   readonly property bool ready: client.connected && service.auth.state === "ready"
   readonly property int unread: Model.unreadTotal(service.chats)
+  // For the quick view: the voice or round video message being listened to ({ fileId: 0 } when none), one
+  // being recorded ({ state: "idle" | "voice" | "video", startedAt, preview }), and what the service last said
+  // about a file (a sticker or photo coming down), by file id.
+  property var playing: ({ fileId: 0 })
+  property var recording: ({ state: "idle" })
+  property var files: ({})
+
+  function noteFile(file) {
+    if (!file || !file.id) return
+    var files = Object.keys(service.files).length > 500 ? {} : Object.assign({}, service.files)
+    files[file.id] = file
+    service.files = files
+  }
+
+  function download(fileId) {
+    if (!fileId) return
+    client.request("file.download", { fileId: fileId, priority: 8 }, function (answer) {
+      if (answer.ok && answer.result) service.noteFile(answer.result)
+    })
+  }
 
   // Messages as the service reports them (message, messageSent, messageFailed,
   // messageContent, messageEdited, messagesDeleted), for a panel showing a chat's history.
@@ -74,6 +94,12 @@ Item {
         service.chats = Model.upsertChat(service.chats, e.chat, "main")
       } else if (name.indexOf("message") === 0) {
         service.messageEvent(name, e)
+      } else if (name === "playing") {
+        service.playing = e
+      } else if (name === "recording") {
+        service.recording = e
+      } else if (name === "file") {
+        service.noteFile(e.file)
       }
     }
 

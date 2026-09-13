@@ -472,6 +472,54 @@ class MediaCommands(Harness):
                 "local": {"@type": "localFile", "path": str(path), "is_downloading_completed": done,
                           "is_downloading_active": not done, "downloaded_size": 10 if done else 0}}
 
+    def test_listening_fetches_the_message_plays_its_sound_and_stops(self):
+        class FakePlayer:
+            pid = 2 ** 22 + 123   # no such process: signalling it does nothing
+            code = None
+
+            def poll(self):
+                return self.code
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                self.code = -9
+        players = []
+
+        def start_helper(argv):
+            players.append((argv, FakePlayer()))
+            return players[-1][1]
+        self.daemon.start_helper = start_helper
+        self.daemon.prefs = dict(self.daemon.prefs, playbackRate=1.5)
+        voice = self.files / "voice" / "v.ogg"
+        voice.parent.mkdir(mode=0o700)
+        voice.write_bytes(b"OggS")
+        self.send(self.conn, {"id": 90, "cmd": "media.play", "args": {"chatId": 42, "messageId": 7, "fileId": 9}})
+        query = self.last_query("downloadFile")
+        self.assertEqual((query["file_id"], query["synchronous"], query["priority"]), (9, True, 32), "fetched first, at once")
+        self.td_event(self.file_event(query["@extra"], 9, voice))
+        # Everyone hears it is playing, then the one who asked gets the answer: read in that order.
+        self.assertEqual(self.read(self.conn, lambda v: v.get("event") == "playing")["fileId"], 9)
+        self.assertTrue(self.read(self.conn, lambda v: v.get("id") == 90)["ok"])
+        argv = players[0][0]
+        self.assertEqual((argv[0].endswith("/ffplay"), "-nodisp" in argv, argv[-3:]), (True, True, ["-af", "atempo=1.5", str(voice)]))
+        self.assertEqual(self.last_query("openMessageContent")["message_id"], 7, "it counts as listened to")
+        self.send(self.conn, {"id": 91, "cmd": "media.stop", "args": {}})
+        self.read(self.conn, lambda v: v.get("event") == "playing" and v.get("fileId") == 0)
+        self.assertTrue(self.read(self.conn, lambda v: v.get("id") == 91)["ok"])
+        before = self.sent_count("downloadFile")
+        self.send(self.conn, {"id": 92, "cmd": "media.play", "args": {"chatId": 42, "messageId": 8, "fileId": 9}})
+        self.td_event(self.file_event(self.next_query("downloadFile", before)["@extra"], 9, voice))
+        self.read(self.conn, lambda v: v.get("event") == "playing" and v.get("fileId") == 9)
+        players[-1][1].code = 0   # it comes to its end by itself
+        self.daemon.wake()
+        self.read(self.conn, lambda v: v.get("event") == "playing" and v.get("fileId") == 0)
+        before = self.sent_count("downloadFile")
+        self.send(self.conn, {"id": 93, "cmd": "media.play", "args": {"chatId": 42, "messageId": 8, "fileId": 9}})
+        self.td_event(self.file_event(self.next_query("downloadFile", before)["@extra"], 9, self.root / "elsewhere.ogg"))
+        self.assertFalse(self.read(self.conn, lambda v: v.get("id") == 93)["ok"], "only files in TDLib's media folders")
+
     def lottie(self, rid, path, done=True):
         self.send(self.conn, {"id": rid, "cmd": "sticker.lottie", "args": {"fileId": 9}})
         query = self.last_query("getFile")
@@ -1783,6 +1831,32 @@ class Recording(Harness):
         self.assertNotIn("sendMessage", self.fake.sent_types())
         self.assertFalse(self.request(self.conn, 3, "voice.stop", send=False)["ok"])   # nothing recording
         self.assertFalse(self.request(self.conn, 4, "voice.start", chatId="42")["ok"])
+
+    def test_a_round_video_the_service_records_is_sent_and_one_recording_at_a_time(self):
+        def capture_argv(target, preview, inputs=None):
+            pathlib.Path(target).write_bytes(b"mp4")
+            pathlib.Path(preview).write_bytes(bytes((0xFF, 0xD8)))
+            return [sys.executable, "-c", "import signal, sys, time; signal.signal(signal.SIGINT, lambda *a: sys.exit(0)); time.sleep(30)"]
+        patch = mock.patch.object(self.d.media, "video_capture_argv", capture_argv)
+        patch.start()
+        self.addCleanup(patch.stop)
+        answer = self.request(self.conn, 1, "videonote.record", chatId=42)
+        preview = pathlib.Path(answer["result"]["preview"])
+        self.assertEqual((preview.parent, preview.exists()), (self.d.media.REC, True))
+        self.read(self.conn, lambda v: v.get("event") == "recording" and v.get("state") == "video")
+        self.assertFalse(self.request(self.conn, 2, "voice.start", chatId=42)["ok"], "one recording at a time")
+        self.assertFalse(self.request(self.conn, 3, "voice.stop", send=True)["ok"], "a video is not finished as a voice message")
+        before = self.fake.sent_types().count("sendMessage")
+        self.send(self.conn, {"id": 4, "cmd": "videonote.stop", "args": {"send": True, "replyToMessageId": 9}})
+        query = self.sent_after(before)
+        note = query["input_message_content"]["video_note"]
+        self.assertEqual((query["chat_id"], query["reply_to"]["message_id"], note["duration"], note["length"]),
+                         (42, 9, 7, self.d.media.NOTE_SIZE))
+        self.wait(lambda: not preview.exists())
+        self.assertFalse(self.request(self.conn, 5, "videonote.stop", send=True)["ok"], "nothing is recording now")
+        self.assertTrue(self.request(self.conn, 6, "videonote.record", chatId=42)["ok"])
+        self.assertTrue(self.request(self.conn, 7, "videonote.stop", send=False)["ok"])
+        self.wait(lambda: not any(p.name.startswith("note-") for p in self.d.media.REC.iterdir()))
 
     def test_a_video_message_only_from_the_recording_directory(self):
         rec = self.d.media.rec_dir()

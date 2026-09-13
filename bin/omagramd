@@ -70,6 +70,7 @@ SOUNDS = pathlib.Path(safe.home_dir()) / ".cache/omagram/sounds"   # each person
 SOUNDS_MAX = 300
 SOUND_GAP = 1.2           # seconds between any two sounds
 SOUND_PERSON_GAP = 4.0    # and between two of the same person's
+PLAY_TIMEOUT = 15 * 60    # seconds: a voice or video message still playing after this is stopped
 OMARCHY_NOTIFICATIONS = pathlib.Path(safe.home_dir()) / ".local/state/omarchy/notifications.json"   # where Do Not Disturb is kept
 # Telegram caps animated stickers at 64 KB compressed; a megabyte is far past any real one.
 TGS_MAX = 1024 * 1024
@@ -500,7 +501,8 @@ class Daemon:
         self.notified = {}         # chat id -> the message its notification shows, for the notification's buttons
         self.sound_last = 0.0      # when a sound last played, and each person's, so a busy chat is not a din
         self.sound_by_person = {}
-        self.recording = None      # the voice message being recorded: proc, path, chatId, started
+        self.recording = None      # the voice or video message being recorded: kind, proc, path (preview), chatId, started
+        self.player = None         # the voice or video message being listened to: proc, fileId, chatId, messageId, startedAt
         self.tasks = queue.Queue() # finished background work, run on the loop: (done, result, error)
         self.jobs = 0
         self.prefs = prefs.load()   # your shortcuts, as stored in ~/.config/omagram/settings.json
@@ -626,10 +628,15 @@ class Daemon:
         self.shutdown()
 
     def shutdown(self):
-        if self.recording is not None:   # a half-recorded voice message is not kept
+        if self.recording is not None:   # a half-recorded voice or video message is not kept
             self.recording["proc"].kill()
-            media.remove(self.recording["path"])
+            for key in ("path", "preview"):
+                if self.recording.get(key):
+                    media.remove(self.recording[key])
             self.recording = None
+        if self.player is not None:
+            self.player["proc"].kill()
+            self.player = None
         if self.td is not None and not self.closed.is_set():
             # A clean close lets TDLib flush its database; waiting is bounded.
             self.td.send({"@type": "close"})
@@ -1006,6 +1013,11 @@ class Daemon:
 
     def reap_children(self):
         now = time.monotonic()
+        if self.player is not None and (self.player["proc"].poll() is not None or now > self.player["deadline"]):
+            finished, self.player = self.player, None   # it came to its end, or ran far too long
+            if finished["proc"].poll() is None:
+                self.children[finished["proc"].pid] = (finished["proc"], None, now)
+            self.broadcast({"event": "playing", "fileId": 0})
         for pid, (proc, fallback, deadline) in list(self.children.items()):
             status = proc.poll()
             if status is None and deadline is not None and now > deadline:
@@ -2441,7 +2453,7 @@ class Daemon:
     def cmd_voice_start(self, client, rid, args):
         chat_id = arg_int(args, "chatId")
         if self.recording is not None:
-            raise BadRequest("a voice message is already being recorded")
+            raise BadRequest("a voice or video message is already being recorded")
         try:
             media.clean_stale()
             path = media.new_sent_path("voice", ".ogg")
@@ -2452,14 +2464,14 @@ class Daemon:
         if proc is None:
             raise BadRequest("cannot start the recorder")
         started = int(time.time() * 1000)
-        self.recording = {"proc": proc, "path": path, "chatId": chat_id, "started": started}
+        self.recording = {"kind": "voice", "proc": proc, "path": path, "chatId": chat_id, "started": started}
         self.respond(client, rid, {"startedAt": started})
         self.broadcast({"event": "recording", "state": "voice", "chatId": chat_id, "startedAt": started})
 
     def cmd_voice_stop(self, client, rid, args):
         rec = self.recording
-        if rec is None:
-            raise BadRequest("nothing is being recorded")
+        if rec is None or rec.get("kind") != "voice":
+            raise BadRequest("no voice message is being recorded")
         send = args.get("send") is True
         reply = self.reply_args(args) if send else {}
         self.recording = None
@@ -2496,6 +2508,117 @@ class Daemon:
                                "duration": duration, "waveform": waveform},
                 "caption": None, "self_destruct_type": None}, reply)
         self.background(work, done)
+
+    def cmd_videonote_record(self, client, rid, args):
+        """A round video message recorded by the service itself, from the camera and the microphone, for the quick
+        view: it shows the small picture `preview` names, rewritten while it records."""
+        chat_id = arg_int(args, "chatId")
+        if self.recording is not None:
+            raise BadRequest("a voice or video message is already being recorded")
+        try:
+            media.clean_stale()
+            path = media.new_path("note", ".mp4")
+            preview = path.with_name(path.stem + "-preview.jpg")
+            argv = media.video_capture_argv(path, preview)
+        except (safe.UnsafeError, OSError) as e:
+            raise BadRequest(f"cannot record: {e}")
+        proc = self.start_helper(argv)
+        if proc is None:
+            raise BadRequest("cannot start the recorder")
+        started = int(time.time() * 1000)
+        self.recording = {"kind": "video", "proc": proc, "path": path, "preview": preview, "chatId": chat_id, "started": started}
+        self.respond(client, rid, {"startedAt": started, "preview": str(preview)})
+        self.broadcast({"event": "recording", "state": "video", "chatId": chat_id, "startedAt": started, "preview": str(preview)})
+
+    def cmd_videonote_stop(self, client, rid, args):
+        """Finish the round video message the service is recording: converted and sent as the window's are, or thrown away."""
+        rec = self.recording
+        if rec is None or rec.get("kind") != "video":
+            raise BadRequest("no video message is being recorded")
+        send = args.get("send") is True
+        reply = self.reply_args(args) if send else {}
+        self.recording = None
+        self.broadcast({"event": "recording", "state": "idle"})
+        proc, source, preview, chat_id = rec["proc"], rec["path"], rec["preview"], rec["chatId"]
+        try:
+            proc.send_signal(signal.SIGINT)   # ffmpeg finishes both files on its first interrupt
+        except OSError:
+            pass
+        target = media.new_sent_path("note", ".mp4") if send else None
+
+        def work():
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            media.remove(preview)
+            try:
+                return media.prepare_video_note(source, target) if send else None
+            finally:
+                media.remove(source)
+
+        def done(duration, error):
+            if not send:
+                self.respond(client, rid, {})
+                return
+            if error is not None or not duration or duration < 1:
+                media.remove(target)
+                self.respond_error(client, rid, "that video message was too short or could not be read")
+                return
+            self.send_content(client, rid, chat_id, {
+                "@type": "inputMessageVideoNote",
+                "video_note": {"@type": "inputVideoNote", "video_note": {"@type": "inputFileLocal", "path": str(target)},
+                               "thumbnail": None, "duration": max(1, min(media.NOTE_MAX_SECONDS, int(duration))),
+                               "length": media.NOTE_SIZE},
+                "self_destruct_type": None}, reply)
+        self.background(work, done)
+
+    def cmd_media_play(self, client, rid, args):
+        """Listen to a voice or round video message without a window: the file is fetched when it is not here yet,
+        then ffplay plays its sound at your playback speed, and the message counts as listened to."""
+        chat_id, message_id = arg_int(args, "chatId"), arg_int(args, "messageId", 1)
+        file_id = arg_int(args, "fileId", 1, FILE_ID_MAX)
+        if not safe.has_tool("ffplay"):
+            raise BadRequest("playing needs ffplay, which comes with ffmpeg")
+
+        def fetched(f):
+            view = model.file_view(f, self.state.files_root)
+            if not view or not view["path"]:
+                raise BadRequest("the message could not be fetched")
+            self.stop_player()
+            rate = self.prefs.get("playbackRate", 1)
+            argv = [str(safe.tool("ffplay")), "-nodisp", "-vn", "-sn", "-autoexit", "-loglevel", "quiet"]
+            if rate != 1:
+                argv += ["-af", f"atempo={rate}"]
+            proc = self.start_helper(argv + [view["path"]])
+            if proc is None:
+                raise BadRequest("the player could not start")
+            started = int(time.time() * 1000)
+            self.player = {"proc": proc, "fileId": file_id, "chatId": chat_id, "messageId": message_id, "startedAt": started,
+                           "deadline": time.monotonic() + PLAY_TIMEOUT}
+            self.td_send({"@type": "openMessageContent", "chat_id": chat_id, "message_id": message_id})
+            self.broadcast({"event": "playing", "fileId": file_id, "chatId": chat_id, "messageId": message_id,
+                            "startedAt": started, "rate": rate})
+            return {"startedAt": started}
+        self.td_send({"@type": "downloadFile", "file_id": file_id, "priority": 32, "offset": 0, "limit": 0, "synchronous": True},
+                     client, rid, fetched)
+
+    def cmd_media_stop(self, client, rid, args):
+        self.stop_player()
+        self.respond(client, rid, {})
+
+    def stop_player(self):
+        """Stop what is playing, without waiting for it: the helper reaper finishes it off."""
+        player, self.player = self.player, None
+        if player is None:
+            return
+        try:
+            os.killpg(player["proc"].pid, signal.SIGTERM)
+        except OSError:
+            pass
+        self.children[player["proc"].pid] = (player["proc"], None, time.monotonic() + 2)
+        self.broadcast({"event": "playing", "fileId": 0})
 
     def cmd_videonote_send(self, client, rid, args):
         chat_id = arg_int(args, "chatId")
@@ -3274,6 +3397,10 @@ COMMANDS = {
     "voice.stop": ("cmd_voice_stop", True),
     "videonote.send": ("cmd_videonote_send", True),
     "videonote.discard": ("cmd_videonote_discard", True),
+    "videonote.record": ("cmd_videonote_record", True),
+    "videonote.stop": ("cmd_videonote_stop", True),
+    "media.play": ("cmd_media_play", True),
+    "media.stop": ("cmd_media_stop", True),
 }
 
 
