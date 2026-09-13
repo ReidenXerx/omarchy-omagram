@@ -26,6 +26,8 @@ JSON_LIMITS = {"max_depth": 6, "max_items": 5000, "max_string": 256}
 ACTIONS_MAX = 200
 KEYS_MAX = 6
 PLAYBACK_RATES = (1, 1.5, 2)   # how fast voice and video messages play
+DOWNLOAD_SIZES = (0, 10, 50)   # megabytes up to which a video or a file downloads by itself; 0 never
+DOWNLOADS_DEFAULT = {"photos": True, "gifs": True, "videos": 0, "files": 0}
 ACTION_ID = re.compile(r"[a-z][A-Za-z]{0,20}\.[a-z][A-Za-z]{0,40}")
 SEQUENCE = re.compile(r"[\x21-\x7e]{1,40}")
 
@@ -54,7 +56,7 @@ BINDS_MAX = 4 * 1024 * 1024
 
 
 def empty():
-    return {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1}
+    return {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1, "autoDownload": dict(DOWNLOADS_DEFAULT)}
 
 
 # ---------------------------------------------------------------- key combinations for Hyprland
@@ -148,6 +150,18 @@ def check(value, strict=True):
         bad("playbackRate is 1, 1.5 or 2")
     else:
         out["playbackRate"] = rate
+    downloads = value.get("autoDownload", {})
+    if not isinstance(downloads, dict):
+        bad("autoDownload must be an object")
+        downloads = {}
+    for key in DOWNLOADS_DEFAULT:
+        if key not in downloads:
+            continue
+        v, yes_or_no = downloads[key], key in ("photos", "gifs")
+        if isinstance(v, bool) != yes_or_no or v not in ((True, False) if yes_or_no else DOWNLOAD_SIZES):
+            bad(f"autoDownload.{key} is " + ("true or false" if yes_or_no else "0, 10 or 50"))
+            continue
+        out["autoDownload"][key] = v
     return out
 
 

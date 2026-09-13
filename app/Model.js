@@ -503,9 +503,50 @@ function fitSize(width, height, maxWidth, maxHeight) {
 // always; photos, GIFs and video messages up to 10 MB. Videos, files and audio wait for you.
 // Only small media downloads by itself: anyone who can message you picks what lands on disk,
 // and a "voice message" or sticker can claim to be any size.
-function autoDownload(kind, size) {
-  if (kind !== "sticker" && kind !== "voice" && kind !== "photo" && kind !== "gif" && kind !== "videoNote") return false
-  return (Number(size) || 0) <= AUTO_DOWNLOAD_MAX
+var DOWNLOADS_DEFAULT = { photos: true, gifs: true, videos: 0, files: 0 }
+
+// Whether a message's media downloads as soon as it is on screen: stickers and voice messages always
+// (they are small, and needed to play), photos, GIFs and round video messages up to 10 MB unless you
+// said no, videos and files up to the size you chose in Settings.
+function autoDownload(kind, size, rules) {
+  var r = isObject(rules) ? rules : DOWNLOADS_DEFAULT
+  var bytes = Number(size) || 0
+  if (kind === "sticker" || kind === "voice") return bytes <= AUTO_DOWNLOAD_MAX
+  if (kind === "photo") return r.photos !== false && bytes <= AUTO_DOWNLOAD_MAX
+  if (kind === "gif" || kind === "videoNote") return r.gifs !== false && bytes <= AUTO_DOWNLOAD_MAX
+  var limit = (kind === "video" ? Number(r.videos) : (kind === "file" || kind === "audio" ? Number(r.files) : 0)) || 0
+  return limit > 0 && bytes > 0 && bytes <= limit * 1024 * 1024
+}
+
+function downloadText(rules, key) {
+  var r = isObject(rules) ? rules : DOWNLOADS_DEFAULT
+  if (key === "photos" || key === "gifs") return r[key] === false ? "No" : "Yes, up to 10 MB"
+  var mb = Number(r[key]) || 0
+  return mb > 0 ? "Up to " + mb + " MB" : "No"
+}
+
+// Enter on a download row: photos and GIFs yes or no; videos and files never, up to 10 MB, up to 50 MB.
+function nextDownloadRule(rules, key) {
+  var r = isObject(rules) ? rules : DOWNLOADS_DEFAULT
+  var next = { photos: r.photos !== false, gifs: r.gifs !== false, videos: Number(r.videos) || 0, files: Number(r.files) || 0 }
+  if (key === "photos" || key === "gifs") next[key] = !next[key]
+  else if (key === "videos" || key === "files") next[key] = next[key] === 0 ? 10 : (next[key] === 10 ? 50 : 0)
+  return next
+}
+
+function scopeText(view) {
+  if (view === null) return "Telegram did not say"
+  if (!isObject(view)) return "Loading…"
+  return view.muted ? "Muted" : "Notify"
+}
+
+// Message text in notifications, over the three types of chat.
+function previewsText(scopes) {
+  var views = ["private", "groups", "channels"].map(function (key) { return isObject(scopes) ? scopes[key] : null })
+                                                 .filter(function (view) { return isObject(view) })
+  if (!views.length) return "Loading…"
+  var shown = views.filter(function (view) { return view.preview === true }).length
+  return shown === views.length ? "Shown" : (shown === 0 ? "Hidden" : "Shown for some")
 }
 
 function progress(file) {

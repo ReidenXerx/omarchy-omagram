@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError, autoDownload, downloadText, nextDownloadRule, scopeText, previewsText }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -559,6 +559,22 @@ test("your profile: what can go to Telegram, its refusals in words, what each ro
      ["Ann", "None", "@ann_lee", "None", "+15550100", "None"])
   eq(M.profileValue(null, "bio"), "Loading…")
   eq([M.profileChat(Object.assign({}, p, { lastName: "Lee" })).title, M.profileChat(null)], ["Ann Lee", null])
+})
+
+test("notifications for types of chat, and what downloads by itself", () => {
+  const mb = 1024 * 1024
+  eq([["sticker", mb], ["voice", 11 * mb], ["photo", mb], ["photo", 11 * mb], ["gif", mb], ["video", mb], ["file", mb]]
+       .map(([kind, size]) => M.autoDownload(kind, size)), [true, false, true, false, true, false, false])
+  const rules = { photos: false, gifs: true, videos: 50, files: 10 }
+  eq([["photo", mb], ["video", 40 * mb], ["video", 60 * mb], ["video", 0], ["audio", 5 * mb], ["file", 11 * mb], ["sticker", mb]]
+       .map(([kind, size]) => M.autoDownload(kind, size, rules)), [false, true, false, false, true, false, true])
+  eq(["photos", "gifs", "videos", "files"].map(key => M.downloadText(rules, key)), ["No", "Yes, up to 10 MB", "Up to 50 MB", "Up to 10 MB"])
+  eq([M.nextDownloadRule(null, "videos"), M.nextDownloadRule(rules, "videos").videos, M.nextDownloadRule(rules, "files").files,
+      M.nextDownloadRule(rules, "photos").photos], [{ photos: true, gifs: true, videos: 10, files: 0 }, 0, 50, true])
+  eq([{ muted: true }, { muted: false }, null, undefined].map(v => M.scopeText(v)), ["Muted", "Notify", "Telegram did not say", "Loading…"])
+  eq([{ private: { preview: true }, groups: { preview: true }, channels: { preview: true } }, { private: { preview: false }, groups: null },
+      { private: { preview: true }, groups: { preview: false } }, {}].map(s => M.previewsText(s)),
+     ["Shown", "Hidden", "Shown for some", "Loading…"])
 })
 
 test("privacy and security in words, and the next choice", () => {

@@ -40,7 +40,8 @@ FocusScope {
   readonly property var rows: settings.buildRows()
   readonly property var current: settings.rows[settings.cursor] || null
   readonly property var accountKinds: ["profilePhoto", "profileField", "profilePhone", "privacy", "blocked", "blockedSender", "password",
-                                       "passwordOff", "passwordCode", "accountTtl", "storage", "sessions", "session", "otherSessions", "logout"]
+                                       "passwordOff", "passwordCode", "accountTtl", "scope", "previews", "download",
+                                       "storage", "sessions", "session", "otherSessions", "logout"]
 
   signal closed()
 
@@ -56,6 +57,7 @@ FocusScope {
     settings.forceActiveFocus()
     settings.loadProfile()
     settings.loadPrivacy()
+    settings.loadNotifications()
     settings.loadStorage()
     settings.loadSessions()
   }
@@ -97,6 +99,16 @@ FocusScope {
     if (settings.password && settings.password.emailCodePattern) out.push({ kind: "passwordCode", label: "Type the code from the email" })
     if (settings.password && settings.password.hasPassword) out.push({ kind: "passwordOff", label: "Turn two-step verification off" })
     out.push({ kind: "accountTtl", label: "Delete my account if I am away for" },
+             { kind: "header", title: "Notifications", note: "For chats that have no notification setting of their own" },
+             { kind: "scope", id: "private", label: "Private chats" },
+             { kind: "scope", id: "groups", label: "Groups" },
+             { kind: "scope", id: "channels", label: "Channels" },
+             { kind: "previews", label: "Message text in notifications" },
+             { kind: "header", title: "Automatic downloads", note: "Stickers and voice messages always download: they are small" },
+             { kind: "download", id: "photos", label: "Photos" },
+             { kind: "download", id: "gifs", label: "GIFs and round video messages" },
+             { kind: "download", id: "videos", label: "Videos" },
+             { kind: "download", id: "files", label: "Files and music" },
              { kind: "header", title: "Account", note: "" },
              { kind: "storage", label: "Storage on this computer" },
              { kind: "sessions", label: "Devices signed in" })
@@ -389,6 +401,35 @@ FocusScope {
     if (answer.result.emailCodePattern) settings.startPasswordFlow("code")
   }
 
+  // ---------------------------------------------------------------- notifications
+
+  property var scopes: ({})          // "private", "groups", "channels" -> { muted, preview }, or null
+
+  function loadNotifications() {
+    settings.app.request("notifications.get", {}, function (answer) { if (answer.ok) settings.scopes = answer.result.scopes || ({}) })
+  }
+
+  function changeScope(scope, change) {
+    if (!settings.scopes[scope]) { settings.error = "Telegram has not said these notifications yet"; return }
+    settings.error = ""
+    var args = { scope: scope }
+    for (var key in change) args[key] = change[key]
+    settings.app.request("notifications.set", args, function (answer) {
+      if (!answer.ok) { settings.error = answer.error || "Telegram did not take the change"; return }
+      var next = {}
+      for (var s in settings.scopes) next[s] = settings.scopes[s]
+      next[scope] = { muted: answer.result.muted, preview: answer.result.preview }
+      settings.scopes = next
+    })
+  }
+
+  // One row for message text in the notifications of every type of chat: shown everywhere, unless it already is.
+  function togglePreviews() {
+    var show = Model.previewsText(settings.scopes) !== "Shown"
+    var all = ["private", "groups", "channels"]
+    for (var i = 0; i < all.length; i++) settings.changeScope(all[i], { preview: show })
+  }
+
   FileDialog {
     id: photoDialog
     title: "Your new profile photo"
@@ -436,6 +477,12 @@ FocusScope {
       settings.startPasswordFlow("code")
     } else if (row.kind === "accountTtl") {
       settings.changeAccountTtl()
+    } else if (row.kind === "scope") {
+      settings.changeScope(row.id, { muted: !(settings.scopes[row.id] && settings.scopes[row.id].muted) })
+    } else if (row.kind === "previews") {
+      settings.togglePreviews()
+    } else if (row.kind === "download") {
+      settings.app.setAutoDownload(Model.nextDownloadRule(settings.app.autoDownloadRules, row.id))
     } else if (row.kind === "storage") {
       settings.ask("Clear the cache? Downloaded photos, videos and files are deleted from this computer; they download again when you open them.", function () {
         settings.app.request("storage.clear", {}, function (answer) {
@@ -682,7 +729,8 @@ FocusScope {
         width: list.width
         height: header ? Style.space(modelData.note ? 58 : 44)
               : (account ? Style.space(modelData.kind === "profilePhoto" ? 66
-                                       : (["session", "storage", "profileField", "profilePhone", "privacy", "blocked", "password", "accountTtl"]
+                                       : (["session", "storage", "profileField", "profilePhone", "privacy", "blocked", "password", "accountTtl",
+                                           "scope", "previews", "download"]
                                             .indexOf(modelData.kind) >= 0 ? 58 : 44))
                          : Style.space(clashes.length || modelData.kind === "global" ? 58 : 42))
         radius: Style.cornerRadius
@@ -749,6 +797,7 @@ FocusScope {
             Text {
               textFormat: Text.PlainText
               text: ({ profileField: "Enter changes it", privacy: "Enter changes it", accountTtl: "Enter changes it",
+                       scope: "Enter changes it", previews: "Enter changes it", download: "Enter changes it",
                        blocked: settings.blockedOpen ? "Enter hides them" : "Enter shows them", blockedSender: "Enter unblocks",
                        password: settings.password && settings.password.hasPassword ? "Enter changes the password" : "Enter turns it on",
                        passwordOff: "Enter", passwordCode: "Enter",
@@ -776,6 +825,9 @@ FocusScope {
                 : row.modelData.kind === "blocked" ? Model.blockedText(settings.blocked)
                 : row.modelData.kind === "password" ? Model.passwordText(settings.password)
                 : row.modelData.kind === "accountTtl" ? Model.ttlText(settings.accountTtl)
+                : row.modelData.kind === "scope" ? Model.scopeText(settings.scopes[row.modelData.id])
+                : row.modelData.kind === "previews" ? Model.previewsText(settings.scopes)
+                : row.modelData.kind === "download" ? Model.downloadText(settings.app.autoDownloadRules, row.modelData.id)
                 : row.modelData.kind === "profilePhoto" ? (settings.photoBusy ? "Setting your new photo…" : Model.profileValue(settings.profile, "photo"))
                 : ""
             color: settings.app.muted

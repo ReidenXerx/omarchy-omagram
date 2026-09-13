@@ -1738,6 +1738,43 @@ class Daemon:
         self.td_send({"@type": "setAccountTtl", "ttl": {"@type": "accountTtl", "days": days}}, client, rid,
                      lambda _ok: {"days": days})
 
+    # ---------------------------------------------------------------- notifications by type of chat
+
+    def cmd_notifications_get(self, client, rid, args):
+        """Notifications for private chats, groups and channels that have no setting of their own; null
+        for a type Telegram did not answer for."""
+        views = {}
+
+        def settle(scope, view):
+            views[scope] = view
+            if len(views) == len(model.NOTIFICATION_SCOPES):
+                self.respond(client, rid, {"scopes": {k: views[k] for k in model.NOTIFICATION_SCOPES}})
+
+        for scope, kind in model.NOTIFICATION_SCOPES.items():
+            self.td_send({"@type": "getScopeNotificationSettings", "scope": {"@type": kind}},
+                         transform=lambda event, s=scope: settle(s, model.scope_view(event)),
+                         failed=lambda _error, s=scope: settle(s, None))
+
+    def cmd_notifications_set(self, client, rid, args):
+        """Mutes or unmutes a type of chat, or shows or hides message text in its notifications; the rest of
+        Telegram's settings for it (sounds, stories) is written back as it was."""
+        scope = args.get("scope")
+        kind = model.NOTIFICATION_SCOPES.get(scope) if isinstance(scope, str) else None
+        if kind is None:
+            raise BadRequest("scope is private, groups or channels")
+        muted, preview = args.get("muted"), args.get("preview")
+        if (muted is None and preview is None) or any(v is not None and not isinstance(v, bool) for v in (muted, preview)):
+            raise BadRequest("muted or preview, true or false")
+
+        def got(event):
+            settings = model.scope_settings(event, muted, preview)
+            self.td_send({"@type": "setScopeNotificationSettings", "scope": {"@type": kind}, "notification_settings": settings},
+                         client, rid, lambda _ok: dict(model.scope_view(settings), scope=scope))
+
+        def failed(error):
+            self.respond_error(client, rid, model._str(error.get("message"), 200) or "Telegram did not say the settings")
+        self.td_send({"@type": "getScopeNotificationSettings", "scope": {"@type": kind}}, transform=got, failed=failed)
+
     # ---------------------------------------------------------------- devices and storage
 
     def cmd_sessions_list(self, client, rid, args):
@@ -2104,8 +2141,8 @@ class Daemon:
 
     def cmd_settings_set(self, client, rid, args):
         settings = args.get("settings")
-        if isinstance(settings, dict) and "playbackRate" not in settings:   # the settings page leaves it as it is
-            settings = dict(settings, playbackRate=self.prefs.get("playbackRate", 1))
+        if isinstance(settings, dict):   # the shortcuts page leaves the speed and the downloads as they are
+            settings = dict({k: self.prefs[k] for k in ("playbackRate", "autoDownload") if k in self.prefs}, **settings)
         try:
             new = prefs.check(settings)
         except ValueError as e:
@@ -2127,6 +2164,21 @@ class Daemon:
         if isinstance(rate, bool) or rate not in prefs.PLAYBACK_RATES:
             raise BadRequest("the playback rate is 1, 1.5 or 2")
         new = dict(self.prefs, playbackRate=rate)
+        try:
+            prefs.save(new)
+        except (safe.UnsafeError, OSError):
+            raise BadRequest("the settings could not be saved")
+        self.prefs = new
+        self.respond(client, rid, self.settings_view())
+        self.broadcast(dict({"event": "settings"}, **self.settings_view()))
+
+    def cmd_settings_auto_download(self, client, rid, args):
+        """What downloads by itself as it comes on screen: photos, and GIFs with round video messages (yes
+        or no), videos and files (up to 10 or 50 MB, or never)."""
+        try:
+            new = prefs.check(dict(self.prefs, autoDownload=args.get("rules")))
+        except ValueError as e:
+            raise BadRequest(str(e))
         try:
             prefs.save(new)
         except (safe.UnsafeError, OSError):
@@ -2564,6 +2616,8 @@ COMMANDS = {
     "password.resendEmailCode": ("cmd_password_resend_email_code", True),
     "account.ttl": ("cmd_account_ttl", True),
     "account.setTtl": ("cmd_account_set_ttl", True),
+    "notifications.get": ("cmd_notifications_get", True),
+    "notifications.set": ("cmd_notifications_set", True),
     "topics.list": ("cmd_topics_list", True),
     "topic.history": ("cmd_topic_history", True),
     "chat.scheduled": ("cmd_chat_scheduled", True),
@@ -2588,6 +2642,7 @@ COMMANDS = {
     "story.close": ("cmd_story_close", True),
     "settings.set": ("cmd_settings_set", False),
     "settings.playback": ("cmd_settings_playback", False),
+    "settings.autoDownload": ("cmd_settings_auto_download", False),
     "shortcuts.apply": ("cmd_shortcuts_apply", False),
     "voice.start": ("cmd_voice_start", True),
     "voice.stop": ("cmd_voice_stop", True),

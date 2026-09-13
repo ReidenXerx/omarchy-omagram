@@ -514,6 +514,37 @@ def password_view(value):
             "resetDate": max(0, _int(p.get("pending_reset_date")))}
 
 
+NOTIFICATION_SCOPES = {"private": "notificationSettingsScopePrivateChats", "groups": "notificationSettingsScopeGroupChats",
+                       "channels": "notificationSettingsScopeChannelChats"}
+SCOPE_FIELDS = ("mute_for", "sound_id", "show_preview", "use_default_mute_stories", "mute_stories", "story_sound_id",
+                "show_story_poster", "disable_pinned_message_notifications", "disable_mention_notifications")
+SCOPE_MUTED = 2 ** 31 - 1
+
+
+def scope_view(value):
+    """Notifications for a type of chat, as Settings shows them: muted or not, message text shown or not."""
+    s = _obj(value, "scopeNotificationSettings")
+    return {"muted": _int(s.get("mute_for")) > 0, "preview": s.get("show_preview") is True}
+
+
+def scope_settings(value, muted=None, preview=None):
+    """A type of chat's notification settings as TDLib wants them back, only the mute or the preview changed."""
+    s = _obj(value, "scopeNotificationSettings")
+    out = {"@type": "scopeNotificationSettings"}
+    for field in SCOPE_FIELDS:
+        if field in ("sound_id", "story_sound_id"):
+            out[field] = _int(s.get(field))
+        elif field == "mute_for":
+            out[field] = max(0, _int(s.get(field)))
+        else:
+            out[field] = s.get(field) is True
+    if muted is not None:
+        out["mute_for"] = SCOPE_MUTED if muted else 0
+    if preview is not None:
+        out["show_preview"] = preview
+    return out
+
+
 NOTIFICATION_FLAGS = ("use_default_mute_for", "use_default_sound", "use_default_show_preview", "show_preview",
                       "use_default_mute_stories", "mute_stories", "use_default_story_sound",
                       "use_default_show_story_poster", "show_story_poster",

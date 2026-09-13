@@ -598,6 +598,19 @@ class Privacy(unittest.TestCase):
         self.assertEqual(model.privacy_rules(self.rules(keep_out, everyone, allow_users, "junk"), "contacts")["rules"],
                          [keep_out, allow_users, contacts])
 
+    def test_notifications_for_a_type_of_chat(self):
+        tdlib = {"@type": "scopeNotificationSettings", "mute_for": 0, "sound_id": "5", "show_preview": True,
+                 "use_default_mute_stories": True, "mute_stories": False, "story_sound_id": "-1", "show_story_poster": True,
+                 "disable_pinned_message_notifications": False, "disable_mention_notifications": True}
+        self.assertEqual(model.scope_view(tdlib), {"muted": False, "preview": True})
+        muted = model.scope_settings(tdlib, muted=True)
+        self.assertEqual((muted["mute_for"], muted["show_preview"], muted["sound_id"], muted["story_sound_id"],
+                          muted["disable_mention_notifications"], muted["use_default_mute_stories"]),
+                         (2 ** 31 - 1, True, 5, -1, True, True), "only the mute changes")
+        hidden = model.scope_settings(dict(tdlib, mute_for=3600), preview=False)
+        self.assertEqual((hidden["mute_for"], hidden["show_preview"]), (3600, False))
+        self.assertEqual(model.scope_view(None), {"muted": False, "preview": False})
+
     def test_two_step_verification(self):
         state = model.password_view({"@type": "passwordState", "has_password": True, "password_hint": "cat",
                                      "has_recovery_email_address": False, "pending_reset_date": 0,

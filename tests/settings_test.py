@@ -88,9 +88,13 @@ class Checking(unittest.TestCase):
         good = {"shortcuts": {"window.voice": ["Ctrl+Alt+V", "Ctrl+Alt+V"], "list.pin": []},
                 "globalShortcuts": {"global.quickReply": "super + alt + m", "global.panel": ""}}
         self.assertEqual(prefs.check(good), {"shortcuts": {"window.voice": ["Ctrl+Alt+V"], "list.pin": []},
-                                             "globalShortcuts": {"global.quickReply": "SUPER + ALT + M"}, "playbackRate": 1})
+                                             "globalShortcuts": {"global.quickReply": "SUPER + ALT + M"}, "playbackRate": 1,
+                                             "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0}})
         self.assertEqual([prefs.check(dict(good, playbackRate=r))["playbackRate"] for r in (1, 1.5, 2)], [1, 1.5, 2])
+        mine = {"photos": False, "gifs": True, "videos": 50, "files": 10}
+        self.assertEqual(prefs.check(dict(good, autoDownload=mine))["autoDownload"], mine)
         for bad in ([], {"shortcuts": []}, {"playbackRate": 3}, {"playbackRate": True}, {"playbackRate": "2"},
+                    {"autoDownload": []}, {"autoDownload": {"videos": 20}}, {"autoDownload": {"photos": 1}}, {"autoDownload": {"files": True}},
                     {"shortcuts": {"Bad Id": ["A"]}}, {"shortcuts": {"window.voice": "A"}},
                     {"shortcuts": {"window.voice": ["has space"]}}, {"shortcuts": {"window.voice": ["A"] * 7}},
                     {"shortcuts": {"global.quickReply": ["A"]}}, {"globalShortcuts": {"global.nope": "SUPER + M"}},
@@ -102,10 +106,11 @@ class Checking(unittest.TestCase):
 
     def test_lenient_reading_keeps_what_is_right(self):
         mixed = {"shortcuts": {"window.voice": ["Ctrl+Alt+V"], "Bad Id": ["A"], "list.pin": "P"},
-                 "globalShortcuts": {"global.quickReply": "SUPER + M", "global.panel": "nonsense"}, "playbackRate": 7}
+                 "globalShortcuts": {"global.quickReply": "SUPER + M", "global.panel": "nonsense"}, "playbackRate": 7,
+                 "autoDownload": {"photos": "yes", "videos": 50}}
         self.assertEqual(prefs.check(mixed, strict=False),
                          {"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}, "globalShortcuts": {"global.quickReply": "SUPER + M"},
-                          "playbackRate": 1})
+                          "playbackRate": 1, "autoDownload": {"photos": True, "gifs": True, "videos": 50, "files": 0}})
         self.assertEqual(prefs.check("junk", strict=False), prefs.empty())
 
 

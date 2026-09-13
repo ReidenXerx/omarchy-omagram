@@ -1280,6 +1280,30 @@ class ChatsAndAccount(Harness):
         self.assertEqual((q["ttl"], r["result"]), ({"@type": "accountTtl", "days": 365}, {"days": 365}))
         self.assertFalse(self.request(self.conn, 188, "account.setTtl", days=10)["ok"])
 
+        scope = {"@type": "scopeNotificationSettings", "mute_for": 0, "sound_id": "-1", "show_preview": True, "use_default_mute_stories": True,
+                 "mute_stories": False, "story_sound_id": "-1", "show_story_poster": True, "disable_pinned_message_notifications": False,
+                 "disable_mention_notifications": False}
+        before = self.sent_count("getScopeNotificationSettings")
+        self.send(self.conn, {"id": 189, "cmd": "notifications.get", "args": {}})
+        self.wait(lambda: self.sent_count("getScopeNotificationSettings") >= before + 3)
+        for q in [q for q in self.fake.sent if q.get("@type") == "getScopeNotificationSettings"][before:]:
+            self.answer(q, dict(scope, mute_for=86400) if q["scope"]["@type"] == "notificationSettingsScopeChannelChats" else scope)
+        self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 189)["result"]["scopes"],
+                         {"private": {"muted": False, "preview": True}, "groups": {"muted": False, "preview": True},
+                          "channels": {"muted": True, "preview": True}})
+        before = self.sent_count("getScopeNotificationSettings")
+        self.send(self.conn, {"id": 190, "cmd": "notifications.set", "args": {"scope": "groups", "preview": False}})
+        q = self.next_query("getScopeNotificationSettings", before)
+        sets = self.sent_count("setScopeNotificationSettings")
+        self.answer(q, scope)
+        q = self.next_query("setScopeNotificationSettings", sets)
+        self.answer(q, {"@type": "ok"})
+        r = self.read(self.conn, lambda v: v.get("id") == 190)["result"]
+        self.assertEqual((q["scope"], q["notification_settings"]["show_preview"], q["notification_settings"]["sound_id"], r),
+                         ({"@type": "notificationSettingsScopeGroupChats"}, False, -1, {"scope": "groups", "muted": False, "preview": False}))
+        for rid, args in ((191, {"scope": "bots", "muted": True}), (192, {"scope": "groups"}), (193, {"scope": "groups", "muted": "yes"})):
+            self.assertFalse(self.request(self.conn, rid, "notifications.set", **args)["ok"], args)
+
     def test_mention_and_command_suggestions(self):
         def member(uid):
             return {"@type": "chatMember", "member_id": {"@type": "messageSenderUser", "user_id": uid},
@@ -1552,7 +1576,8 @@ class Settings(Harness):
 
     def test_settings_come_with_hello_and_are_saved_and_shared(self):
         hello = self.request(self.conn, 1, "hello")["result"]
-        self.assertEqual(hello["settings"], {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1})
+        self.assertEqual(hello["settings"], {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1,
+                                             "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0}})
         self.assertEqual(hello["globalStatus"]["global.quickReply"], "off")
         other = self.connect()
         answer = self.request(self.conn, 2, "settings.set", settings={"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}})
@@ -1572,6 +1597,15 @@ class Settings(Harness):
         self.assertEqual(json.loads(self.d.prefs.SETTINGS.read_text())["playbackRate"], 1.5, "the settings page leaves the speed alone")
         for rid, rate in ((42, 3), (43, True), (44, "2")):
             self.assertFalse(self.request(self.conn, rid, "settings.playback", rate=rate)["ok"])
+        mine = {"photos": False, "gifs": True, "videos": 10, "files": 0}
+        answer = self.request(self.conn, 45, "settings.autoDownload", rules=mine)
+        self.assertEqual(answer["result"]["settings"]["autoDownload"], mine)
+        self.read(other, lambda v: v.get("event") == "settings" and v["settings"]["autoDownload"] == mine)
+        self.assertTrue(self.request(self.conn, 46, "settings.set", settings={"shortcuts": {}})["ok"])
+        saved = json.loads(self.d.prefs.SETTINGS.read_text())
+        self.assertEqual((saved["autoDownload"], saved["playbackRate"]), (mine, 1.5), "the shortcuts page leaves both alone")
+        for rid, rules in ((47, {"videos": 20}), (48, "all"), (49, {"photos": 1})):
+            self.assertFalse(self.request(self.conn, rid, "settings.autoDownload", rules=rules)["ok"], rules)
 
     def test_global_shortcuts_are_registered_and_registered_again(self):
         answer = self.request(self.conn, 5, "settings.set",

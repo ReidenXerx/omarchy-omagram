@@ -81,7 +81,7 @@ Item {
       if (thumbFile && !thumbUrl && !thumbFile.active) app.download(thumbFile.id, 8)
       return
     }
-    if (Model.autoDownload(kind, file ? file.size : 0)) download(kind === "sticker" ? 20 : 12)
+    if (Model.autoDownload(kind, file ? file.size : 0, app.autoDownloadRules)) download(kind === "sticker" ? 20 : 12)
   }
 
   // Above the click area: a button inside (play, speed) takes its own click, and a click anywhere

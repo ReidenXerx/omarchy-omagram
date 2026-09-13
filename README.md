@@ -48,7 +48,9 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   find you by number, call you or add you to groups: Enter goes Everybody → My contacts → Nobody and
   keeps the exceptions you made), blocked users, two-step verification (turn it on with a hint and
   a recovery email, change the password, turn it off) and how long you may be away before Telegram
-  deletes the account; how much Omagram keeps on this computer (and clears the cache), every device
+  deletes the account; notifications for private chats, groups and channels, and whether they show
+  the message text; what downloads by itself (photos, GIFs and round video messages; videos and files
+  up to 10 or 50 MB); how much Omagram keeps on this computer (and clears the cache), every device
   signed in to your account (sign any of them out), and signs you out here.
 - **Secret chats** — start one from a person's info. Like every Telegram secret chat it lives on
   this computer only; its info shows the encryption key to compare with the other device.

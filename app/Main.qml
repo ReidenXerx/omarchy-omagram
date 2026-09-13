@@ -97,6 +97,14 @@ Scope {
     omagram.globalShortcuts = view.settings.globalShortcuts || ({})
     omagram.globalStatus = view.globalStatus || ({})
     omagram.playbackRate = Model.playbackRate(view.settings.playbackRate)
+    omagram.autoDownloadRules = view.settings.autoDownload || null
+  }
+
+  // What downloads by itself as it comes on screen (Model.autoDownload); kept in the settings.
+  property var autoDownloadRules: null
+  function setAutoDownload(rules) {
+    omagram.autoDownloadRules = rules
+    service.request("settings.autoDownload", { rules: rules })
   }
   property var chats: []
   property var messages: ({})
