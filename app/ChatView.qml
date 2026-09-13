@@ -1588,7 +1588,7 @@ FocusScope {
         Text {
           anchors.centerIn: parent
           text: String.fromCodePoint(0xF004D)
-          color: backArea.containsMouse ? app.accent : app.muted
+          color: backArea.containsMouse ? app.foreground : app.muted
           font.family: app.glyphFamily
           font.pixelSize: Style.font.title
         }
@@ -1650,7 +1650,7 @@ FocusScope {
                         : (root.chat.kind === "secret" ? "Secret chat: " + Model.secretStateText(root.chat)
                            : (root.forum ? "Topics" : Model.memberCountText(root.chat.memberCount, root.chat.kind === "channel")))))))
           textFormat: Text.PlainText
-          color: activity ? app.accent : app.muted
+          color: activity ? app.accentText : app.muted
           font.family: app.fontFamily
           font.pixelSize: Style.font.caption
         }
@@ -1685,7 +1685,7 @@ FocusScope {
             Text {
               anchors.centerIn: parent
               text: headerButton.modelData.glyph
-              color: headerArea.containsMouse ? app.accent : app.muted
+              color: headerArea.containsMouse ? app.foreground : app.muted
               font.family: app.glyphFamily
               font.pixelSize: Style.font.title
             }
@@ -1735,7 +1735,7 @@ FocusScope {
 
         Text {
           text: "Pinned message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.pinnedMessage")[0] || "")
-          color: app.accent
+          color: app.muted
           font.family: app.fontFamily
           font.pixelSize: Style.font.caption
           font.bold: true
@@ -2023,7 +2023,7 @@ FocusScope {
             width: selectionLabel.implicitWidth + Style.space(18)
             height: Style.space(28)
             radius: Style.cornerRadius
-            color: selectionArea.containsMouse ? Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.25) : "transparent"
+            color: selectionArea.containsMouse ? Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.12) : "transparent"
             Text {
               id: selectionLabel
               anchors.centerIn: parent
@@ -2074,8 +2074,8 @@ FocusScope {
                 width: (keyRow.width - keyRow.spacing * (keyRow.modelData.length - 1)) / keyRow.modelData.length
                 height: Style.space(32)
                 radius: Style.cornerRadius
-                color: keyArea.containsMouse ? Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.3)
-                                             : Qt.rgba(app.accent.r, app.accent.g, app.accent.b, 0.14)
+                color: keyArea.containsMouse ? Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.16)
+                                             : Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.08)
                 Text {
                   anchors.centerIn: parent
                   width: parent.width - Style.space(12)
@@ -2254,7 +2254,7 @@ FocusScope {
             y: Style.space(10)
             visible: !thumbnail.visible
             text: String.fromCodePoint(attachment.modelData.kind === "video" ? 0xF0567 : (attachment.modelData.kind === "audio" ? 0xF0387 : 0xF0224))
-            color: app.accent
+            color: app.foreground
             font.family: app.glyphFamily
             font.pixelSize: Style.font.title
           }
@@ -2312,7 +2312,7 @@ FocusScope {
           width: parent.width
           height: Style.space(28)
           radius: Style.cornerRadius
-          color: Qt.rgba(app.accent.r, app.accent.g, app.accent.b, modeArea.containsMouse ? 0.28 : 0.14)
+          color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, modeArea.containsMouse ? 0.16 : 0.08)
           Text {
             anchors.centerIn: parent
             width: parent.width - Style.space(12)
@@ -2448,7 +2448,7 @@ FocusScope {
             textFormat: Text.PlainText
             text: root.linkPreviewMode === "none" ? "No link preview"
                 : (root.linkPreview ? (root.linkPreview.siteName || root.linkPreview.displayUrl || "Link preview") : "")
-            color: root.linkPreviewMode === "none" ? app.muted : app.accent
+            color: root.linkPreviewMode === "none" ? app.muted : app.accentText
             font.family: app.fontFamily
             font.pixelSize: Style.font.caption
             font.bold: true
@@ -2817,7 +2817,7 @@ FocusScope {
               Text {
                 anchors.centerIn: parent
                 text: recordButton.modelData.glyph
-                color: recordButton.modelData.send ? app.accent : (recordArea.containsMouse ? app.urgent : app.muted)
+                color: recordButton.modelData.send ? app.accentText : (recordArea.containsMouse ? app.urgent : app.muted)
                 font.family: app.glyphFamily
                 font.pixelSize: Style.font.title
               }
@@ -3013,7 +3013,7 @@ FocusScope {
     Text {
       anchors.centerIn: parent
       text: floatButton.glyph
-      color: floatArea.containsMouse ? root.app.accent : root.app.foreground
+      color: floatArea.containsMouse ? root.app.accentText : root.app.foreground
       font.family: root.app.glyphFamily
       font.pixelSize: Style.font.title
     }
@@ -3029,7 +3029,7 @@ FocusScope {
         id: countText
         anchors.centerIn: parent
         text: floatButton.count > 999 ? "999+" : String(floatButton.count)
-        color: root.app.background
+        color: root.app.onAccent
         font.family: root.app.fontFamily
         font.pixelSize: Style.font.caption
         font.bold: true

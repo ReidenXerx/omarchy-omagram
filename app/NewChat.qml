@@ -311,7 +311,7 @@ FocusScope {
               Text {
                 anchors.centerIn: parent
                 text: String.fromCodePoint(entry.modelData.id === "group" ? 0xF0B58 : (entry.modelData.id === "channel" ? 0xF0B23 : 0xF0065))
-                color: dialog.app.accent
+                color: dialog.app.foreground
                 font.family: dialog.app.glyphFamily
                 font.pixelSize: Style.font.title
               }
@@ -332,7 +332,7 @@ FocusScope {
                 elide: Text.ElideRight
                 text: entry.person ? (entry.modelData.contact.name || "Deleted account") : entry.modelData.label
                 textFormat: Text.PlainText
-                color: entry.person ? dialog.app.foreground : dialog.app.accent
+                color: dialog.app.foreground
                 font.family: dialog.app.fontFamily
                 font.pixelSize: Style.font.body
               }
@@ -352,7 +352,7 @@ FocusScope {
             Text {
               visible: dialog.mode === "members"
               text: entry.modelData.selected ? String.fromCodePoint(0xF05E1) : ""
-              color: dialog.app.accent
+              color: dialog.app.accentText
               font.family: dialog.app.glyphFamily
               font.pixelSize: Style.font.title
             }

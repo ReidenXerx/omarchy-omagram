@@ -30,7 +30,7 @@ Rectangle {
     // md-phone-incoming U+F03F7
     Text {
       text: String.fromCodePoint(0xF03F7)
-      color: bar.app.accent
+      color: bar.app.accentText
       font.family: bar.app.glyphFamily
       font.pixelSize: Style.font.title
     }

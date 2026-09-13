@@ -181,7 +181,7 @@ FocusScope {
         anchors.rightMargin: Style.space(16)
         anchors.verticalCenter: parent.verticalCenter
         text: String.fromCodePoint(0xF0156)
-        color: closeArea.containsMouse ? info.app.accent : info.app.muted
+        color: closeArea.containsMouse ? info.app.foreground : info.app.muted
         font.family: info.app.glyphFamily
         font.pixelSize: Style.font.title
         MouseArea {
@@ -261,7 +261,7 @@ FocusScope {
                                             : detail.modelData.value
             textFormat: detail.modelData.entities ? Text.RichText : Text.PlainText
             color: info.app.foreground
-            linkColor: info.app.accent
+            linkColor: info.app.accentText
             font.family: info.app.fontFamily
             font.pixelSize: Style.font.bodySmall
             onLinkActivated: function (link) { info.linkActivated(link) }
@@ -290,7 +290,7 @@ FocusScope {
             width: actionLabel.implicitWidth + Style.space(20)
             height: Style.space(30)
             radius: Style.cornerRadius
-            color: actionArea.containsMouse ? Qt.rgba(info.app.accent.r, info.app.accent.g, info.app.accent.b, 0.25)
+            color: actionArea.containsMouse ? Qt.rgba(info.app.foreground.r, info.app.foreground.g, info.app.foreground.b, 0.12)
                                             : Qt.rgba(info.app.foreground.r, info.app.foreground.g, info.app.foreground.b, 0.06)
             Text {
               id: actionLabel

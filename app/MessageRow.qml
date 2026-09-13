@@ -123,7 +123,7 @@ Item {
     radius: Style.cornerRadius * 1.5
     // Stickers and round video messages float without a bubble, as in Telegram.
     color: row.bare ? "transparent"
-         : (row.message.outgoing ? Qt.rgba(row.app.accent.r, row.app.accent.g, row.app.accent.b, 0.2)
+         : (row.message.outgoing ? Qt.rgba(row.app.accent.r, row.app.accent.g, row.app.accent.b, 0.14)
                                  : Qt.rgba(row.app.foreground.r, row.app.foreground.g, row.app.foreground.b, 0.06))
     border.width: row.isCursor || !!row.view.selection[row.message.id] ? Math.max(1, Style.space(1.5))
                 : (row.message.id === row.view.confirmDeleteId ? 1 : 0)
@@ -143,7 +143,7 @@ Item {
         visible: row.showName
         text: row.message.senderName || "Unknown"
         textFormat: Text.PlainText
-        color: row.app.accent
+        color: row.app.foreground
         font.family: row.app.fontFamily
         font.pixelSize: Style.font.bodySmall
         font.bold: true
@@ -156,7 +156,7 @@ Item {
         elide: Text.ElideRight
         text: row.message.forward ? "Forwarded from " + row.message.forward.name : ""
         textFormat: Text.PlainText
-        color: row.app.accent
+        color: row.app.muted
         font.family: row.app.fontFamily
         font.pixelSize: Style.font.caption
         font.italic: true
@@ -256,7 +256,7 @@ Item {
         textFormat: Text.RichText
         wrapMode: Text.Wrap
         color: row.app.foreground
-        linkColor: row.app.accent
+        linkColor: row.app.accentText
         font.family: row.app.fontFamily
         font.pixelSize: Style.font.body
         onLinkActivated: function (link) { row.view.openLink(link, row.message) }
@@ -277,7 +277,7 @@ Item {
         Text {
           id: translationLabel
           text: translation.result ? "Translation" : "Translating…"
-          color: row.app.accent
+          color: row.app.muted
           font.family: row.app.fontFamily
           font.pixelSize: Style.font.caption
           font.bold: true
@@ -290,7 +290,7 @@ Item {
           text: translation.result ? Model.richText(translation.result.text, translation.result.entities, true, row.codeBackground) : ""
           textFormat: Text.RichText
           color: row.app.foreground
-          linkColor: row.app.accent
+          linkColor: row.app.accentText
           font.family: row.app.fontFamily
           font.pixelSize: Style.font.body
           onLinkActivated: function (link) { row.view.openLink(link, row.message) }
@@ -319,7 +319,7 @@ Item {
         implicitHeight: previewColumn.implicitHeight + Style.space(12)
         height: implicitHeight
         radius: Style.cornerRadius
-        color: Qt.rgba(row.app.accent.r, row.app.accent.g, row.app.accent.b, 0.08)
+        color: Qt.rgba(row.app.foreground.r, row.app.foreground.g, row.app.foreground.b, 0.05)
 
         function fetch() {
           if (preview.photoFile && !preview.photoUrl && !preview.photoFile.active) row.app.download(preview.photoFile.id, 1)
@@ -342,7 +342,7 @@ Item {
             elide: Text.ElideRight
             text: preview.info ? preview.info.siteName : ""
             textFormat: Text.PlainText
-            color: row.app.accent
+            color: row.app.accentText
             font.family: row.app.fontFamily
             font.pixelSize: Style.font.caption
             font.bold: true
@@ -493,7 +493,7 @@ Item {
           Text {
             visible: !!pollCard.poll && pollCard.poll.multiple && !pollCard.results && pollCard.choices.length > 0
             text: "Vote"
-            color: row.app.accent
+            color: row.app.accentText
             font.family: row.app.fontFamily
             font.pixelSize: Style.font.bodySmall
             font.bold: true
@@ -512,7 +512,7 @@ Item {
         implicitHeight: placeColumn.implicitHeight + Style.space(14)
         height: implicitHeight
         radius: Style.cornerRadius
-        color: Qt.rgba(row.app.accent.r, row.app.accent.g, row.app.accent.b, 0.08)
+        color: Qt.rgba(row.app.foreground.r, row.app.foreground.g, row.app.foreground.b, 0.05)
 
         Column {
           id: placeColumn
@@ -542,7 +542,7 @@ Item {
           }
           Text {
             text: place.location ? place.location.lat.toFixed(5) + ", " + place.location.lon.toFixed(5) + "   Open map ↗" : ""
-            color: row.app.accent
+            color: row.app.accentText
             font.family: row.app.fontFamily
             font.pixelSize: Style.font.caption
           }
@@ -566,7 +566,7 @@ Item {
         implicitHeight: Style.space(56)
         height: implicitHeight
         radius: Style.cornerRadius
-        color: Qt.rgba(row.app.accent.r, row.app.accent.g, row.app.accent.b, 0.08)
+        color: Qt.rgba(row.app.foreground.r, row.app.foreground.g, row.app.foreground.b, 0.05)
 
         RowLayout {
           anchors.fill: parent
@@ -581,7 +581,7 @@ Item {
               anchors.centerIn: parent
               text: Model.initials(person.contact ? person.contact.name : "")
               textFormat: Text.PlainText
-              color: row.app.accent
+              color: row.app.foreground
               font.family: row.app.fontFamily
               font.bold: true
             }
@@ -681,8 +681,8 @@ Item {
                 width: (buttonRow.width - buttonRow.spacing * (buttonRow.modelData.length - 1)) / buttonRow.modelData.length
                 height: Style.space(30)
                 radius: Style.cornerRadius
-                color: buttonArea.containsMouse ? Qt.rgba(row.app.accent.r, row.app.accent.g, row.app.accent.b, 0.3)
-                                                : Qt.rgba(row.app.accent.r, row.app.accent.g, row.app.accent.b, 0.14)
+                color: buttonArea.containsMouse ? Qt.rgba(row.app.foreground.r, row.app.foreground.g, row.app.foreground.b, 0.16)
+                                                : Qt.rgba(row.app.foreground.r, row.app.foreground.g, row.app.foreground.b, 0.08)
                 Text {
                   anchors.centerIn: parent
                   width: parent.width - Style.space(12)
@@ -718,8 +718,8 @@ Item {
         width: parent.width
         height: Style.space(30)
         radius: Style.cornerRadius
-        color: repliesArea.containsMouse ? Qt.rgba(row.app.accent.r, row.app.accent.g, row.app.accent.b, 0.24)
-                                         : Qt.rgba(row.app.accent.r, row.app.accent.g, row.app.accent.b, 0.1)
+        color: repliesArea.containsMouse ? Qt.rgba(row.app.foreground.r, row.app.foreground.g, row.app.foreground.b, 0.12)
+                                         : Qt.rgba(row.app.foreground.r, row.app.foreground.g, row.app.foreground.b, 0.06)
 
         // md-comment-outline U+F0182
         Text {
@@ -728,7 +728,7 @@ Item {
           anchors.leftMargin: Style.space(10)
           anchors.verticalCenter: parent.verticalCenter
           text: String.fromCodePoint(0xF0182)
-          color: row.app.accent
+          color: row.app.accentText
           font.family: row.app.glyphFamily
           font.pixelSize: Style.font.bodySmall
         }
@@ -766,7 +766,7 @@ Item {
             + (row.message.editDate > 0 ? "edited  " : "") + Model.clock(row.message.date)
             + (row.receipt === "read" ? "  ✓✓" : (row.receipt === "sent" ? "  ✓" : ""))
             + (row.receipt === "sending" ? "  ·  sending" : (row.receipt === "failed" ? "  ·  failed" : ""))
-        color: row.receipt === "failed" ? row.app.urgent : (row.receipt === "read" ? row.app.accent : row.app.muted)
+        color: row.receipt === "failed" ? row.app.urgent : (row.receipt === "read" ? row.app.accentText : row.app.muted)
         font.family: row.app.fontFamily
         font.pixelSize: Style.font.caption
       }

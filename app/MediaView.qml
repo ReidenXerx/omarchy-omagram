@@ -153,12 +153,12 @@ Item {
     height: speedText.implicitHeight + Style.space(4)
     radius: Style.cornerRadius
     color: chip.dark ? Qt.rgba(0, 0, 0, speedArea.containsMouse ? 0.7 : 0.5)
-                     : Qt.rgba(view.app.accent.r, view.app.accent.g, view.app.accent.b, speedArea.containsMouse ? 0.3 : 0.14)
+                     : Qt.rgba(view.app.foreground.r, view.app.foreground.g, view.app.foreground.b, speedArea.containsMouse ? 0.16 : 0.08)
     Text {
       id: speedText
       anchors.centerIn: parent
       text: Model.speedLabel(view.app.playbackRate)
-      color: chip.dark ? "white" : view.app.accent
+      color: chip.dark ? "white" : view.app.foreground
       font.family: view.app.fontFamily
       font.pixelSize: Style.font.caption
       font.bold: true
@@ -468,7 +468,7 @@ Item {
         Text {
           anchors.centerIn: parent
           text: !view.ready ? "󰇚" : (voice.playing ? "󰏤" : "󰐊")
-          color: view.app.background
+          color: view.app.onAccent
           font.family: view.app.glyphFamily
           font.pixelSize: Style.font.title
         }
@@ -560,12 +560,12 @@ Item {
         width: Style.space(40)
         height: width
         radius: width / 2
-        color: Qt.rgba(view.app.accent.r, view.app.accent.g, view.app.accent.b, 0.25)
+        color: Qt.rgba(view.app.foreground.r, view.app.foreground.g, view.app.foreground.b, 0.1)
         Text {
           anchors.centerIn: parent
           // md-download U+F01DA, md-music-note U+F0387, md-file-outline U+F0224, md-play/pause
           text: !view.ready ? "󰇚" : (fileItem.isAudio ? (fileItem.playing ? "󰏤" : "󰎇") : "󰈤")
-          color: view.app.accent
+          color: view.app.foreground
           font.family: view.app.glyphFamily
           font.pixelSize: Style.font.title
         }

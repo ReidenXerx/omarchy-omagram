@@ -170,7 +170,7 @@ FocusScope {
             }
             Text {
               text: row.last ? Model.listTime(row.last.date, topics.nowMs) : ""
-              color: row.modelData.unread > 0 ? topics.app.accent : topics.app.muted
+              color: row.modelData.unread > 0 ? topics.app.foreground : topics.app.muted
               font.family: topics.app.fontFamily
               font.pixelSize: Style.font.caption
             }
@@ -200,7 +200,7 @@ FocusScope {
                 id: count
                 anchors.centerIn: parent
                 text: row.modelData.mentions > 0 ? "@" : (row.modelData.unread > 999 ? "999+" : String(row.modelData.unread))
-                color: topics.app.background
+                color: topics.chat && topics.chat.muted ? topics.app.background : topics.app.onAccent
                 font.family: topics.app.fontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true

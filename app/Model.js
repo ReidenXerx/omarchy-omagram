@@ -1335,6 +1335,58 @@ function profileChat(profile) {
            title: [profile.firstName, profile.lastName].filter(function (part) { return !!part }).join(" ") }
 }
 
+// ---------------------------------------------------------------- readable colours
+
+// A colour's relative luminance (as WCAG counts it), from r, g and b between 0 and 1.
+function colorLuminance(c) {
+  function channel(v) { return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) }
+  return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+}
+
+// How far apart two colours read: 1 for the same, 21 for black on white. Text wants 4.5.
+function colorContrast(a, b) {
+  var la = colorLuminance(a)
+  var lb = colorLuminance(b)
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+}
+
+function mixColors(a, b, t) {
+  return { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t }
+}
+
+// `color` itself when it reads at `minimum` on `ground`; otherwise moved toward `toward` (the text colour) just
+// far enough, and past it toward white or black, whichever the ground is further from.
+function readableColor(color, ground, toward, minimum) {
+  var c = { r: color.r, g: color.g, b: color.b }
+  if (colorContrast(c, ground) >= minimum) return c
+  for (var t = 0.1; t <= 1.0001; t += 0.1) {
+    var toText = mixColors(c, toward, t)
+    if (colorContrast(toText, ground) >= minimum) return toText
+  }
+  var pole = colorLuminance(ground) > 0.18 ? { r: 0, g: 0, b: 0 } : { r: 1, g: 1, b: 1 }
+  for (var s = 0.1; s <= 1.0001; s += 0.1) {
+    var toPole = mixColors(toward, pole, s)
+    if (colorContrast(toPole, ground) >= minimum) return toPole
+  }
+  return pole
+}
+
+// Of the text colours a theme offers, the one that stands out most on `ground`.
+function bestTextColor(ground, candidates) {
+  var list = toList(candidates)
+  var best = list[0]
+  for (var i = 1; i < list.length; i++) if (colorContrast(list[i], ground) > colorContrast(best, ground)) best = list[i]
+  return best
+}
+
+// Text on a filled shape (a count on a badge, a primary button): the first of `inks` that reads at `minimum`,
+// or else whichever of them, white and black reads best.
+function inkOnFill(fill, inks, minimum) {
+  var preferred = toList(inks)
+  for (var i = 0; i < preferred.length; i++) if (colorContrast(preferred[i], fill) >= minimum) return preferred[i]
+  return bestTextColor(fill, preferred.concat([{ r: 1, g: 1, b: 1 }, { r: 0, g: 0, b: 0 }]))
+}
+
 // ---------------------------------------------------------------- proxies
 
 var PROXY_TYPE_NAMES = { socks5: "SOCKS5", http: "HTTP", mtproto: "MTProto" }

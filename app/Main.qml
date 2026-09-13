@@ -19,10 +19,18 @@ Scope {
   // ---------------------------------------------------------------- theme
 
   readonly property color background: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 1)
-  readonly property color foreground: Color.menu.text
+  // Messages are read here for hours, not glanced at in a menu: of the theme's text colours, the one that
+  // stands out most from the ground.
+  readonly property color foreground: omagram.ink(Model.bestTextColor(omagram.background, [Color.menu.text, Color.foreground]))
   readonly property color border: Color.menu.border
+  // The accent marks things (a selection, a stripe, a badge). As text -- a link, "typing…" -- it is moved
+  // toward the text colour until it reads at 4.5:1, and a count on an accent badge takes whatever reads on it.
   readonly property color accent: Color.accent
-  readonly property color muted: Color.muted
+  readonly property color accentText: omagram.ink(Model.readableColor(Color.accent, omagram.background, omagram.foreground, 4.5))
+  readonly property color onAccent: omagram.ink(Model.inkOnFill(Color.accent, [omagram.foreground, omagram.background], 4.5))
+  readonly property color muted: omagram.ink(Model.readableColor(Color.muted, omagram.background, omagram.foreground, 4.5))
+
+  function ink(c) { return Qt.rgba(c.r, c.g, c.b, 1) }
   readonly property color urgent: Color.urgent
   readonly property color selected: Color.menu.selectedBackground
   readonly property string fontFamily: Style.font.menuFamily

@@ -220,7 +220,7 @@ FocusScope {
           anchors.centerIn: parent
           visible: !modelData.cover
           text: String.fromCodePoint(modelData.glyph || 0xF0150)
-          color: app.accent
+          color: app.foreground
           font.family: app.glyphFamily
           font.pixelSize: Style.font.title
         }

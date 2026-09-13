@@ -32,7 +32,7 @@ Rectangle {
     id: label
     anchors.centerIn: parent
     text: button.busy ? "…" : button.text
-    color: button.primary ? app.background : app.foreground
+    color: button.primary ? app.onAccent : app.foreground
     font.family: app.fontFamily
     font.pixelSize: Style.font.body
     font.bold: button.primary

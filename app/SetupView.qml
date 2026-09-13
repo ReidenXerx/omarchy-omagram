@@ -52,7 +52,7 @@ FocusScope {
         width: parent.width
         wrapMode: Text.WordWrap
         text: "An unofficial Telegram client for Omarchy. It is not made or endorsed by Telegram."
-        color: app.accent
+        color: app.foreground
         font.family: app.fontFamily
         font.pixelSize: Style.font.title
       }
@@ -61,7 +61,7 @@ FocusScope {
         width: parent.width
         wrapMode: Text.WordWrap
         textFormat: Text.StyledText
-        linkColor: app.accent
+        linkColor: app.accentText
         text: "To connect, Telegram needs an API id and hash that belong to you. Sign in at "
           + "<a href=\"https://my.telegram.org/apps\">my.telegram.org</a>, open "
           + "<b>API development tools</b>, create an app, and copy its two values here. "

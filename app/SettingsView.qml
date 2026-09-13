@@ -861,7 +861,7 @@ FocusScope {
       // md-close (U+F0156)
       Text {
         text: String.fromCodePoint(0xF0156)
-        color: closeArea.containsMouse ? settings.app.accent : settings.app.muted
+        color: closeArea.containsMouse ? settings.app.foreground : settings.app.muted
         font.family: settings.app.glyphFamily
         font.pixelSize: Style.font.title
         MouseArea {
@@ -915,7 +915,7 @@ FocusScope {
             width: choiceLabel.implicitWidth + Style.space(18)
             height: Style.space(28)
             radius: Style.cornerRadius
-            color: choiceArea.containsMouse ? Qt.rgba(settings.app.accent.r, settings.app.accent.g, settings.app.accent.b, 0.3)
+            color: choiceArea.containsMouse ? Qt.rgba(settings.app.foreground.r, settings.app.foreground.g, settings.app.foreground.b, 0.14)
                  : (choice.modelData.yes ? Qt.rgba(settings.app.urgent.r, settings.app.urgent.g, settings.app.urgent.b, 0.2) : "transparent")
             Text {
               id: choiceLabel
@@ -1019,7 +1019,7 @@ FocusScope {
           spacing: Style.space(2)
           Text {
             text: row.modelData.title || ""
-            color: settings.app.accent
+            color: settings.app.foreground
             font.family: settings.app.fontFamily
             font.pixelSize: Style.font.bodySmall
             font.bold: true

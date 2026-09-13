@@ -329,7 +329,7 @@ FocusScope {
           anchors.rightMargin: Style.space(14)
           anchors.verticalCenter: parent.verticalCenter
           text: String.fromCodePoint(0xF0CB6)
-          color: newArea.containsMouse ? app.accent : app.muted
+          color: newArea.containsMouse ? app.foreground : app.muted
           font.family: app.glyphFamily
           font.pixelSize: Style.font.body
           MouseArea {
@@ -349,7 +349,7 @@ FocusScope {
           anchors.rightMargin: Style.space(12)
           anchors.verticalCenter: parent.verticalCenter
           text: String.fromCodePoint(0xF0493)
-          color: gearArea.containsMouse ? app.accent : app.muted
+          color: gearArea.containsMouse ? app.foreground : app.muted
           font.family: app.glyphFamily
           font.pixelSize: Style.font.body
           MouseArea {
@@ -609,7 +609,7 @@ FocusScope {
                 Text {
                   visible: row.chat.kind === "secret"
                   text: String.fromCodePoint(0xF033E)
-                  color: app.accent
+                  color: app.accentText
                   font.family: app.glyphFamily
                   font.pixelSize: Style.font.bodySmall
                 }
@@ -627,7 +627,7 @@ FocusScope {
 
                 Text {
                   text: row.chat.lastMessage ? Model.listTime(row.chat.lastMessage.date, root.nowMs) : ""
-                  color: row.chat.unread > 0 && !row.chat.muted ? app.accent : app.muted
+                  color: row.chat.unread > 0 && !row.chat.muted ? app.foreground : app.muted
                   font.family: app.fontFamily
                   font.pixelSize: Style.font.caption
                 }
@@ -645,7 +645,7 @@ FocusScope {
                   elide: Text.ElideRight
                   maximumLineCount: 1
                   textFormat: Text.PlainText
-                  color: activity ? app.accent : (draft ? app.urgent : app.muted)
+                  color: activity ? app.accentText : (draft ? app.urgent : app.muted)
                   font.family: app.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   text: {
@@ -687,7 +687,7 @@ FocusScope {
                     id: badge
                     anchors.centerIn: parent
                     text: row.chat.mentions > 0 ? "@" : (row.chat.unread > 999 ? "999+" : (row.chat.unread > 0 ? String(row.chat.unread) : ""))
-                    color: app.background
+                    color: row.chat.muted ? app.background : app.onAccent
                     font.family: app.fontFamily
                     font.pixelSize: Style.font.caption
                     font.bold: true

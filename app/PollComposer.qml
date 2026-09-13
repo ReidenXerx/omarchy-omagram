@@ -234,7 +234,7 @@ FocusScope {
             Text {
               visible: dialog.quiz
               text: answerRow.index === dialog.rightRow ? "●" : "○"
-              color: answerRow.index === dialog.rightRow ? dialog.app.accent : dialog.app.muted
+              color: answerRow.index === dialog.rightRow ? dialog.app.accentText : dialog.app.muted
               font.family: dialog.app.fontFamily
               font.pixelSize: Style.font.title
               MouseArea {
