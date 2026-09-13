@@ -141,8 +141,8 @@ FocusScope {
     out.push({ kind: "logout", label: "Sign out of Telegram on this computer" })
     out.push({ kind: "header", title: "Shortcuts that work anywhere",
                note: "Registered with Hyprland, never written into your config. They need Super, Ctrl or Alt." },
-             { kind: "global", id: "global.quickReply", label: "Quick reply: find a chat and answer" },
-             { kind: "global", id: "global.panel", label: "The bar panel" },
+             { kind: "global", id: "global.quickReply", label: "The quick view, as an overlay" },
+             { kind: "global", id: "global.panel", label: "The quick view, in the bar's panel" },
              { kind: "global", id: "global.openWindow", label: "Open Omagram" })
     for (var s = 0; s < Keymap.SECTIONS.length; s++) {
       var section = Keymap.SECTIONS[s]

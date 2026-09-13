@@ -4,8 +4,8 @@
 endorsed or supported by Telegram. It is built on TDLib, Telegram's own client library, and
 you sign in with an API id of your own.
 
-A keyboard-driven window in your Omarchy theme, a bar badge with a quick panel, a quick-reply
-overlay on a key, and desktop notifications you can answer without leaving what you are doing.
+A keyboard-driven window in your Omarchy theme, a bar badge, a quick view in its panel or on a
+key, and desktop notifications you can answer without leaving what you are doing.
 
 ![service](https://img.shields.io/badge/omarchy-service-blue) ![bar widget](https://img.shields.io/badge/omarchy-bar--widget-blue) ![overlay](https://img.shields.io/badge/omarchy-overlay-blue)
 
@@ -75,15 +75,19 @@ overlay on a key, and desktop notifications you can answer without leaving what 
 - **Search** — chats in every list, and messages in all chats or in the open one.
 - **Notifications** — one per chat, replaced as messages arrive and withdrawn when you read
   them anywhere, with the chat's photo beside them, or a thumbnail of a photo, sticker or video
-  just sent. **Open** opens the chat; **Reply** opens the quick-reply overlay on it; **Mark as
+  just sent. **Open** opens the chat; **Reply** opens the quick view on it; **Mark as
   read**, **Mute for an hour** and **👍** (a reaction to the message) work without opening anything.
   Each person has a quiet sound of their own, a few notes picked from who they are, so you can tell
   who wrote without looking; Settings picks the instrument (or turns it off) and a person's info can
   play theirs or give them another. Not while Do Not Disturb is on.
   Telegram's own mute settings and Omarchy's Do Not Disturb apply.
 - **In the bar** — a message icon with a dot while unmuted chats have unread messages. Left
-  click opens a panel of recent chats where you can reply inline; right click opens the window.
-- **Quick reply** — an overlay to find a chat by typing, read its latest messages and answer.
+  click opens the quick view under it; right click opens the window.
+- **Quick view** — in the bar's panel, or as an overlay on a key: find a chat by typing, read its
+  latest messages and answer without leaving what you are doing — in words, with one of your
+  recent stickers, or with a voice or round video message recorded on the spot (`Enter` sends it,
+  `Esc` throws it away). Voice and round video messages play right there, and a sticker someone
+  sent shows bigger under the pointer.
 
 Calls cannot be taken in Omagram: TDLib carries a call's signalling but no voice engine. An
 incoming call is shown so you can decline it or answer in another Telegram app.
@@ -220,18 +224,22 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 joining a group, opening a file that could run a program), `Enter` answers yes and `Esc` no. In
 the forward dialog, type to find a chat, `↑` `↓` or `Ctrl+N` `Ctrl+P` choose and `Enter` forwards.
 
-**From anywhere** — pick keys for quick reply, the bar panel and opening Omagram in Settings →
-*Shortcuts that work anywhere*. Omagram registers them with Hyprland while it runs, never writes
-them into your Hyprland config, leaves combinations you already use alone (Settings shows them as
-taken), and only ever removes bindings it made. Or bind the commands yourself:
+**From anywhere** — pick keys for the quick view (as an overlay or in the bar's panel) and for
+opening Omagram in Settings → *Shortcuts that work anywhere*. Omagram registers them with Hyprland
+while it runs, never writes them into your Hyprland config, leaves combinations you already use
+alone (Settings shows them as taken), and only ever removes bindings it made. Or bind the commands
+yourself:
 
 ```bash
-omarchy-shell shell toggle reidenxerx.omagram '{}'   # quick reply: find a chat and answer
-omarchy-shell reidenxerx.omagram.panel toggle        # the bar panel
+omarchy-shell shell toggle reidenxerx.omagram '{}'   # the quick view as an overlay
+omarchy-shell reidenxerx.omagram.panel toggle        # the quick view in the bar's panel
 ```
 
-In the quick-reply overlay: type to search, `↑` `↓` or `Ctrl+J` `Ctrl+K` to choose, `Enter`
-to reply and `Enter` again to send, `Ctrl+O` to open the chat in the window, `Esc` to go back.
+In the quick view: type to search, `↑` `↓` or `Ctrl+J` `Ctrl+K` to choose, `Enter` to answer and
+`Enter` again to send. In a chat, `Ctrl+R` records a voice message and `Ctrl+Shift+R` a round
+video message (`Enter` sends it, `Esc` throws it away), `Ctrl+S` opens your recent stickers,
+`Ctrl+P` plays the newest voice or round video message (again to stop), `Ctrl+O` opens the chat
+in the window and `Esc` goes back.
 
 ## How it is put together
 
@@ -241,8 +249,8 @@ to reply and `Enter` again to send, `Ctrl+O` to open the chat in the window, `Es
 - **`bin/omagram`** — opens or focuses the window, a separate Quickshell process with its own
   Hyprland class `omagram`, so it tiles and takes window rules like any application.
   `omagram --chat <id>` opens it at a chat.
-- **`shell/`** — the parts that live inside Omarchy's shell: the service entry, the bar widget
-  and its panel, and the quick-reply overlay.
+- **`shell/`** — the parts that live inside Omarchy's shell: the service entry, the bar widget,
+  and the quick view it shows in its panel and in the overlay.
 
 ## Privacy and security
 
@@ -255,6 +263,9 @@ to reply and `Enter` again to send, `Ctrl+O` to open the chat in the window, `Es
   verbosity it records message text.
 - **Only you can talk to the service.** Its socket is `0600` in your runtime directory, and it
   checks every connection's user id.
+- **The microphone and camera are used only while you record.** A voice or round video message
+  records from the moment you start it until you send it or throw it away, in the window or in
+  the quick view, which shows a bar the whole time; one you throw away is deleted at once.
 - **Telegram content is shown as text.** Names and previews are rendered as plain text, message
   formatting is escaped before it is drawn, and notification bodies are escaped, because
   Omarchy's notifications render markup and links. Links lead only to web and mail addresses

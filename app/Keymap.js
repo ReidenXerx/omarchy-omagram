@@ -16,8 +16,8 @@ var KEYS_MAX = 6
 
 // Where an action applies. Within the window, "window" shortcuts work anywhere and win over
 // every other key handler, so they clash with keys in every other scope of the window; the rest
-// only clash within their own scope. The bar panel and the quick-reply overlay live in
-// Omarchy's shell, never in the same window as the rest.
+// only clash within their own scope. The quick view, in the bar's panel and in the overlay, lives
+// in Omarchy's shell, never in the same window as the rest.
 var SECTIONS = [
   { id: "window", title: "Anywhere in Omagram", scope: "window", app: "window" },
   { id: "list", title: "Chat list", scope: "list", app: "window" },
@@ -37,9 +37,8 @@ var SECTIONS = [
   { id: "newChat", title: "Starting a chat", scope: "newChat", app: "window" },
   { id: "poll", title: "Making a poll", scope: "poll", app: "window" },
   { id: "topics", title: "A forum's topics", scope: "topics", app: "window" },
-  { id: "panel", title: "Bar panel", scope: "panel", app: "shell" },
-  { id: "quick", title: "Quick reply: finding a chat", scope: "quick", app: "shell" },
-  { id: "quickMessage", title: "Quick reply: writing", scope: "quickMessage", app: "shell" }
+  { id: "quick", title: "Quick view: finding a chat", scope: "quick", app: "shell" },
+  { id: "quickMessage", title: "Quick view: in a chat", scope: "quickMessage", app: "shell" }
 ]
 
 var ACTIONS = [
@@ -202,9 +201,6 @@ var ACTIONS = [
   { id: "topics.up", label: "Previous topic", keys: ["Up", "K"] },
   { id: "topics.open", label: "Open the topic", keys: ["Return", "Enter", "L", "Right"] },
 
-  { id: "panel.reply", label: "Reply to the chat", keys: ["R"] },
-  { id: "panel.openInWindow", label: "Open it in the window", keys: ["O"] },
-
   { id: "quick.down", label: "Next chat", keys: ["Down", "Ctrl+J", "Ctrl+N"] },
   { id: "quick.up", label: "Previous chat", keys: ["Up", "Ctrl+K", "Ctrl+P"] },
   { id: "quick.pageDown", label: "Eight chats down", keys: ["PgDown"] },
@@ -215,7 +211,11 @@ var ACTIONS = [
 
   { id: "quickMessage.send", label: "Send", keys: ["Return", "Enter"] },
   { id: "quickMessage.back", label: "Back to finding a chat", keys: ["Esc"] },
-  { id: "quickMessage.openInWindow", label: "Open it in the window", keys: ["Ctrl+O"] }
+  { id: "quickMessage.openInWindow", label: "Open it in the window", keys: ["Ctrl+O"] },
+  { id: "quickMessage.voice", label: "Record a voice message: Enter sends it, Esc throws it away", keys: ["Ctrl+R"] },
+  { id: "quickMessage.videoNote", label: "Record a round video message: Enter sends it, Esc throws it away", keys: ["Ctrl+Shift+R"] },
+  { id: "quickMessage.play", label: "Listen to the newest voice or round video message, or stop", keys: ["Ctrl+P"] },
+  { id: "quickMessage.stickers", label: "Stickers to send", keys: ["Ctrl+S"] }
 ]
 
 var MODIFIER_KEYS = [0x01000020, 0x01000021, 0x01000022, 0x01000023, 0x01001103, 0x01000024, 0x01000025]
@@ -357,12 +357,6 @@ function matchesInText(overrides, id, event) {
   if (!event) return false
   var sequence = fromEvent(event.key, event.modifiers)
   return sequence !== "" && !types(sequence) && keysFor(overrides, id).indexOf(sequence) >= 0
-}
-
-// A key typed in a panel's key catcher arrives as text ("r").
-function matchesText(overrides, id, text) {
-  var sequence = normalize(String(text || ""))
-  return sequence !== "" && keysFor(overrides, id).indexOf(sequence) >= 0
 }
 
 // Only what differs from the defaults is stored.
