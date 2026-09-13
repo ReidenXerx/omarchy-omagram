@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError, autoDownload, downloadText, nextDownloadRule, scopeText, previewsText, folderSummary, newFolder, folderProblem, movedFolders, moreMenu, diceMenu, parseLocation, locationText, pollProblem }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError, autoDownload, downloadText, nextDownloadRule, scopeText, previewsText, folderSummary, newFolder, folderProblem, movedFolders, moreMenu, diceMenu, parseLocation, locationText, pollProblem, parseDay }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -559,6 +559,20 @@ test("your profile: what can go to Telegram, its refusals in words, what each ro
      ["Ann", "None", "@ann_lee", "None", "+15550100", "None"])
   eq(M.profileValue(null, "bio"), "Loading…")
   eq([M.profileChat(Object.assign({}, p, { lastName: "Lee" })).title, M.profileChat(null)], ["Ann Lee", null])
+})
+
+test("going to a date, and who reacted or has seen a message", () => {
+  const now = new Date(2026, 8, 13, 12, 0).getTime()
+  const day = (y, mo, d) => new Date(y, mo, d).getTime() / 1000
+  eq(["today", "Yesterday", "2026-09-01", "01.09.2026", "1.9", "25.12", "1 Sep", "Sept 1", "1 September", "31.02.2026", "2027-01-01", "1 sepx", "soon", ""]
+       .map(t => M.parseDay(t, now)),
+     [day(2026, 8, 13), day(2026, 8, 12), day(2026, 8, 1), day(2026, 8, 1), day(2026, 8, 1), day(2025, 11, 25), day(2026, 8, 1), day(2026, 8, 1),
+      day(2026, 8, 1), null, null, null, null, null])
+  const message = (extra) => Object.assign({ id: 3, chatId: 1, content: { kind: "text", text: "hi", entities: [] }, reactions: [] }, extra)
+  const people = (m, p) => M.messageMenu(m, p, false, { kind: "group" }).map(i => i.id).filter(id => id === "reactions" || id === "viewers")
+  eq([people(message({ canSeeReactions: true, reactions: [{ emoji: "❤", count: 1 }] }), { canGetViewers: true }),
+      people(message({ canSeeReactions: true }), { canGetViewers: false }), people(message({ reactions: [{ emoji: "❤", count: 1 }] }), null)],
+     [["reactions", "viewers"], [], []])
 })
 
 test("a sticker's menu: favorites, and its set", () => {

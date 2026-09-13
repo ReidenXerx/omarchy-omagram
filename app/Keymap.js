@@ -60,6 +60,8 @@ var ACTIONS = [
   { id: "window.settings", label: "Settings", keys: ["Ctrl+,"] },
   { id: "window.emoji", label: "Emoji", keys: ["Ctrl+;", "Ctrl+."] },
   { id: "window.nextMention", label: "Jump to the next mention of you", keys: ["Ctrl+M"] },
+  { id: "window.nextReaction", label: "Jump to the next reaction you have not seen", keys: ["Ctrl+Shift+E"] },
+  { id: "window.jumpToDate", label: "Go to a date in the chat", keys: ["Ctrl+Shift+J"] },
   { id: "window.mute", label: "Mute or unmute the open chat", keys: ["Ctrl+Shift+M"] },
   { id: "window.pinnedMessage", label: "Go to the pinned message", keys: ["Ctrl+Shift+P"] },
   { id: "window.chatInfo", label: "Show or hide the chat's info", keys: ["Ctrl+I"] },

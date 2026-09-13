@@ -902,6 +902,7 @@ class State:
             "forward": self.forward_view(m.get("forward_info")),
             "albumId": str(album) if album else "",
             "reactions": reactions,
+            "canSeeReactions": _obj(_obj(m.get("interaction_info")).get("reactions")).get("can_get_added_reactions") is True,
             "views": views,
             "markup": reply_markup(m.get("reply_markup")),
             "topicId": topic_id(m.get("topic_id")),
@@ -1071,6 +1072,7 @@ class State:
             "userId": chat["userId"],
             "unread": chat["unread"],
             "mentions": chat["mentions"],
+            "unreadReactions": chat.get("reactions", 0),   # messages of yours with reactions you have not seen
             "muted": chat["muteFor"] > 0,
             # int64 order, as text: a JavaScript number would round it and shuffle the list.
             "order": str(main.get("order", 0)),
@@ -1145,6 +1147,7 @@ class State:
             "markedUnread": c.get("is_marked_as_unread") is True,
             "unread": max(0, _int(c.get("unread_count"))),
             "mentions": max(0, _int(c.get("unread_mention_count"))),
+            "reactions": max(0, _int(c.get("unread_reaction_count"))),
             "muteFor": max(0, _int(_obj(c.get("notification_settings")).get("mute_for"))),
             "positions": {},
             "lastReadInbox": _int(c.get("last_read_inbox_message_id")),
@@ -1228,6 +1231,16 @@ class State:
             return []
         chat["mentions"] = max(0, _int(u.get("unread_mention_count")))
         return self._chat_event(chat["id"])
+
+    def _on_updateChatUnreadReactionCount(self, u):
+        chat = self._chat(_int(u.get("chat_id")))
+        if not chat:
+            return []
+        chat["reactions"] = max(0, _int(u.get("unread_reaction_count")))
+        return self._chat_event(chat["id"])
+
+    def _on_updateMessageUnreadReactions(self, u):
+        return self._on_updateChatUnreadReactionCount(u)
 
     def _on_updateChatNotificationSettings(self, u):
         chat = self._chat(_int(u.get("chat_id")))

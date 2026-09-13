@@ -59,7 +59,8 @@ FocusScope {
   property var menuReactions: []
   property bool menuToComposer: false
   readonly property bool modalOpen: messageMenu.visible || muteMenu.visible || sendMenu.visible || rescheduleMenu.visible
-                                    || moreMenu.visible || diceMenu.visible || peoplePicker.visible || pollComposer.visible
+                                    || moreMenu.visible || diceMenu.visible || peoplePicker.visible || pollComposer.visible || peopleList.visible
+  readonly property var people: peopleList    // who reacted or has seen a message, for checks from outside
   readonly property var polls: pollComposer   // the poll being made, for checks from outside
   property bool blocked: false        // a dialog over the whole window, such as choosing where to forward
   property bool confirmDeleteRevoke: true
@@ -183,6 +184,7 @@ FocusScope {
     root.attachments = []
     root.joiningChatId = 0
     root.locationOpen = false
+    root.dateOpen = false
     root.scheduledOpen = false
     root.scheduledMessages = []
     // The chat's draft, as Telegram keeps it: you continue where you left off, on any device.
@@ -268,8 +270,39 @@ FocusScope {
     if (person && person.userId) root.sendExtra("message.sendContact", { userId: person.userId }, "the contact card")
   }
 
+  property bool dateOpen: false
+  readonly property var typedDay: root.dateOpen ? Model.parseDay(dateField.text, root.nowMs) : null
+
+  function openDateBar() {
+    if (!root.chat) return
+    root.locationOpen = false
+    dateField.text = ""
+    root.dateOpen = true
+    dateField.forceActiveFocus()
+  }
+
+  function closeDateBar() {
+    root.dateOpen = false
+    dateField.text = ""
+    root.focusComposer()
+  }
+
+  // The last message sent by the end of that day: the chat opens around it.
+  function jumpToDay() {
+    var start = Model.parseDay(dateField.text, root.nowMs)
+    if (start === null || !root.chat) return
+    var chatId = root.chat.id
+    client.request("chat.messageByDate", { chatId: chatId, date: start + 86399 }, function (answer) {
+      if (!root.chat || root.chat.id !== chatId) return
+      if (answer.ok && answer.result.messageId) root.jumpTo(answer.result.messageId)
+      else root.flash("No messages on or before that day")
+    })
+    root.closeDateBar()
+  }
+
   function openLocationBar() {
     locationField.text = ""
+    root.dateOpen = false
     root.locationOpen = true
     locationField.forceActiveFocus()
   }
@@ -372,6 +405,8 @@ FocusScope {
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "voice.cancel"); enabled: root.recordingVoice && !app.settingsOpen; onActivated: root.stopVoice(false) }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.emoji"); enabled: root.shortcutsOn; onActivated: root.openEmoji() }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.nextMention"); enabled: root.shortcutsOn; onActivated: root.nextMention() }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.nextReaction"); enabled: root.shortcutsOn; onActivated: root.nextReaction() }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.jumpToDate"); enabled: root.shortcutsOn; onActivated: root.openDateBar() }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.mute"); enabled: root.shortcutsOn; onActivated: app.toggleMute(root.chat.id) }
   Shortcut {
     sequences: Keymap.keysFor(app.shortcuts, "window.pinnedMessage")
@@ -717,6 +752,8 @@ FocusScope {
     else if (id === "thread") root.openThread(message)
     else if (id === "favoriteSticker") root.favoriteSticker(message)
     else if (id === "stickerSet") root.openStickerSet(message)
+    else if (id === "reactions") root.showReactions(message)
+    else if (id === "viewers") root.showViewers(message)
     else if (id === "copy") root.copyText(message.content.text)
     else if (id === "link") root.copyLink(message)
     else if (id === "edit") root.startEdit(root.captionHolder(message), true)
@@ -1016,6 +1053,51 @@ FocusScope {
         client.request("chat.readMentions", root.target({ chatId: chatId }))
       }
     })
+  }
+
+  // The next message of yours with a reaction you have not seen; seeing it reads its reactions.
+  function nextReaction() {
+    if (!root.chat) return
+    var chatId = root.chat.id
+    client.request("chat.nextReaction", root.target({ chatId: chatId }), function (answer) {
+      if (!answer.ok || !root.chat || root.chat.id !== chatId) return
+      if (answer.result.messageId) {
+        root.jumpTo(answer.result.messageId)
+        app.markRead(chatId, [answer.result.messageId])
+      } else {
+        client.request("chat.readReactions", root.target({ chatId: chatId }))
+      }
+    })
+  }
+
+  function showReactions(message) {
+    if (!message) return
+    peopleList.open("Who reacted")
+    client.request("message.reactions", { chatId: message.chatId, messageId: message.id }, function (answer) {
+      if (!peopleList.visible) return
+      if (!answer.ok) { peopleList.show([]); root.flash(answer.error || "Telegram did not say who reacted"); return }
+      peopleList.show((answer.result.reactions || []).map(function (r) {
+        return { type: r.type, id: r.id, name: r.name, detail: (r.emoji || "a reaction") + "   " + Model.listTime(r.date, root.nowMs) }
+      }))
+    })
+  }
+
+  function showViewers(message) {
+    if (!message) return
+    peopleList.open("Who has seen it")
+    client.request("message.viewers", { chatId: message.chatId, messageId: message.id }, function (answer) {
+      if (!peopleList.visible) return
+      if (!answer.ok) { peopleList.show([]); root.flash(answer.error || "Telegram did not say who has seen it"); return }
+      peopleList.show((answer.result.viewers || []).map(function (v) {
+        return { type: "user", id: v.userId, name: v.name, detail: v.date ? "seen " + Model.listTime(v.date, root.nowMs) : "seen" }
+      }))
+    })
+  }
+
+  function openPerson(row) {
+    root.focusMessages()
+    if (row.type === "user") root.openUser(row.id)
+    else app.openChatById(row.id, false)
   }
 
   function toBottom() {
@@ -1732,6 +1814,12 @@ FocusScope {
         spacing: Style.space(14)
 
         FloatButton {
+          visible: count > 0 && !root.scheduledOpen
+          glyph: String.fromCodePoint(0xF02D5)   // md-heart-outline
+          count: root.chat && root.chat.unreadReactions > 0 ? root.chat.unreadReactions : 0
+          onActivated: root.nextReaction()
+        }
+        FloatButton {
           visible: !!root.chat && root.chat.mentions > 0 && !root.scheduledOpen
           glyph: String.fromCodePoint(0xF0065)   // md-at
           count: root.chat ? root.chat.mentions : 0
@@ -1963,6 +2051,45 @@ FocusScope {
       onClosed: {
         root.stickersOpen = false
         root.focusComposer()
+      }
+    }
+
+    // ------------------------------------------------ a date to go to
+    Rectangle {
+      Layout.fillWidth: true
+      Layout.preferredHeight: visible ? dateColumn.implicitHeight + Style.space(20) : 0
+      visible: root.dateOpen && !!root.chat && !root.showTopics
+      color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.03)
+
+      Rectangle { width: parent.width; height: 1; color: app.border; opacity: 0.35 }
+
+      Column {
+        id: dateColumn
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: Style.space(10)
+        spacing: Style.space(4)
+
+        Field {
+          id: dateField
+          width: parent.width
+          app: root.app
+          label: "Go to a date: today, yesterday, 1 Sep, 01.09.2026 or 2026-09-01   ·   Enter goes   ·   Esc cancels"
+          placeholder: "1 Sep"
+          maximumLength: 32
+          error: dateField.text.trim() !== "" && root.typedDay === null ? "That is not a day to go to" : ""
+          onAccepted: root.jumpToDay()
+          Keys.onEscapePressed: root.closeDateBar()
+        }
+        Text {
+          visible: root.typedDay !== null
+          text: "Goes to the last message of " + Model.dayLabel(root.typedDay || 0, root.nowMs)
+          textFormat: Text.PlainText
+          color: app.muted
+          font.family: app.fontFamily
+          font.pixelSize: Style.font.caption
+        }
       }
     }
 
@@ -2589,6 +2716,14 @@ FocusScope {
       root.focusComposer()
       if (root.chat && Model.muteSeconds(id) >= 0) app.muteChat(root.chat.id, Model.muteSeconds(id))
     }
+  }
+
+  PeopleList {
+    id: peopleList
+    anchors.fill: parent
+    app: root.app
+    onPicked: function (row) { root.openPerson(row) }
+    onDismissed: root.focusMessages()
   }
 
   // The + button: a poll, dice, a person's contact card, a location.

@@ -343,6 +343,18 @@ class Chats(unittest.TestCase):
 
 
 class Messages(unittest.TestCase):
+    def test_unread_reactions_and_who_reacted(self):
+        s = model.State()
+        s.apply({"@type": "updateNewChat", "chat": dict(chat(7, "Ann"), unread_reaction_count=2)})
+        self.assertEqual(s.chat_view(7)["unreadReactions"], 2)
+        out = s.apply({"@type": "updateMessageUnreadReactions", "chat_id": 7, "message_id": 3, "unread_reactions": [], "unread_reaction_count": 1})
+        self.assertEqual((out[0]["chat"]["unreadReactions"], s.chat_view(7)["unreadReactions"]), (1, 1))
+        s.apply({"@type": "updateChatUnreadReactionCount", "chat_id": 7, "unread_reaction_count": 0})
+        self.assertEqual(s.chat_view(7)["unreadReactions"], 0)
+        listed = s.message(text_message(9, 7, "hi", interaction_info={"@type": "messageInteractionInfo", "reactions": {
+            "@type": "messageReactions", "reactions": [], "can_get_added_reactions": True}}))
+        self.assertEqual((listed["canSeeReactions"], s.message(text_message(10, 7, "hi"))["canSeeReactions"]), (True, False))
+
     def test_a_sticker_knows_its_set(self):
         media = model.media_for("sticker", {"sticker": {"@type": "sticker", "set_id": "9223372036854775807", "emoji": "🐼",
                                                         "sticker": {"@type": "file", "id": 5, "size": 10}}}, "")

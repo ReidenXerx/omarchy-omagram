@@ -821,6 +821,8 @@ function messageMenu(message, properties, translated, chat) {
   var out = []
   if (!p || p.canReply) out.push({ id: "reply", label: "Reply" })
   if (p && p.canGetThread) out.push({ id: "thread", label: isObject(chat) && chat.kind === "channel" ? "Comments" : "Replies" })
+  if (message.canSeeReactions && toList(message.reactions).length) out.push({ id: "reactions", label: "Who reacted" })
+  if (p && p.canGetViewers) out.push({ id: "viewers", label: "Who has seen it" })
   if (c.text && (!p || p.canSave !== false)) out.push({ id: "copy", label: "Copy text" })
   // Telegram translates on its servers, which never see a secret chat's messages.
   if (c.text && !(isObject(chat) && chat.kind === "secret"))
@@ -1326,6 +1328,40 @@ function profileChat(profile) {
   if (!isObject(profile)) return null
   return { id: 0, kind: "private", userId: 0, photo: profile.photo || null,
            title: [profile.firstName, profile.lastName].filter(function (part) { return !!part }).join(" ") }
+}
+
+// ---------------------------------------------------------------- going to a date
+
+// A month typed as at least its first three letters: "sep", "sept" and "september" are 8; -1 when it is none.
+function monthOf(word) {
+  for (var i = 0; i < MONTHS_LONG.length; i++) if (word.length >= 3 && MONTHS_LONG[i].toLowerCase().indexOf(word) === 0) return i
+  return -1
+}
+
+// A day without a year given is this year's, or last year's when this year's is still ahead.
+function dayOf(date, month, year, now) {
+  var y = year !== undefined ? Number(year) : now.getFullYear()
+  var d = new Date(y, month, date)
+  if (d.getMonth() !== month || d.getDate() !== date) return null
+  if (year === undefined && d.getTime() > now.getTime()) d = new Date(y - 1, month, date)
+  return d
+}
+
+// The start of a day you typed, local time, in seconds: "today", "yesterday", "2026-09-01", "01.09.2026",
+// "1.9", "1 Sep" or "Sep 1". null when it is not a day, or it is still to come.
+function parseDay(text, nowMs) {
+  var s = String(text === undefined || text === null ? "" : text).trim().toLowerCase()
+  var now = new Date(nowMs)
+  var day = null
+  var m = null
+  if (s === "today") day = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  else if (s === "yesterday") day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
+  else if ((m = /^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})$/.exec(s)) !== null) day = dayOf(Number(m[3]), Number(m[2]) - 1, m[1], now)
+  else if ((m = /^([0-9]{1,2})[.]([0-9]{1,2})(?:[.]([0-9]{4}))?$/.exec(s)) !== null) day = dayOf(Number(m[1]), Number(m[2]) - 1, m[3], now)
+  else if ((m = /^([0-9]{1,2}) ([a-z]+)$/.exec(s)) !== null && monthOf(m[2]) >= 0) day = dayOf(Number(m[1]), monthOf(m[2]), undefined, now)
+  else if ((m = /^([a-z]+) ([0-9]{1,2})$/.exec(s)) !== null && monthOf(m[1]) >= 0) day = dayOf(Number(m[2]), monthOf(m[1]), undefined, now)
+  if (!day || isNaN(day.getTime()) || day.getTime() > nowMs) return null
+  return Math.floor(day.getTime() / 1000)
 }
 
 // ---------------------------------------------------------------- more to send: dice, contact cards, locations

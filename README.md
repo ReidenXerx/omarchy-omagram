@@ -28,8 +28,8 @@ overlay on a key, and desktop notifications you can answer without leaving what 
 - **Messages** — send, reply, edit, forward, pin, react and delete (for you or for everyone),
   or select several and act on them at once. Read ticks, "typing…", last seen and the pinned
   message above the chat, with read state kept in sync with your other devices. Right-click a
-  message (or press `m`) for everything Telegram allows on it, translation included. Send without
-  sound, at a time you pick or once the other person is online (`Ctrl+Alt+Enter`). Search finds public
+  message (or press `m`) for everything Telegram allows on it: translation, who reacted to it, and
+  in a group who has seen yours. Send without sound, at a time you pick or once the other person is online (`Ctrl+Alt+Enter`). Search finds public
   groups and channels by name too; one you open is joined from the bar that takes the message box's
   place. The + button (`Ctrl+Shift+A`) sends a poll or a quiz, dice, a person's contact card, or a
   location: coordinates, or a Google Maps or OpenStreetMap link pasted in.
@@ -139,6 +139,8 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | chat list / messages / composer |
 | `Ctrl+;` or `Ctrl+.` | emoji |
 | `Ctrl+M` | jump to the next message that mentions you |
+| `Ctrl+Shift+E` | jump to the next reaction to your messages you have not seen |
+| `Ctrl+Shift+J` | go to a date in the chat (today, yesterday, 1 Sep, 01.09.2026) |
 | `Ctrl+Shift+M` | mute or unmute the open chat |
 | `Ctrl+Shift+P` | go to the pinned message |
 | `Ctrl+I` | the chat's info (`Tab` switches its tabs, `Enter` opens, `Esc` closes) |

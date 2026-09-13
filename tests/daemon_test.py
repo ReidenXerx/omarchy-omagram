@@ -812,7 +812,7 @@ class MessageActions(Harness):
                           "can_be_forwarded": True, "can_be_pinned": True}, chatId=42, messageId=7)
         self.assertEqual(r["result"], {"canDeleteForAll": True, "canDeleteForMe": False, "canEdit": False, "canForward": True,
                                        "canPin": True, "canCopy": False, "canReply": False, "canGetLink": False, "canSave": False,
-                                       "canGetThread": False})
+                                       "canGetThread": False, "canGetViewers": False})
         q, r = self.call(3, "message.link", "getMessageLink", {"@type": "messageLink", "link": "https://t.me/x/7", "is_public": True},
                          chatId=42, messageId=7)
         self.assertEqual(r["result"], {"link": "https://t.me/x/7", "public": True})
@@ -1355,6 +1355,30 @@ class ChatsAndAccount(Harness):
         q, _ = self.call(209, "folders.reorder", "reorderChatFolders", {"@type": "ok"}, ids=[3, 2])
         self.assertEqual((q["chat_folder_ids"], q["main_chat_list_position"]), ([3, 2], 0))
         self.assertFalse(self.request(self.conn, 210, "folders.reorder", ids=[2])["ok"])
+
+    def test_reactions_viewers_and_dates(self):
+        q, r = self.call(240, "chat.nextReaction", "searchChatMessages", {"@type": "foundChatMessages", "messages": [
+            {"@type": "message", "id": 30}, {"@type": "message", "id": 12}]}, chatId=-10077)
+        self.assertEqual((q["filter"], r["result"]), ({"@type": "searchMessagesFilterUnreadReaction"}, {"messageId": 12}))
+        q, _ = self.call(241, "chat.readReactions", "readAllChatReactions", {"@type": "ok"}, chatId=-10077)
+        self.assertEqual(q["chat_id"], -10077)
+        q, _ = self.call(246, "chat.readReactions", "readAllForumTopicReactions", {"@type": "ok"}, chatId=-10077, topicId=5)
+        self.assertEqual((q["chat_id"], q["forum_topic_id"]), (-10077, 5))
+        self.assertFalse(self.request(self.conn, 247, "chat.readReactions", chatId=-10077, threadId=9)["ok"])
+        q, r = self.call(242, "message.reactions", "getMessageAddedReactions", {"@type": "addedReactions", "total_count": 2, "next_offset": "n1",
+            "reactions": [{"@type": "addedReaction", "type": {"@type": "reactionTypeEmoji", "emoji": "❤"}, "date": 1789000000, "is_outgoing": False,
+                           "sender_id": {"@type": "messageSenderUser", "user_id": 500}},
+                          {"@type": "addedReaction", "type": {"@type": "reactionTypeCustomEmoji", "custom_emoji_id": "5"}, "date": 1789000001,
+                           "sender_id": {"@type": "messageSenderChat", "chat_id": -10077}}]}, chatId=-10077, messageId=7)
+        self.assertEqual((q["reaction_type"], q["offset"], q["limit"], r["result"]["total"], r["result"]["nextOffset"]), (None, "", 50, 2, "n1"))
+        self.assertEqual([(x["type"], x["id"], x["name"], x["emoji"]) for x in r["result"]["reactions"]],
+                         [("user", 500, "Ann", "❤"), ("chat", -10077, "Club", "")])
+        _, r = self.call(243, "message.viewers", "getMessageViewers", {"@type": "messageViewers", "viewers": [
+            {"@type": "messageViewer", "user_id": 501, "view_date": 1789000005}, {"@type": "messageViewer", "user_id": 0}]}, chatId=-10077, messageId=7)
+        self.assertEqual(r["result"]["viewers"], [{"userId": 501, "name": "Bob", "date": 1789000005}])
+        q, r = self.call(244, "chat.messageByDate", "getChatMessageByDate", {"@type": "message", "id": 99, "chat_id": -10077}, chatId=-10077, date=1788998400)
+        self.assertEqual((q["date"], r["result"]), (1788998400, {"messageId": 99}))
+        self.assertFalse(self.request(self.conn, 245, "chat.messageByDate", chatId=-10077, date=-5)["ok"])
 
     def test_polls_and_quizzes(self):
         q, _ = self.call(230, "message.sendPoll", "sendMessage", {"@type": "message", "id": 5, "chat_id": -10077},

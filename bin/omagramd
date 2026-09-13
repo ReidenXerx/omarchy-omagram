@@ -224,7 +224,7 @@ SEND_ACTIONS = {"typing": "chatActionTyping", "recordingVoice": "chatActionRecor
 PROPERTIES = {"can_be_deleted_for_all_users": "canDeleteForAll", "can_be_deleted_only_for_self": "canDeleteForMe",
               "can_be_edited": "canEdit", "can_be_forwarded": "canForward", "can_be_pinned": "canPin",
               "can_be_copied": "canCopy", "can_be_replied": "canReply", "can_get_link": "canGetLink",
-              "can_be_saved": "canSave", "can_get_message_thread": "canGetThread"}
+              "can_be_saved": "canSave", "can_get_message_thread": "canGetThread", "can_get_viewers": "canGetViewers"}
 DEFERRED = object()   # a command that answers later, from background work
 PLUGIN_ID = "reidenxerx.omagram"
 PROFILE_NAME_MAX = 64
@@ -1233,6 +1233,64 @@ class Daemon:
         self.td_send({"@type": "searchChatMessages", "chat_id": arg_int(args, "chatId"), "topic_id": self.topic_of(args), "query": "",
                       "sender_id": None, "from_message_id": 0, "offset": 0, "limit": 100,
                       "filter": {"@type": "searchMessagesFilterUnreadMention"}}, client, rid, found)
+
+    def cmd_chat_next_reaction(self, client, rid, args):
+        """The oldest message of yours with a reaction you have not seen, or 0."""
+        def found(event):
+            ids = [i for i in (model._int(model._obj(m, "message").get("id")) for m in model._list(event.get("messages"), 100)) if i]
+            return {"messageId": min(ids) if ids else 0}
+        self.td_send({"@type": "searchChatMessages", "chat_id": arg_int(args, "chatId"), "topic_id": self.topic_of(args), "query": "",
+                      "sender_id": None, "from_message_id": 0, "offset": 0, "limit": 100,
+                      "filter": {"@type": "searchMessagesFilterUnreadReaction"}}, client, rid, found)
+
+    def cmd_chat_read_reactions(self, client, rid, args):
+        topic = self.topic_of(args)
+        if topic is None:
+            self.td_send({"@type": "readAllChatReactions", "chat_id": arg_int(args, "chatId")}, client, rid)
+        elif topic["@type"] == "messageTopicForum":
+            self.td_send({"@type": "readAllForumTopicReactions", "chat_id": arg_int(args, "chatId"),
+                          "forum_topic_id": topic["forum_topic_id"]}, client, rid)
+        else:
+            raise BadRequest("Telegram reads reactions for a whole chat or topic, not for one thread")
+
+    def cmd_message_reactions(self, client, rid, args):
+        """Who reacted to a message, and with what; a page at a time."""
+        offset = args.get("offset", "")
+        if not isinstance(offset, str) or len(offset) > OFFSET_MAX:
+            raise BadRequest("offset is the text a previous answer gave")
+
+        def listed(event):
+            out = []
+            for raw in model._list(event.get("reactions"), 100):
+                r = model._obj(raw, "addedReaction")
+                sender, name = self.state.sender(r.get("sender_id"))
+                kind = model._obj(r.get("type"))
+                if sender["id"] and sender["type"] in ("user", "chat"):
+                    out.append({"type": sender["type"], "id": sender["id"], "name": name or "Someone",
+                                "emoji": model._str(kind.get("emoji"), 16) if kind.get("@type") == "reactionTypeEmoji" else "",
+                                "date": max(0, model._int(r.get("date"))), "outgoing": r.get("is_outgoing") is True})
+            return {"total": max(0, model._int(event.get("total_count"))), "nextOffset": model._str(event.get("next_offset"), OFFSET_MAX),
+                    "reactions": out}
+        self.td_send({"@type": "getMessageAddedReactions", "chat_id": arg_int(args, "chatId"), "message_id": arg_int(args, "messageId", 1),
+                      "reaction_type": None, "offset": offset, "limit": 50}, client, rid, listed)
+
+    def cmd_message_viewers(self, client, rid, args):
+        """Who has seen a recent message of yours in a group, and when."""
+        def listed(event):
+            out = []
+            for raw in model._list(event.get("viewers"), 100):
+                v = model._obj(raw, "messageViewer")
+                uid = model._int(v.get("user_id"))
+                if uid > 0:
+                    out.append({"userId": uid, "name": self.state.user_name(uid) or "Someone", "date": max(0, model._int(v.get("view_date")))})
+            return {"viewers": out}
+        self.td_send({"@type": "getMessageViewers", "chat_id": arg_int(args, "chatId"), "message_id": arg_int(args, "messageId", 1)},
+                     client, rid, listed)
+
+    def cmd_chat_message_by_date(self, client, rid, args):
+        """The last message sent in a chat by a date, in seconds: where going to a date lands."""
+        self.td_send({"@type": "getChatMessageByDate", "chat_id": arg_int(args, "chatId"), "date": arg_int(args, "date", 0, INT32_MAX)},
+                     client, rid, lambda m: {"messageId": model._int(model._obj(m, "message").get("id"))})
 
     def cmd_chat_read_mentions(self, client, rid, args):
         topic = self.topic_of(args)
@@ -2805,6 +2863,11 @@ COMMANDS = {
     "stickers.favorites": ("cmd_stickers_favorites", True),
     "sticker.favorite": ("cmd_sticker_favorite", True),
     "stickers.install": ("cmd_stickers_install", True),
+    "chat.nextReaction": ("cmd_chat_next_reaction", True),
+    "chat.readReactions": ("cmd_chat_read_reactions", True),
+    "message.reactions": ("cmd_message_reactions", True),
+    "message.viewers": ("cmd_message_viewers", True),
+    "chat.messageByDate": ("cmd_chat_message_by_date", True),
     "message.sendPoll": ("cmd_message_send_poll", True),
     "message.sendContact": ("cmd_message_send_contact", True),
     "message.sendLocation": ("cmd_message_send_location", True),
