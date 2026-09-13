@@ -59,7 +59,7 @@ FocusScope {
   property var menuReactions: []
   property bool menuToComposer: false
   readonly property bool modalOpen: messageMenu.visible || muteMenu.visible || sendMenu.visible || rescheduleMenu.visible
-                                    || moreMenu.visible || diceMenu.visible || peoplePicker.visible || pollComposer.visible || peopleList.visible
+                                    || moreMenu.visible || diceMenu.visible || peoplePicker.visible || pollComposer.visible || peopleList.visible || autoDeleteMenu.visible
   readonly property var people: peopleList    // who reacted or has seen a message, for checks from outside
   readonly property var polls: pollComposer   // the poll being made, for checks from outside
   property bool blocked: false        // a dialog over the whole window, such as choosing where to forward
@@ -162,6 +162,7 @@ FocusScope {
     muteMenu.close()
     sendMenu.close()
     rescheduleMenu.close()
+    autoDeleteMenu.close()
     draftTimer.stop()
     root.revealed = ({})
     root.pollChoices = ({})
@@ -185,6 +186,7 @@ FocusScope {
     root.joiningChatId = 0
     root.locationOpen = false
     root.dateOpen = false
+    root.forgetLinkPreview()
     root.scheduledOpen = false
     root.scheduledMessages = []
     // The chat's draft, as Telegram keeps it: you continue where you left off, on any device.
@@ -376,6 +378,7 @@ FocusScope {
     root.lastTypingMs = 0
     root.setComposerText("")
     root.replyToId = 0
+    root.forgetLinkPreview()
     root.stickToBottom = true
   }
 
@@ -407,6 +410,7 @@ FocusScope {
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.nextMention"); enabled: root.shortcutsOn; onActivated: root.nextMention() }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.nextReaction"); enabled: root.shortcutsOn; onActivated: root.nextReaction() }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.jumpToDate"); enabled: root.shortcutsOn; onActivated: root.openDateBar() }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.autoDelete"); enabled: root.shortcutsOn; onActivated: root.openAutoDeleteMenu() }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.mute"); enabled: root.shortcutsOn; onActivated: app.toggleMute(root.chat.id) }
   Shortcut {
     sequences: Keymap.keysFor(app.shortcuts, "window.pinnedMessage")
@@ -1133,6 +1137,21 @@ FocusScope {
     else if (id === "clear" || id === "delete") root.askClearChat(root.chat, id === "delete")
     else if (id === "secret") root.startSecretChat(root.chat)
     else if (id === "endSecret") root.askEndSecret(root.chat)
+    else if (id === "autoDelete") root.openAutoDeleteMenu()
+  }
+
+  // After how long messages in the open chat disappear: from its info, or its key.
+  function openAutoDeleteMenu() {
+    if (!root.chat) return
+    if (!root.chat.canSetAutoDelete) { root.flash("Messages cannot be set to disappear in this chat"); return }
+    autoDeleteMenu.open(Math.max(Style.space(12), root.width - Style.space(300)), Style.space(64))
+  }
+
+  function setAutoDelete(chat, seconds) {
+    client.request("chat.setAutoDelete", { chatId: chat.id, seconds: seconds }, function (answer) {
+      if (!answer.ok) root.flash(answer.error || "Telegram did not take the change")
+      else root.flash(seconds ? "Messages now disappear after " + Model.autoDeleteText(seconds) : "Messages stay now")
+    })
   }
 
   function askLeaveChat(chat) {
@@ -1217,6 +1236,7 @@ FocusScope {
 
   function composerEdited() {
     suggestLater.restart()
+    previewLater.restart()
     if (root.settingText || !root.chat) return
     draftTimer.restart()
     if (root.editingId) return
@@ -1227,6 +1247,37 @@ FocusScope {
       root.lastTypingMs = Date.now()
       client.request("chat.action", root.target({ chatId: root.chat.id, action: "typing" }))
     }
+  }
+
+  // ---------------------------------------------------------------- a link's preview while typing
+
+  property var linkPreview: null              // what Telegram would show for the first link typed
+  property string linkPreviewLink: ""         // the link it was asked about
+  property string linkPreviewMode: "below"    // under the text, "above" it, or "none"
+
+  Timer { id: previewLater; interval: 700; onTriggered: root.lookUpLinkPreview() }
+
+  function lookUpLinkPreview() {
+    var link = root.editingId || root.attachments.length ? "" : Model.composerLink(composer.text)
+    if (link === root.linkPreviewLink) return
+    root.linkPreviewLink = link
+    root.linkPreview = null
+    if (!link) { root.linkPreviewMode = "below"; return }
+    client.request("message.linkPreview", { text: composer.text.slice(0, 8192) }, function (answer) {
+      if (root.linkPreviewLink === link) root.linkPreview = answer.ok ? answer.result.preview : null
+    })
+  }
+
+  function cycleLinkPreview() {
+    if (!root.linkPreview && root.linkPreviewMode === "below") return
+    root.linkPreviewMode = ({ below: "above", above: "none", none: "below" })[root.linkPreviewMode]
+  }
+
+  function forgetLinkPreview() {
+    previewLater.stop()
+    root.linkPreview = null
+    root.linkPreviewLink = ""
+    root.linkPreviewMode = "below"
   }
 
   // Leaving where the composer's text belongs: its draft is saved and "typing…" ends there.
@@ -1280,6 +1331,7 @@ FocusScope {
     if (text.length > 8192) { root.flash("That message is too long."); return }
     var args = root.target({ chatId: root.chat.id, text: text })
     if (root.replyToId) args.replyToMessageId = root.replyToId
+    if (root.linkPreviewMode !== "below") args.linkPreview = root.linkPreviewMode
     var later = options && options.sendAt ? options.sendAt : 0
     if (options && options.silent) args.silent = true
     if (later) args.sendAt = later
@@ -1293,6 +1345,7 @@ FocusScope {
     root.lastTypingMs = 0
     root.setComposerText("")
     root.replyToId = 0
+    root.forgetLinkPreview()
     root.stickToBottom = true
   }
 
@@ -2346,6 +2399,65 @@ FocusScope {
       }
     }
 
+    // ------------------------------------------------ a link's preview, as it will be sent
+    Rectangle {
+      Layout.fillWidth: true
+      Layout.preferredHeight: visible ? linkPreviewRow.implicitHeight + Style.space(14) : 0
+      visible: !!root.chat && root.composerBlock === "" && !root.editingId
+               && (!!root.linkPreview || (root.linkPreviewMode === "none" && root.linkPreviewLink !== ""))
+      color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.03)
+
+      Rectangle { width: Style.space(3); height: parent.height; color: root.linkPreviewMode === "none" ? app.muted : app.accent }
+
+      RowLayout {
+        id: linkPreviewRow
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.leftMargin: Style.space(18)
+        anchors.rightMargin: Style.space(14)
+        spacing: Style.space(12)
+
+        Column {
+          Layout.fillWidth: true
+          spacing: Style.space(1)
+
+          Text {
+            width: parent.width
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
+            text: root.linkPreviewMode === "none" ? "No link preview"
+                : (root.linkPreview ? (root.linkPreview.siteName || root.linkPreview.displayUrl || "Link preview") : "")
+            color: root.linkPreviewMode === "none" ? app.muted : app.accent
+            font.family: app.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+          Text {
+            visible: root.linkPreviewMode !== "none" && text !== ""
+            width: parent.width
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
+            text: root.linkPreview ? (root.linkPreview.title || root.linkPreview.description || "") : ""
+            color: app.foreground
+            font.family: app.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+        }
+
+        Text {
+          readonly property string key: Keymap.label(Keymap.keysFor(app.shortcuts, "composer.linkPreview")[0] || "")
+          text: ({ below: "Under the text", above: "Above the text", none: "Left out" })[root.linkPreviewMode] + "   " + key + " changes it"
+          textFormat: Text.PlainText
+          color: app.muted
+          font.family: app.fontFamily
+          font.pixelSize: Style.font.caption
+
+          MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.cycleLinkPreview() }
+        }
+      }
+    }
+
     // ------------------------------------------------ where you cannot write
     Rectangle {
       Layout.fillWidth: true
@@ -2459,6 +2571,7 @@ FocusScope {
               else if (is("composer.code")) root.wrapSelection("`", "`")
               else if (is("composer.spoiler")) root.wrapSelection("||", "||")
               else if (is("composer.link")) root.wrapLink()
+              else if (is("composer.linkPreview")) root.cycleLinkPreview()
               else if (is("composer.send")) root.send()
               else if (is("composer.newLine")) composer.insert(composer.cursorPosition, "\n")
               else if (is("composer.cancel")) {
@@ -2715,6 +2828,18 @@ FocusScope {
     onPicked: function (id) {
       root.focusComposer()
       if (root.chat && Model.muteSeconds(id) >= 0) app.muteChat(root.chat.id, Model.muteSeconds(id))
+    }
+  }
+
+  ContextMenu {
+    id: autoDeleteMenu
+    anchors.fill: parent
+    app: root.app
+    items: Model.autoDeleteMenu(root.chat)
+    onDismissed: root.focusComposer()
+    onPicked: function (id) {
+      root.focusComposer()
+      if (root.chat && Model.autoDeleteSeconds(id) >= 0) root.setAutoDelete(root.chat, Model.autoDeleteSeconds(id))
     }
   }
 

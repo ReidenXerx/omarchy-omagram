@@ -915,6 +915,8 @@ function infoDetails(chat, details) {
   if (details.description) out.push({ label: chat.kind === "channel" ? "About the channel" : "About the group", value: String(details.description) })
   if (details.inviteLink) out.push({ label: "Invite link", value: String(details.inviteLink), copy: String(details.inviteLink) })
   if (details.commonGroups > 0) out.push({ label: "Groups in common", value: String(details.commonGroups) })
+  if (chat.autoDelete > 0)
+    out.push({ label: "Messages disappear", value: "after " + autoDeleteText(chat.autoDelete) + (chat.kind === "secret" ? " once seen" : "") })
   if (details.keyHash) out.push({ label: "Encryption key: the other device shows the same", value: String(details.keyHash) })
   return out
 }
@@ -922,6 +924,7 @@ function infoDetails(chat, details) {
 function infoActions(chat, meId) {
   if (!isObject(chat)) return []
   var out = [{ id: "mute", label: chat.muted ? "Unmute" : "Mute" }, { id: "search", label: "Search" }]
+  if (chat.canSetAutoDelete) out.push({ id: "autoDelete", label: "Auto-delete messages" })
   if (chat.kind === "private" && !chat.bot && chat.userId && chat.userId !== meId) out.push({ id: "secret", label: "Start a secret chat" })
   if (chat.kind === "secret" && isObject(chat.secret) && chat.secret.state !== "closed")
     out.push({ id: "endSecret", label: "End the secret chat", danger: true })
@@ -1328,6 +1331,56 @@ function profileChat(profile) {
   if (!isObject(profile)) return null
   return { id: 0, kind: "private", userId: 0, photo: profile.photo || null,
            title: [profile.firstName, profile.lastName].filter(function (part) { return !!part }).join(" ") }
+}
+
+// ---------------------------------------------------------------- a link's preview while typing, disappearing messages
+
+// The first thing in typed text that may be a link, so Telegram is asked for a preview only when it changes; "" when none.
+function composerLink(text) {
+  var flat = String(text || "").split(String.fromCharCode(10)).join(" ").split(String.fromCharCode(9)).join(" ")
+  var m = /(https?:[/][/]|www[.]|t[.]me[/])[^ ()<>]+|[a-z0-9][a-z0-9-]*([.][a-z0-9-]+)*[.][a-z]{2,24}([/:?#][^ ()<>]*)?/i.exec(flat)
+  return m && m[0].length <= 2048 ? m[0] : ""
+}
+
+var AUTO_DELETE_TIMES = [0, 86400, 604800, 2678400]           // off, a day, a week, a month (31 days, as Telegram counts it)
+var SECRET_CHAT_TIMERS = [0, 5, 30, 60, 3600, 86400, 604800]   // after a message is seen
+
+// "1 day", "2 weeks", "1 month", "30 seconds"; "Off" when messages stay.
+function autoDeleteText(seconds) {
+  var s = Math.max(0, Math.floor(Number(seconds) || 0))
+  if (!s) return "Off"
+  if (s === 2678400) return "1 month"
+  var units = [[31536000, "year"], [604800, "week"], [86400, "day"], [3600, "hour"], [60, "minute"], [1, "second"]]
+  for (var i = 0; i < units.length; i++) {
+    if (s % units[i][0]) continue
+    var n = s / units[i][0]
+    return n + " " + units[i][1] + (n === 1 ? "" : "s")
+  }
+}
+
+// The default for new chats, round and round: off, a day, a week, a month.
+function nextAutoDelete(seconds) {
+  var s = Number(seconds) || 0
+  for (var i = 0; i < AUTO_DELETE_TIMES.length; i++) if (AUTO_DELETE_TIMES[i] > s) return AUTO_DELETE_TIMES[i]
+  return 0
+}
+
+// What a chat's messages can be set to disappear after, with the current choice ticked.
+function autoDeleteMenu(chat) {
+  if (!isObject(chat)) return []
+  var current = Number(chat.autoDelete) || 0
+  var secret = chat.kind === "secret"
+  var times = (secret ? SECRET_CHAT_TIMERS : AUTO_DELETE_TIMES).slice()
+  if (times.indexOf(current) < 0) times.push(current)   // set to something else in another app
+  return times.map(function (t) {
+    return { id: "autoDelete:" + t, label: (t ? "After " + autoDeleteText(t) + (secret ? " once seen" : "") : "Keep messages") + (t === current ? "   ✓" : "") }
+  })
+}
+
+// Seconds from an auto-delete menu item, or -1 when it is not one.
+function autoDeleteSeconds(id) {
+  var m = /^autoDelete:(0|[1-9][0-9]{0,8})$/.exec(String(id))
+  return m ? Number(m[1]) : -1
 }
 
 // ---------------------------------------------------------------- going to a date

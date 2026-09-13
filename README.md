@@ -35,7 +35,7 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   location: coordinates, or a Google Maps or OpenStreetMap link pasted in.
 - **Rich messages** — formatting (typed the way Telegram's own apps read it: `**bold**`,
   `__italic__`, `~~strikethrough~~`, `||spoiler||`, `` `code` ``, `[text](address)`, or with the keys
-  below), links, mentions and hashtags, spoilers, link previews, polls
+  below), links, mentions and hashtags, spoilers, link previews (shown as you type, under or above the text, or left out), polls
   you can vote in, places, contacts, albums, service messages ("Ann joined the group"), and
   bots' buttons and keyboards. Web links open in your browser; Telegram links open in Omagram.
   Typing `@` in a group suggests who to mention, and `/` suggests the commands of the chat's bots.
@@ -49,8 +49,8 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   to a centred square); privacy (who sees your last seen, photo, number, bio and birthday, who can
   find you by number, call you or add you to groups: Enter goes Everybody → My contacts → Nobody and
   keeps the exceptions you made), blocked users, two-step verification (turn it on with a hint and
-  a recovery email, change the password, turn it off) and how long you may be away before Telegram
-  deletes the account; notifications for private chats, groups and channels, and whether they show
+  a recovery email, change the password, turn it off), how long you may be away before Telegram
+  deletes the account, and after how long messages disappear in chats you start; notifications for private chats, groups and channels, and whether they show
   the message text; what downloads by itself (photos, GIFs and round video messages; videos and files
   up to 10 or 50 MB); how much Omagram keeps on this computer (and clears the cache), every device
   signed in to your account (sign any of them out), and signs you out here.
@@ -142,6 +142,7 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Ctrl+Shift+E` | jump to the next reaction to your messages you have not seen |
 | `Ctrl+Shift+J` | go to a date in the chat (today, yesterday, 1 Sep, 01.09.2026) |
 | `Ctrl+Shift+M` | mute or unmute the open chat |
+| `Ctrl+Shift+D` | set messages in the open chat to disappear after a day, a week or a month |
 | `Ctrl+Shift+P` | go to the pinned message |
 | `Ctrl+I` | the chat's info (`Tab` switches its tabs, `Enter` opens, `Esc` closes) |
 | `Ctrl+Shift+N` | start a chat, a group or a channel (`Enter` opens or adds, `Ctrl+Enter` goes on) |
@@ -188,6 +189,7 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Ctrl+B` / `Ctrl+Shift+I` | **bold** / __italic__ around the selection (again takes it off) |
 | `Ctrl+Shift+X` / `Ctrl+E` / `Ctrl+Shift+H` | ~~strikethrough~~ / `code` / \|\|spoiler\|\| |
 | `Ctrl+L` | a link: the selection becomes its text, then type the address |
+| `Ctrl+Shift+L` | the link preview: under the text, above it, or none |
 | `Ctrl+Alt+Enter` | send later or when they are online; scheduled messages are listed there too |
 | `↑` in an empty composer | edit your last message |
 | `Esc` | cancel a reply or edit |

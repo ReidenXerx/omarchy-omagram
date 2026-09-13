@@ -32,6 +32,7 @@ SECRET_STATES = {"secretChatStatePending": "pending", "secretChatStateReady": "r
 CALL_STATES = {"callStatePending": "pending", "callStateExchangingKeys": "connecting", "callStateReady": "ready",
                "callStateHangingUp": "ending", "callStateDiscarded": "ended", "callStateError": "failed"}
 CALLS_MAX = 16
+SERVICE_USER_ID = 777000   # Telegram's own account, whose chat brings login codes
 STORY_CHATS_MAX = 500
 STORIES_PER_CHAT_MAX = 100
 STORY_ID_MAX = 2 ** 31 - 1
@@ -221,7 +222,8 @@ def link_preview(value, files_root):
         return None
     description, _ = formatted(p.get("description"))
     out = {"url": url, "displayUrl": _str(p.get("display_url"), URL_MAX), "siteName": _str(p.get("site_name"), TITLE_MAX),
-           "title": _str(p.get("title"), TITLE_MAX), "description": description[:DESCRIPTION_MAX], "photo": None}
+           "title": _str(p.get("title"), TITLE_MAX), "description": description[:DESCRIPTION_MAX], "photo": None,
+           "above": p.get("show_above_text") is True}   # its sender put it above the text
     kind = _obj(p.get("type"))
     photo = _obj(kind.get("photo"), "photo") if kind.get("@type") in ("linkPreviewTypeArticle", "linkPreviewTypePhoto") else {}
     best = best_photo_size(photo.get("sizes")) if photo else None
@@ -381,6 +383,15 @@ def status_view(value):
     if t == "userStatusOffline":
         return {"state": "offline", "wasOnline": _int(s.get("was_online"))}
     return {"state": USER_STATUSES.get(t, "")}
+
+
+def can_change_info(status):
+    """Whether your place in a group or channel lets you change its info and settings: its owner, or an
+    admin given that right."""
+    s = _obj(status)
+    if s.get("@type") == "chatMemberStatusCreator":
+        return True
+    return s.get("@type") == "chatMemberStatusAdministrator" and _obj(s.get("rights")).get("can_change_info") is True
 
 
 def draft_text(value):
@@ -1057,6 +1068,15 @@ class State:
             return self.basic_groups.get(chat["basicGroupId"], {})
         return {}
 
+    def _can_set_auto_delete(self, chat, group):
+        """Anyone in a chat with a person, but not in Saved Messages or Telegram's own chat; in a group, whoever
+        may change its info; in a channel, its owner and admins with that right."""
+        if chat["kind"] in ("private", "secret"):
+            return chat["userId"] not in (0, self.me_id, SERVICE_USER_ID)
+        if group.get("canChangeInfo"):
+            return True
+        return chat["kind"] == "group" and group.get("status") == "member" and chat.get("canChangeInfo", False)
+
     def chat_view(self, chat_id):
         chat = self.chats.get(chat_id)
         if chat is None:
@@ -1073,6 +1093,9 @@ class State:
             "unread": chat["unread"],
             "mentions": chat["mentions"],
             "unreadReactions": chat.get("reactions", 0),   # messages of yours with reactions you have not seen
+            # Messages disappear this many seconds after they are sent (once seen, in a secret chat); 0 when they stay.
+            "autoDelete": chat.get("autoDelete", 0),
+            "canSetAutoDelete": self._can_set_auto_delete(chat, group),
             "muted": chat["muteFor"] > 0,
             # int64 order, as text: a JavaScript number would round it and shuffle the list.
             "order": str(main.get("order", 0)),
@@ -1148,6 +1171,8 @@ class State:
             "unread": max(0, _int(c.get("unread_count"))),
             "mentions": max(0, _int(c.get("unread_mention_count"))),
             "reactions": max(0, _int(c.get("unread_reaction_count"))),
+            "autoDelete": max(0, _int(c.get("message_auto_delete_time"))),
+            "canChangeInfo": _obj(c.get("permissions")).get("can_change_info") is True,   # what every member may do
             "muteFor": max(0, _int(_obj(c.get("notification_settings")).get("mute_for"))),
             "positions": {},
             "lastReadInbox": _int(c.get("last_read_inbox_message_id")),
@@ -1232,6 +1257,20 @@ class State:
         chat["mentions"] = max(0, _int(u.get("unread_mention_count")))
         return self._chat_event(chat["id"])
 
+    def _on_updateChatMessageAutoDeleteTime(self, u):
+        chat = self._chat(_int(u.get("chat_id")))
+        if not chat:
+            return []
+        chat["autoDelete"] = max(0, _int(u.get("message_auto_delete_time")))
+        return self._chat_event(chat["id"])
+
+    def _on_updateChatPermissions(self, u):
+        chat = self._chat(_int(u.get("chat_id")))
+        if not chat:
+            return []
+        chat["canChangeInfo"] = _obj(u.get("permissions")).get("can_change_info") is True
+        return self._chat_event(chat["id"])
+
     def _on_updateChatUnreadReactionCount(self, u):
         chat = self._chat(_int(u.get("chat_id")))
         if not chat:
@@ -1273,7 +1312,8 @@ class State:
         if gid <= 0:
             return []
         self._keep_group(self.basic_groups, gid, {"memberCount": max(0, _int(g.get("member_count"))),
-                                                  "status": MEMBER_STATUSES.get(_obj(g.get("status")).get("@type"), "")})
+                                                  "status": MEMBER_STATUSES.get(_obj(g.get("status")).get("@type"), ""),
+                                                  "canChangeInfo": can_change_info(g.get("status"))})
         return self._group_chat_events("basicGroupId", gid)
 
     def _on_updateSupergroup(self, u):
@@ -1284,6 +1324,7 @@ class State:
         usernames = _list(_obj(g.get("usernames")).get("active_usernames"), 4)
         self._keep_group(self.supergroups, gid, {"memberCount": max(0, _int(g.get("member_count"))),
                                                  "status": MEMBER_STATUSES.get(_obj(g.get("status")).get("@type"), ""),
+                                                 "canChangeInfo": can_change_info(g.get("status")),
                                                  "username": _str(usernames[0], NAME_MAX) if usernames else "",
                                                  "forum": g.get("is_forum") is True,
                                                  # TDLib's own answer to "must you join before writing": false

@@ -606,6 +606,21 @@ class Sending(Harness):
         self.assertFalse(self.request(self.conn, 59, "stickers.install", setId="x", installed=True)["ok"])
 
 
+    def test_link_previews_while_typing_and_where_they_go(self):
+        q, r = self.call(80, "message.linkPreview", "getLinkPreview", {
+            "@type": "linkPreview", "url": "https://example.com/a", "display_url": "example.com/a", "site_name": "Example", "title": "A page",
+            "description": {"@type": "formattedText", "text": "About it", "entities": []}, "type": {"@type": "linkPreviewTypeUnsupported"},
+            "show_above_text": False}, chatId=42, text="look **at** example.com/a")
+        self.assertEqual((q["text"]["text"], q["link_preview_options"]), ("look at example.com/a", None))
+        preview = r["result"]["preview"]
+        self.assertEqual((preview["siteName"], preview["title"], preview["description"], preview["above"]), ("Example", "A page", "About it", False))
+        for rid, where, options in ((81, "below", None), (82, "above", (False, True)), (83, "none", (True, False))):
+            q, _ = self.call(rid, "message.send", "sendMessage", {"@type": "message", "id": rid, "chat_id": 42}, chatId=42,
+                             text="look example.com/a", linkPreview=where)
+            got = q["input_message_content"]["link_preview_options"]
+            self.assertEqual(got and (got["is_disabled"], got["show_above_text"]), options, where)
+        self.assertFalse(self.request(self.conn, 84, "message.send", chatId=42, text="hi", linkPreview="left")["ok"])
+
     def test_markdown_is_read_into_formatting_and_written_back_for_editing(self):
         bold = {"@type": "textEntity", "offset": 3, "length": 5, "type": {"@type": "textEntityTypeBold"}}
         q, r = self.call(90, "message.send", "sendMessage", {"@type": "message", "id": 10, "chat_id": 42}, chatId=42, text="hi **there**")
@@ -1355,6 +1370,22 @@ class ChatsAndAccount(Harness):
         q, _ = self.call(209, "folders.reorder", "reorderChatFolders", {"@type": "ok"}, ids=[3, 2])
         self.assertEqual((q["chat_folder_ids"], q["main_chat_list_position"]), ([3, 2], 0))
         self.assertFalse(self.request(self.conn, 210, "folders.reorder", ids=[2])["ok"])
+
+    def test_disappearing_messages(self):
+        q, r = self.call(250, "chat.setAutoDelete", "setChatMessageAutoDeleteTime", {"@type": "ok"}, chatId=500, seconds=604800)
+        self.assertEqual((q["chat_id"], q["message_auto_delete_time"], r["result"]), (500, 604800, {"seconds": 604800}))
+        for rid, seconds in ((251, 3600), (252, -86400), (253, 366 * 86400)):
+            self.assertFalse(self.request(self.conn, rid, "chat.setAutoDelete", chatId=500, seconds=seconds)["ok"], seconds)
+        _, r = self.call(254, "autoDelete.default", "getDefaultMessageAutoDeleteTime", {"@type": "messageAutoDeleteTime", "time": 86400})
+        self.assertEqual(r["result"], {"seconds": 86400})
+        q, _ = self.call(255, "autoDelete.setDefault", "setDefaultMessageAutoDeleteTime", {"@type": "ok"}, seconds=2678400)
+        self.assertEqual(q["message_auto_delete_time"], {"@type": "messageAutoDeleteTime", "time": 2678400})
+        self.assertFalse(self.request(self.conn, 256, "autoDelete.setDefault", seconds=60)["ok"])
+        self.td_event({"@type": "updateChatMessageAutoDeleteTime", "chat_id": -66, "message_auto_delete_time": 86400, "@client_id": 1})
+        chat = self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == -66)["chat"]
+        self.assertEqual((chat["autoDelete"], chat["canSetAutoDelete"]), (86400, True), "the group's owner may")
+        chats = {c["id"]: c for c in self.request(self.conn, 257, "chats.list", list="main")["result"]["chats"]}
+        self.assertEqual((chats[500]["canSetAutoDelete"], chats[-10077]["canSetAutoDelete"]), (True, False))
 
     def test_reactions_viewers_and_dates(self):
         q, r = self.call(240, "chat.nextReaction", "searchChatMessages", {"@type": "foundChatMessages", "messages": [

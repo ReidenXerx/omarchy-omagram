@@ -40,7 +40,7 @@ FocusScope {
   readonly property var rows: settings.buildRows()
   readonly property var current: settings.rows[settings.cursor] || null
   readonly property var accountKinds: ["profilePhoto", "profileField", "profilePhone", "privacy", "blocked", "blockedSender", "password",
-                                       "passwordOff", "passwordCode", "accountTtl", "scope", "previews", "download", "folder", "newFolder",
+                                       "passwordOff", "passwordCode", "accountTtl", "autoDelete", "scope", "previews", "download", "folder", "newFolder",
                                        "folderName", "folderFlag", "folderChat", "folderAdd", "folderSave", "folderDelete",
                                        "storage", "sessions", "session", "otherSessions", "logout"]
 
@@ -103,6 +103,7 @@ FocusScope {
     if (settings.password && settings.password.emailCodePattern) out.push({ kind: "passwordCode", label: "Type the code from the email" })
     if (settings.password && settings.password.hasPassword) out.push({ kind: "passwordOff", label: "Turn two-step verification off" })
     out.push({ kind: "accountTtl", label: "Delete my account if I am away for" },
+             { kind: "autoDelete", label: "Auto-delete messages in chats you start" },
              { kind: "header", title: "Notifications", note: "For chats that have no notification setting of their own" },
              { kind: "scope", id: "private", label: "Private chats" },
              { kind: "scope", id: "groups", label: "Groups" },
@@ -326,6 +327,7 @@ FocusScope {
   property bool blockedOpen: false
   property var password: null        // what password.get last said
   property int accountTtl: 0
+  property int defaultAutoDelete: -1 // seconds; -1 until Telegram has said
   property var flow: null            // two-step verification being changed: { kind, steps, step, values }
   property string editorError: ""
 
@@ -333,6 +335,7 @@ FocusScope {
     settings.app.request("privacy.get", {}, function (answer) { if (answer.ok) settings.privacy = answer.result.settings || ({}) })
     settings.app.request("password.get", {}, function (answer) { if (answer.ok) settings.password = answer.result })
     settings.app.request("account.ttl", {}, function (answer) { if (answer.ok) settings.accountTtl = answer.result.days || 0 })
+    settings.app.request("autoDelete.default", {}, function (answer) { if (answer.ok) settings.defaultAutoDelete = answer.result.seconds })
     settings.loadBlocked()
   }
 
@@ -365,6 +368,14 @@ FocusScope {
   function changeAccountTtl() {
     settings.app.request("account.setTtl", { days: Model.nextTtl(settings.accountTtl) }, function (answer) {
       if (answer.ok) settings.accountTtl = answer.result.days
+      else settings.error = answer.error || "Telegram did not take the change"
+    })
+  }
+
+  function changeDefaultAutoDelete() {
+    if (settings.defaultAutoDelete < 0) return
+    settings.app.request("autoDelete.setDefault", { seconds: Model.nextAutoDelete(settings.defaultAutoDelete) }, function (answer) {
+      if (answer.ok) settings.defaultAutoDelete = answer.result.seconds
       else settings.error = answer.error || "Telegram did not take the change"
     })
   }
@@ -629,6 +640,8 @@ FocusScope {
       settings.startPasswordFlow("code")
     } else if (row.kind === "accountTtl") {
       settings.changeAccountTtl()
+    } else if (row.kind === "autoDelete") {
+      settings.changeDefaultAutoDelete()
     } else if (row.kind === "scope") {
       settings.changeScope(row.id, { muted: !(settings.scopes[row.id] && settings.scopes[row.id].muted) })
     } else if (row.kind === "previews") {
@@ -901,7 +914,7 @@ FocusScope {
         width: list.width
         height: header ? Style.space(modelData.note ? 58 : 44)
               : (account ? Style.space(modelData.kind === "profilePhoto" ? 66
-                                       : (["session", "storage", "profileField", "profilePhone", "privacy", "blocked", "password", "accountTtl",
+                                       : (["session", "storage", "profileField", "profilePhone", "privacy", "blocked", "password", "accountTtl", "autoDelete",
                                            "scope", "previews", "download", "folder", "folderName", "folderFlag"]
                                             .indexOf(modelData.kind) >= 0 ? 58 : 44))
                          : Style.space(clashes.length || modelData.kind === "global" ? 58 : 42))
@@ -970,7 +983,7 @@ FocusScope {
             }
             Text {
               textFormat: Text.PlainText
-              text: ({ profileField: "Enter changes it", privacy: "Enter changes it", accountTtl: "Enter changes it",
+              text: ({ profileField: "Enter changes it", privacy: "Enter changes it", accountTtl: "Enter changes it", autoDelete: "Enter changes it",
                        scope: "Enter changes it", previews: "Enter changes it", download: "Enter changes it",
                        folder: "Enter opens it", newFolder: "Enter", folderName: "Enter changes it", folderFlag: "Enter changes it",
                        folderChat: "Enter takes it off", folderAdd: "Enter", folderSave: "Enter", folderDelete: "Enter",
@@ -1001,6 +1014,7 @@ FocusScope {
                 : row.modelData.kind === "blocked" ? Model.blockedText(settings.blocked)
                 : row.modelData.kind === "password" ? Model.passwordText(settings.password)
                 : row.modelData.kind === "accountTtl" ? Model.ttlText(settings.accountTtl)
+                : row.modelData.kind === "autoDelete" ? (settings.defaultAutoDelete < 0 ? "Loading…" : Model.autoDeleteText(settings.defaultAutoDelete))
                 : row.modelData.kind === "scope" ? Model.scopeText(settings.scopes[row.modelData.id])
                 : row.modelData.kind === "previews" ? Model.previewsText(settings.scopes)
                 : row.modelData.kind === "download" ? Model.downloadText(settings.app.autoDownloadRules, row.modelData.id)

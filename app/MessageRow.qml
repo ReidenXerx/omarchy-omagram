@@ -236,6 +236,13 @@ Item {
         font.italic: true
       }
 
+      Item {
+        id: previewAbove
+        visible: !!preview.info && preview.above
+        width: parent.width
+        height: visible ? preview.height : 0
+      }
+
       Text {
         id: body
         readonly property string source: row.textSource.content.text || ""
@@ -291,9 +298,18 @@ Item {
       }
 
       // ---------------------------------------------- link preview
+      // Under the text, or above it where its sender put it: the preview moves between two places.
+      Item {
+        id: previewBelow
+        visible: !!preview.info && !preview.above
+        width: parent.width
+        height: visible ? preview.height : 0
+      }
       Rectangle {
         id: preview
         readonly property var info: row.content.linkPreview || null
+        readonly property bool above: !!preview.info && preview.info.above === true
+        parent: preview.above ? previewAbove : previewBelow
         readonly property var photo: preview.info && preview.info.photo ? preview.info.photo : null
         readonly property var photoFile: preview.photo ? row.app.fileState(preview.photo.file) : null
         readonly property string photoUrl: preview.photoFile ? Model.fileUrl(preview.photoFile.path) : ""

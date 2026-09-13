@@ -355,6 +355,36 @@ class Messages(unittest.TestCase):
             "@type": "messageReactions", "reactions": [], "can_get_added_reactions": True}}))
         self.assertEqual((listed["canSeeReactions"], s.message(text_message(10, 7, "hi"))["canSeeReactions"]), (True, False))
 
+    def test_disappearing_messages_and_who_may_set_them(self):
+        s = model.State()
+        s.me_id = 1
+        s.apply({"@type": "updateNewChat", "chat": dict(chat(7, "Ann"), message_auto_delete_time=604800)})
+        s.apply({"@type": "updateNewChat", "chat": chat(1, "Saved")})
+        s.apply({"@type": "updateNewChat", "chat": chat(777000, "Telegram")})
+        self.assertEqual([(s.chat_view(c)["autoDelete"], s.chat_view(c)["canSetAutoDelete"]) for c in (7, 1, 777000)],
+                         [(604800, True), (0, False), (0, False)])
+        s.apply({"@type": "updateChatMessageAutoDeleteTime", "chat_id": 7, "message_auto_delete_time": 0})
+        self.assertEqual(s.chat_view(7)["autoDelete"], 0)
+        s.apply({"@type": "updateSupergroup", "supergroup": {"@type": "supergroup", "id": 5, "status": {"@type": "chatMemberStatusMember"}}})
+        s.apply({"@type": "updateNewChat", "chat": chat(-1005, "Club", kind={"@type": "chatTypeSupergroup", "supergroup_id": 5, "is_channel": False})})
+        self.assertFalse(s.chat_view(-1005)["canSetAutoDelete"])
+        s.apply({"@type": "updateChatPermissions", "chat_id": -1005, "permissions": {"@type": "chatPermissions", "can_change_info": True}})
+        self.assertTrue(s.chat_view(-1005)["canSetAutoDelete"], "members may change the info of this group")
+        s.apply({"@type": "updateSupergroup", "supergroup": {"@type": "supergroup", "id": 6, "status": {
+            "@type": "chatMemberStatusAdministrator", "rights": {"@type": "chatAdministratorRights", "can_change_info": True}}}})
+        s.apply({"@type": "updateNewChat", "chat": chat(-1006, "News", kind={"@type": "chatTypeSupergroup", "supergroup_id": 6, "is_channel": True})})
+        s.apply({"@type": "updateBasicGroup", "basic_group": {"@type": "basicGroup", "id": 8, "status": {"@type": "chatMemberStatusCreator"}}})
+        s.apply({"@type": "updateNewChat", "chat": chat(-8, "Friends", kind={"@type": "chatTypeBasicGroup", "basic_group_id": 8})})
+        self.assertEqual((s.chat_view(-1006)["canSetAutoDelete"], s.chat_view(-8)["canSetAutoDelete"]), (True, True))
+
+    def test_a_link_preview_above_the_text(self):
+        s = model.State()
+        m = text_message(3, 7, "example.com")
+        m["content"]["link_preview"] = {"@type": "linkPreview", "url": "https://example.com", "title": "Example", "show_above_text": True,
+                                        "description": {"@type": "formattedText", "text": "", "entities": []},
+                                        "type": {"@type": "linkPreviewTypeUnsupported"}}
+        self.assertEqual(s.message(m)["content"]["linkPreview"]["above"], True)
+
     def test_a_sticker_knows_its_set(self):
         media = model.media_for("sticker", {"sticker": {"@type": "sticker", "set_id": "9223372036854775807", "emoji": "🐼",
                                                         "sticker": {"@type": "file", "id": 5, "size": 10}}}, "")

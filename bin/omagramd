@@ -246,6 +246,9 @@ POLL_QUESTION_MAX = 255
 POLL_ANSWER_MAX = 100
 POLL_ANSWERS_MAX = 12   # TDLib's default poll_answer_count_max
 POLL_EXPLANATION_MAX = 200
+LINK_PREVIEWS = ("below", "above", "none")   # where a message's link preview goes
+DAY = 86400
+AUTO_DELETE_MAX = 365 * DAY   # messages disappear after whole days up to a year; in a secret chat, any seconds
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
 MEDIA_FILTERS = {"photos": "searchMessagesFilterPhotoAndVideo", "files": "searchMessagesFilterDocument",
@@ -1216,6 +1219,17 @@ class Daemon:
         self.td_send({"@type": "setChatDraftMessage", "chat_id": arg_int(args, "chatId"), "topic_id": self.topic_of(args),
                       "draft_message": draft}, client, rid)
 
+    def cmd_chat_set_auto_delete(self, client, rid, args):
+        """Messages in a chat disappear this many seconds after they are sent: whole days up to a year, or 0 to
+        keep them. In a secret chat they go that long after they are seen, and any number of seconds will do."""
+        chat_id = arg_int(args, "chatId")
+        seconds = arg_int(args, "seconds", 0, AUTO_DELETE_MAX)
+        chat = self.state.chats.get(chat_id)
+        if seconds % DAY and not (chat and chat["kind"] == "secret"):
+            raise BadRequest("messages disappear after whole days, but in a secret chat")
+        self.td_send({"@type": "setChatMessageAutoDeleteTime", "chat_id": chat_id, "message_auto_delete_time": seconds},
+                     client, rid, lambda _ok: {"seconds": seconds})
+
     def cmd_chat_mute(self, client, rid, args):
         chat_id = arg_int(args, "chatId")
         chat = self.state.chats.get(chat_id)
@@ -1836,6 +1850,19 @@ class Daemon:
         self.td_send({"@type": "setAccountTtl", "ttl": {"@type": "accountTtl", "days": days}}, client, rid,
                      lambda _ok: {"days": days})
 
+    def cmd_auto_delete_default(self, client, rid, args):
+        """After how long messages disappear in chats you start from now on; 0 when they stay."""
+        self.td_send({"@type": "getDefaultMessageAutoDeleteTime"}, client, rid,
+                     lambda event: {"seconds": max(0, model._int(event.get("time")))})
+
+    def cmd_auto_delete_set_default(self, client, rid, args):
+        seconds = arg_int(args, "seconds", 0, AUTO_DELETE_MAX)
+        if seconds % DAY:
+            raise BadRequest("messages disappear after whole days")
+        self.td_send({"@type": "setDefaultMessageAutoDeleteTime",
+                      "message_auto_delete_time": {"@type": "messageAutoDeleteTime", "time": seconds}},
+                     client, rid, lambda _ok: {"seconds": seconds})
+
     # ---------------------------------------------------------------- notifications by type of chat
 
     def cmd_notifications_get(self, client, rid, args):
@@ -2441,6 +2468,16 @@ class Daemon:
             return None
         return {"@type": "messageTopicForum", "forum_topic_id": arg_int(args, "topicId", 1, INT32_MAX)}
 
+    def link_preview_options(self, args):
+        """Where a message's link preview goes: under the text (Telegram's default, None), above it, or nowhere."""
+        where = args.get("linkPreview", "below")
+        if where not in LINK_PREVIEWS:
+            raise BadRequest("linkPreview is below, above or none")
+        if where == "below":
+            return None
+        return {"@type": "linkPreviewOptions", "is_disabled": where == "none", "url": "", "force_small_media": False,
+                "force_large_media": False, "show_above_text": where == "above"}
+
     def send_options(self, args):
         """How a message goes out: silently, and at a date (sendAt, in seconds) or once the other
         person is online (sendAt -1). None when neither is asked for."""
@@ -2490,7 +2527,13 @@ class Daemon:
         chat_id = arg_int(args, "chatId")
         text = self.typed_text(arg_str(args, "text", MARKDOWN_TEXT_MAX), TEXT_MAX, "a message")
         self.send_content(client, rid, chat_id, {"@type": "inputMessageText", "text": text,
-                                                 "link_preview_options": None, "clear_draft": True}, args)
+                                                 "link_preview_options": self.link_preview_options(args), "clear_draft": True}, args)
+
+    def cmd_message_link_preview(self, client, rid, args):
+        """The preview Telegram shows for the first link in text being typed. TDLib answers 404 when there is none."""
+        text = self.typed_text(arg_str(args, "text", MARKDOWN_TEXT_MAX), TEXT_MAX, "a message")
+        self.td_send({"@type": "getLinkPreview", "text": text, "link_preview_options": None}, client, rid,
+                     lambda p: {"preview": model.link_preview(p, self.state.files_root)})
 
     def cmd_message_send_file(self, client, rid, args):
         chat_id = arg_int(args, "chatId")
@@ -2868,6 +2911,10 @@ COMMANDS = {
     "message.reactions": ("cmd_message_reactions", True),
     "message.viewers": ("cmd_message_viewers", True),
     "chat.messageByDate": ("cmd_chat_message_by_date", True),
+    "message.linkPreview": ("cmd_message_link_preview", True),
+    "chat.setAutoDelete": ("cmd_chat_set_auto_delete", True),
+    "autoDelete.default": ("cmd_auto_delete_default", True),
+    "autoDelete.setDefault": ("cmd_auto_delete_set_default", True),
     "message.sendPoll": ("cmd_message_send_poll", True),
     "message.sendContact": ("cmd_message_send_contact", True),
     "message.sendLocation": ("cmd_message_send_location", True),
