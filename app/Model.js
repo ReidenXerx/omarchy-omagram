@@ -324,7 +324,23 @@ function suggestToken(text, cursor) {
   if (command && !/^\S/.test(rest)) return { kind: "command", query: command[1], start: 0, end: at }
   var mention = /(^|[\s([{])@([^\s@]{0,32})$/.exec(before)
   if (mention && !/^\S/.test(rest)) return { kind: "mention", query: mention[2], start: at - mention[2].length - 1, end: at }
+  var emoji = emojiToken(before, rest)
+  if (emoji) return { kind: "emoji", query: emoji, start: at - emoji.length - 1, end: at }
   return { kind: "", query: "", start: at, end: at }
+}
+
+// ":hea" just before the cursor, at the start or after a space or bracket, and not run into a word after it:
+// an emoji asked for by name. Times (12:30) and links (http://) are not.
+function emojiToken(before, rest) {
+  function space(ch) { return ch === " " || ch === String.fromCharCode(9) || ch === String.fromCharCode(10) }
+  var colon = before.lastIndexOf(":")
+  if (colon < 0) return ""
+  var name = before.slice(colon + 1)
+  var prev = colon === 0 ? "" : before.charAt(colon - 1)
+  if (name.length < 2 || name.length > 32 || name.split("").some(space)) return ""
+  if (prev !== "" && !space(prev) && "([{".indexOf(prev) < 0) return ""
+  if (rest !== "" && !space(rest.charAt(0))) return ""
+  return name
 }
 
 // A person put into a message: their @username, or a link to them that Telegram reads as a mention

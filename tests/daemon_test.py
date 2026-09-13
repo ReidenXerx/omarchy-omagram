@@ -1427,6 +1427,15 @@ class ChatsAndAccount(Harness):
         self.assertEqual((q["chat_folder_ids"], q["main_chat_list_position"]), ([3, 2], 0))
         self.assertFalse(self.request(self.conn, 210, "folders.reorder", ids=[2])["ok"])
 
+    def test_every_reaction_a_message_may_get(self):
+        many = [{"@type": "availableReaction", "type": {"@type": "reactionTypeEmoji", "emoji": chr(0x1F600 + i)}, "needs_premium": False}
+                for i in range(60)]
+        answer = {"@type": "availableReactions", "top_reactions": [], "recent_reactions": [], "popular_reactions": many}
+        _, r = self.call(280, "reactions.available", "getMessageAvailableReactions", answer, chatId=500, messageId=7)
+        self.assertEqual(len(r["result"]["emoji"]), 48, "the menu's row needs only the first")
+        _, r = self.call(281, "reactions.available", "getMessageAvailableReactions", answer, chatId=500, messageId=7, all=True)
+        self.assertEqual(len(r["result"]["emoji"]), 60)
+
     def test_a_chat_set_to_silent_sends_everything_without_sound(self):
         q, r = self.call(270, "chat.setSilent", "toggleChatDefaultDisableNotification", {"@type": "ok"}, chatId=500, silent=True)
         self.assertEqual((q["chat_id"], q["default_disable_notification"], r["result"]), (500, True, {"silent": True}))
@@ -1818,7 +1827,7 @@ class Settings(Harness):
         hello = self.request(self.conn, 1, "hello")["result"]
         self.assertEqual(hello["settings"], {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1,
                                              "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0},
-                                             "reactionsSeen": True})
+                                             "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}})
         self.assertEqual(hello["globalStatus"]["global.quickReply"], "off")
         other = self.connect()
         answer = self.request(self.conn, 2, "settings.set", settings={"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}})
@@ -1852,6 +1861,12 @@ class Settings(Harness):
         self.assertTrue(self.request(self.conn, 51, "settings.set", settings={"shortcuts": {}})["ok"])
         self.assertIs(json.loads(self.d.prefs.SETTINGS.read_text())["reactionsSeen"], False, "the shortcuts page leaves it alone")
         self.assertFalse(self.request(self.conn, 52, "settings.reactions", seen="no")["ok"])
+        mine = {"tone": 3, "recents": {"emoji:👍": {"c": 2.5, "t": 1789000000000}}}
+        self.assertEqual(self.request(self.conn, 53, "settings.emoji", **mine)["result"]["settings"]["emoji"], mine)
+        self.assertTrue(self.request(self.conn, 54, "settings.set", settings={"shortcuts": {}})["ok"])
+        self.assertEqual(json.loads(self.d.prefs.SETTINGS.read_text())["emoji"], mine, "the shortcuts page leaves it alone")
+        for rid, bad in ((55, {"tone": 6, "recents": {}}), (56, {"tone": 1, "recents": {"flag:x": {"c": 1, "t": 1}}}), (57, {"tone": 1})):
+            self.assertFalse(self.request(self.conn, rid, "settings.emoji", **bad)["ok"], bad)
 
     def test_global_shortcuts_are_registered_and_registered_again(self):
         answer = self.request(self.conn, 5, "settings.set",

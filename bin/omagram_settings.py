@@ -28,6 +28,9 @@ KEYS_MAX = 6
 PLAYBACK_RATES = (1, 1.5, 2)   # how fast voice and video messages play
 DOWNLOAD_SIZES = (0, 10, 50)   # megabytes up to which a video or a file downloads by itself; 0 never
 DOWNLOADS_DEFAULT = {"photos": True, "gifs": True, "videos": 0, "files": 0}
+EMOJI_KINDS = ("emoji", "symbols", "kaomoji")   # the emoji panel's recents are "<kind>:<what it types>"
+EMOJI_RECENTS_MAX = 80
+EMOJI_TEXT_MAX = 80
 ACTION_ID = re.compile(r"[a-z][A-Za-z]{0,20}\.[a-z][A-Za-z]{0,40}")
 SEQUENCE = re.compile(r"[\x21-\x7e]{1,40}")
 
@@ -57,7 +60,7 @@ BINDS_MAX = 4 * 1024 * 1024
 
 def empty():
     return {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1, "autoDownload": dict(DOWNLOADS_DEFAULT),
-            "reactionsSeen": True}
+            "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}}
 
 
 # ---------------------------------------------------------------- key combinations for Hyprland
@@ -92,6 +95,10 @@ def combo_parts(combo):
 
 
 # ---------------------------------------------------------------- checking and storing
+
+def _positive(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v < 1e15
+
 
 def check(value, strict=True):
     """Settings as the window sends them, checked field by field. Strict: raise ValueError on
@@ -168,6 +175,26 @@ def check(value, strict=True):
         bad("reactionsSeen is true or false")
     else:
         out["reactionsSeen"] = reactions_seen
+    emoji = value.get("emoji", {})   # the emoji panel: the skin tone (0 none, 1-5) and what you use most
+    if not isinstance(emoji, dict):
+        bad("emoji must be an object")
+        emoji = {}
+    tone = emoji.get("tone", 0)
+    if isinstance(tone, bool) or not isinstance(tone, int) or not 0 <= tone <= 5:
+        bad("emoji.tone is a whole number from 0 to 5")
+    else:
+        out["emoji"]["tone"] = tone
+    recents = emoji.get("recents", {})
+    if not isinstance(recents, dict) or len(recents) > EMOJI_RECENTS_MAX:
+        bad(f"emoji.recents is an object of at most {EMOJI_RECENTS_MAX} entries")
+        recents = {}
+    for key, entry in recents.items():
+        kind, _, text = key.partition(":") if isinstance(key, str) else ("", "", "")
+        if (kind not in EMOJI_KINDS or not 0 < len(text) <= EMOJI_TEXT_MAX or any(ord(ch) < 32 for ch in text)
+                or not isinstance(entry, dict) or not _positive(entry.get("c")) or not _positive(entry.get("t"))):
+            bad(f"{str(key)[:40]!r} is not a recent emoji")
+            continue
+        out["emoji"]["recents"][key] = {"c": float(entry["c"]), "t": int(entry["t"])}
     return out
 
 

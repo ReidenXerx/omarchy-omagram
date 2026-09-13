@@ -33,6 +33,10 @@ FocusScope {
   property string notice: ""
   property bool stickToBottom: true
   property bool stickersOpen: false
+  property bool emojiOpen: false             // the emoji panel, in the stickers' place
+  property var reactionTarget: null          // the message the emoji panel finds a reaction for
+  onStickersOpenChanged: if (stickersOpen) root.emojiOpen = false
+  onEmojiOpenChanged: if (emojiOpen) root.stickersOpen = false
 
   readonly property var replyTo: root.replyToId ? Model.findMessage(root.messages, root.replyToId) : null
   readonly property var editing: root.editingId ? Model.findMessage(root.messages, root.editingId) : null
@@ -61,6 +65,7 @@ FocusScope {
   readonly property bool modalOpen: messageMenu.visible || muteMenu.visible || sendMenu.visible || rescheduleMenu.visible
                                     || moreMenu.visible || diceMenu.visible || peoplePicker.visible || pollComposer.visible || peopleList.visible || autoDeleteMenu.visible
   readonly property var people: peopleList    // who reacted or has seen a message, for checks from outside
+  readonly property var emoji: emojiPanel
   readonly property var polls: pollComposer   // the poll being made, for checks from outside
   property bool blocked: false        // a dialog over the whole window, such as choosing where to forward
   property bool confirmDeleteRevoke: true
@@ -177,6 +182,8 @@ FocusScope {
     root.notice = ""
     root.stickToBottom = true
     root.stickersOpen = false
+    root.emojiOpen = false
+    root.reactionTarget = null
     root.pinnedMessage = null
     root.lastTypingMs = 0
     root.translations = ({})
@@ -765,6 +772,7 @@ FocusScope {
     else if (id === "thread") root.openThread(message)
     else if (id === "favoriteSticker") root.favoriteSticker(message)
     else if (id === "stickerSet") root.openStickerSet(message)
+    else if (id === "moreReactions") root.openReactionPicker(message)
     else if (id === "reactions") root.showReactions(message)
     else if (id === "viewers") root.showViewers(message)
     else if (id === "copy") root.copyText(message.content.text)
@@ -1220,8 +1228,36 @@ FocusScope {
   // Omarchy's emoji picker types the emoji into whatever has the keyboard: the message box.
   function openEmoji() {
     if (!root.chat) return
+    if (root.emojiOpen && !emojiPanel.reacting) {
+      root.closeEmoji()
+      return
+    }
+    root.reactionTarget = null
+    root.emojiOpen = true
+    Qt.callLater(function () { emojiPanel.open() })
+  }
+
+  function closeEmoji() {
+    root.emojiOpen = false
+    root.reactionTarget = null
     root.focusComposer()
-    Quickshell.execDetached(["/usr/bin/omarchy-shell", "shell", "toggle", "omarchy.emojis"])
+  }
+
+  // Every reaction the message may get, found by name: from its menu.
+  function openReactionPicker(message) {
+    if (!message || !root.chat) return
+    var id = message.id
+    root.reactionTarget = message
+    client.request("reactions.available", { chatId: message.chatId, messageId: id, all: true }, function (answer) {
+      if (!root.reactionTarget || root.reactionTarget.id !== id) return
+      if (!answer.ok) {
+        root.reactionTarget = null
+        root.flash(answer.error || "Telegram did not say which reactions it takes")
+        return
+      }
+      root.emojiOpen = true
+      Qt.callLater(function () { emojiPanel.openReactions(answer.result.emoji || []) })
+    })
   }
 
   function pasteImage() {
@@ -1465,6 +1501,9 @@ FocusScope {
                  insert: Model.commandText(c, group), command: true }
       })
       root.suggestionCursor = 0
+    } else if (token.kind === "emoji") {
+      root.suggestions = emojiPanel.suggest(token.query, 6)
+      root.suggestionCursor = 0
     } else if (token.kind === "mention" && group) {
       client.request("chat.mentions", root.target({ chatId: chatId, query: token.query }), function (answer) {
         if (serial !== root.suggestionSerial || !root.chat || root.chat.id !== chatId) return
@@ -1486,6 +1525,7 @@ FocusScope {
     composer.remove(token.start, token.end)
     composer.insert(token.start, item.insert)
     composer.cursorPosition = token.start + item.insert.length
+    if (item.emojiKey) emojiPanel.record(item.emojiKey)
     root.suggestions = []
     if (send && item.command) root.send()
   }
@@ -2125,6 +2165,29 @@ FocusScope {
         root.stickersOpen = false
         root.focusComposer()
       }
+    }
+
+    // ------------------------------------------------ emoji
+    EmojiPanel {
+      id: emojiPanel
+      Layout.fillWidth: true
+      Layout.preferredHeight: root.emojiOpen ? Style.space(300) : 0
+      visible: root.emojiOpen
+      app: root.app
+      onInserted: function (text) {
+        var at = composer.cursorPosition
+        composer.insert(at, text)
+        composer.cursorPosition = at + text.length
+      }
+      onReacted: function (emoji) {
+        var message = root.reactionTarget
+        root.reactionTarget = null
+        root.emojiOpen = false
+        root.focusMessages()
+        root.react(message, emoji)
+      }
+      onClosed: root.closeEmoji()
+      onReadyChanged: if (ready) root.updateSuggestions()
     }
 
     // ------------------------------------------------ a date to go to
@@ -2885,6 +2948,7 @@ FocusScope {
     app: root.app
     items: Model.messageMenu(root.menuMessage, root.menuProperties,
                              !!root.menuMessage && root.translations[root.captionHolder(root.menuMessage).id] !== undefined, root.chat)
+           .concat(root.menuReactions.length ? [{ id: "moreReactions", label: "More reactions…" }] : [])
     reactions: root.menuReactions
     chosen: root.menuMessage ? (root.menuMessage.reactions || []).filter(function (r) { return r.chosen }).map(function (r) { return r.emoji }) : []
     onDismissed: root.afterMenu()

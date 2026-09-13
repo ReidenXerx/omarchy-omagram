@@ -45,7 +45,10 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   them on the chat or by pasting a copied image: they wait above the message box, which holds their
   caption, and go as albums of up to ten (`Ctrl+Shift+O` sends them as files). Record voice
   messages (`Ctrl+R`) and round video messages (`Ctrl+Shift+R`). A file's menu opens it with its app or saves it to Downloads.
-- **Emoji** — Omarchy's emoji picker, from the message box (`Ctrl+;`).
+- **Emoji** — an emoji panel beside the message box (`Ctrl+;`), from the Omarchy emoji picker plugin's
+  data and search: emoji, symbols and kaomoji found by their English, Ukrainian or Russian names, the
+  ones you use most first, your skin tone kept (`Alt+0`–`Alt+5`). Type `:name` in a message for emoji
+  suggestions, and choose **More reactions…** in a message's menu to find any reaction the chat allows.
 - **Account** — Settings has your profile (change your name, username, bio and photo; a photo is cut
   to a centred square); privacy (who sees your last seen, photo, number, bio and birthday, who can
   find you by number, call you or add you to groups: Enter goes Everybody → My contacts → Nobody and
@@ -143,7 +146,7 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Alt+↑` / `Alt+↓` | previous / next chat |
 | `Ctrl+PgUp` / `Ctrl+PgDn`, `Ctrl+[` / `Ctrl+]` | previous / next folder tab |
 | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | chat list / messages / composer |
-| `Ctrl+;` or `Ctrl+.` | emoji |
+| `Ctrl+;` or `Ctrl+.` | the emoji panel: emoji, symbols and kaomoji by name |
 | `Ctrl+M` | jump to the next message that mentions you |
 | `Ctrl+Shift+E` | jump to the next reaction to your messages you have not seen |
 | `Ctrl+Shift+J` | go to a date in the chat (today, yesterday, 1 Sep, 01.09.2026) |

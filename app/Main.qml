@@ -109,11 +109,18 @@ Scope {
     omagram.playbackRate = Model.playbackRate(view.settings.playbackRate)
     omagram.autoDownloadRules = view.settings.autoDownload || null
     omagram.reactionsSeen = view.settings.reactionsSeen !== false
+    omagram.emojiState = view.settings.emoji || ({ tone: 0, recents: ({}) })
   }
 
   // What downloads by itself as it comes on screen (Model.autoDownload); kept in the settings.
   property var autoDownloadRules: null
   property bool reactionsSeen: true        // reactions to your messages count as seen when the chat opens
+  property var emojiState: ({ tone: 0, recents: ({}) })   // the skin tone, and the emoji you use most
+
+  function saveEmojiState(state) {
+    omagram.emojiState = state
+    service.request("settings.emoji", state)
+  }
   function setAutoDownload(rules) {
     omagram.autoDownloadRules = rules
     service.request("settings.autoDownload", { rules: rules })

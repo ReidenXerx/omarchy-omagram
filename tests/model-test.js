@@ -564,6 +564,22 @@ test("your profile: what can go to Telegram, its refusals in words, what each ro
   eq([M.profileChat(Object.assign({}, p, { lastName: "Lee" })).title, M.profileChat(null)], ["Ann Lee", null])
 })
 
+test("emoji by name while typing, and the emoji picker's own search and data", () => {
+  eq(M.suggestToken("say :hea", 8), { kind: "emoji", query: "hea", start: 4, end: 8 })
+  eq([":ok", "at 12:30", "see http://x", "say :h", "(:smile"].map(t => M.suggestToken(t, t.length).kind),
+     ["emoji", "", "", "", "emoji"])
+  eq(M.suggestToken("say :hea now", 8).kind, "emoji", "the cursor after the name, a space after it")
+  const load = file => fs.readFileSync(path.join(__dirname, "..", "app", "emoji", file), "utf8")
+  const emojiBox = {}
+  vm.runInNewContext(load("EmojiModel.js").replace(".pragma library", "") + "\nthis.E = { prepare, search, textFor, recordUse, recentItems }", emojiBox)
+  const E = emojiBox.E
+  const items = E.prepare(JSON.parse(load("emoji.json")), "emoji")
+  eq([E.search(items, "heart", 1)[0].names[0].includes("heart"), E.search(items, "серце", 3).length > 0, E.search(items, "сердце", 3).length > 0],
+     [true, true, true], "English, Ukrainian and Russian names")
+  const thumbs = E.search(items, "thumbs up", 1)[0]
+  eq([E.textFor(thumbs, 0), E.textFor(thumbs, 3) !== E.textFor(thumbs, 0)], ["👍", true])
+})
+
 test("readable colours: contrast, text that reads, ink on a fill", () => {
   const hex = h => ({ r: parseInt(h.slice(1, 3), 16) / 255, g: parseInt(h.slice(3, 5), 16) / 255, b: parseInt(h.slice(5, 7), 16) / 255 })
   const round = v => Math.round(v * 100) / 100
