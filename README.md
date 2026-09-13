@@ -29,7 +29,8 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   or select several and act on them at once. Read ticks, "typing…", last seen and the pinned
   message above the chat, with read state kept in sync with your other devices. Right-click a
   message (or press `m`) for everything Telegram allows on it: translation, who reacted to it, and
-  in a group who has seen yours. Send without sound, at a time you pick or once the other person is online (`Ctrl+Alt+Enter`). Search finds public
+  in a group who has seen yours. Send without sound (one message, or everything in a chat set to silent sending with `Ctrl+Shift+B`, which the message box
+  shows plainly), at a time you pick or once the other person is online (`Ctrl+Alt+Enter`). Search finds public
   groups and channels by name too; one you open is joined from the bar that takes the message box's
   place. The + button (`Ctrl+Shift+A`) sends a poll or a quiz, dice, a person's contact card, or a
   location: coordinates, or a Google Maps or OpenStreetMap link pasted in.
@@ -51,7 +52,8 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   keeps the exceptions you made), blocked users, two-step verification (turn it on with a hint and
   a recovery email, change the password, turn it off), how long you may be away before Telegram
   deletes the account, and after how long messages disappear in chats you start; notifications for private chats, groups and channels, and whether they show
-  the message text; what downloads by itself (photos, GIFs and round video messages; videos and files
+  the message text; whether reactions to your messages count as seen once you open the chat (they do, unless you say
+  otherwise); what downloads by itself (photos, GIFs and round video messages; videos and files
   up to 10 or 50 MB); how much Omagram keeps on this computer (and clears the cache), every device
   signed in to your account (sign any of them out), and signs you out here.
 - **Proxies** — Settings → Connection adds SOCKS5, HTTP and MTProto proxies, or one from its
@@ -147,6 +149,7 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Ctrl+Shift+J` | go to a date in the chat (today, yesterday, 1 Sep, 01.09.2026) |
 | `Ctrl+Shift+M` | mute or unmute the open chat |
 | `Ctrl+Shift+D` | set messages in the open chat to disappear after a day, a week or a month |
+| `Ctrl+Shift+B` | silent sending in the open chat, on or off: Telegram's own setting, so your other apps follow it |
 | `Ctrl+Shift+P` | go to the pinned message |
 | `Ctrl+I` | the chat's info (`Tab` switches its tabs, `Enter` opens, `Esc` closes) |
 | `Ctrl+Shift+N` | start a chat, a group or a channel (`Enter` opens or adds, `Ctrl+Enter` goes on) |

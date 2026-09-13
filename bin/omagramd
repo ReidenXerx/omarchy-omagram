@@ -486,6 +486,7 @@ class Daemon:
         self.notifier = notify.Notifier(None, None)
         self.pending_open = None   # (monotonic time, {"chatId", "reply"}) for the next window
         self.focus_client = None   # the client whose focused chat keeps notifications quiet
+        self.focused_chat = 0      # the chat it shows
         self.recording = None      # the voice message being recorded: proc, path, chatId, started
         self.tasks = queue.Queue() # finished background work, run on the loop: (done, result, error)
         self.jobs = 0
@@ -703,6 +704,8 @@ class Daemon:
             if out.get("event") == "call":
                 self.on_call(out["call"])
             self.broadcast(out)
+        if event.get("@type") in ("updateChatUnreadReactionCount", "updateMessageUnreadReactions"):
+            self.reactions_seen(model._int(event.get("chat_id")))
 
     def on_call(self, call):
         """Calls cannot be answered here -- TDLib brings no voice engine -- so an incoming one is
@@ -925,6 +928,7 @@ class Daemon:
     def drop(self, client):
         if client is self.focus_client:   # a window that closed is not reading its chat any more
             self.focus_client = None
+            self.focused_chat = 0
             self.notifier.focus(0)
         fd = client.sock.fileno()
         if fd in self.clients:
@@ -1234,6 +1238,15 @@ class Daemon:
             raise BadRequest("messages disappear after whole days, but in a secret chat")
         self.td_send({"@type": "setChatMessageAutoDeleteTime", "chat_id": chat_id, "message_auto_delete_time": seconds},
                      client, rid, lambda _ok: {"seconds": seconds})
+
+    def cmd_chat_set_silent(self, client, rid, args):
+        """Telegram's own per-chat silent sending: on, everything you send to the chat goes without sound, from
+        here and from your other apps, until it is turned off."""
+        silent = args.get("silent")
+        if not isinstance(silent, bool):
+            raise BadRequest("silent is true or false")
+        self.td_send({"@type": "toggleChatDefaultDisableNotification", "chat_id": arg_int(args, "chatId"),
+                      "default_disable_notification": silent}, client, rid, lambda _ok: {"silent": silent})
 
     def cmd_chat_mute(self, client, rid, args):
         chat_id = arg_int(args, "chatId")
@@ -2397,7 +2410,7 @@ class Daemon:
     def cmd_settings_set(self, client, rid, args):
         settings = args.get("settings")
         if isinstance(settings, dict):   # the shortcuts page leaves the speed and the downloads as they are
-            settings = dict({k: self.prefs[k] for k in ("playbackRate", "autoDownload") if k in self.prefs}, **settings)
+            settings = dict({k: self.prefs[k] for k in ("playbackRate", "autoDownload", "reactionsSeen") if k in self.prefs}, **settings)
         try:
             new = prefs.check(settings)
         except ValueError as e:
@@ -2419,6 +2432,20 @@ class Daemon:
         if isinstance(rate, bool) or rate not in prefs.PLAYBACK_RATES:
             raise BadRequest("the playback rate is 1, 1.5 or 2")
         new = dict(self.prefs, playbackRate=rate)
+        try:
+            prefs.save(new)
+        except (safe.UnsafeError, OSError):
+            raise BadRequest("the settings could not be saved")
+        self.prefs = new
+        self.respond(client, rid, self.settings_view())
+        self.broadcast(dict({"event": "settings"}, **self.settings_view()))
+
+    def cmd_settings_reactions(self, client, rid, args):
+        """Whether reactions to your messages count as seen once you open the chat, so none wait to be found."""
+        seen = args.get("seen")
+        if not isinstance(seen, bool):
+            raise BadRequest("seen is true or false")
+        new = dict(self.prefs, reactionsSeen=seen)
         try:
             prefs.save(new)
         except (safe.UnsafeError, OSError):
@@ -2451,8 +2478,18 @@ class Daemon:
     def cmd_ui_focus(self, client, rid, args):
         chat_id = arg_int(args, "chatId", None, None, 0)
         self.focus_client = client if chat_id else None
+        self.focused_chat = chat_id
         self.notifier.focus(chat_id)
+        self.reactions_seen(chat_id)
         self.respond(client, rid, {})
+
+    def reactions_seen(self, chat_id):
+        """With reactionsSeen on (the default), reactions to your messages in the chat on screen count as seen at
+        once: nothing waits for you to scroll up to it."""
+        chat = self.state.chats.get(chat_id)
+        if (chat_id and chat_id == self.focused_chat and chat and chat.get("reactions", 0) > 0
+                and self.prefs.get("reactionsSeen", True)):
+            self.td_send({"@type": "readAllChatReactions", "chat_id": chat_id})
 
     def cmd_ui_open(self, client, rid, args):
         self.open_chat(arg_int(args, "chatId"), args.get("reply") is True)
@@ -2566,10 +2603,17 @@ class Daemon:
         return {"@type": "linkPreviewOptions", "is_disabled": where == "none", "url": "", "force_small_media": False,
                 "force_large_media": False, "show_above_text": where == "above"}
 
+    def chat_silent(self, args):
+        """Whether the chat a message goes to is set to silent sending: then it goes without sound unless the
+        sender says otherwise."""
+        chat_id = args.get("chatId")
+        chat = self.state.chats.get(chat_id) if isinstance(chat_id, int) and not isinstance(chat_id, bool) else None
+        return bool(chat and chat.get("silent"))
+
     def send_options(self, args):
-        """How a message goes out: silently, and at a date (sendAt, in seconds) or once the other
-        person is online (sendAt -1). None when neither is asked for."""
-        silent = args.get("silent", False)
+        """How a message goes out: silently (by default in a chat set to silent sending), and at a date
+        (sendAt, in seconds) or once the other person is online (sendAt -1). None when neither applies."""
+        silent = args.get("silent", self.chat_silent(args))
         if not isinstance(silent, bool):
             raise BadRequest("silent is true or false")
         send_at = arg_int(args, "sendAt", -1, None, 0)
@@ -3022,6 +3066,8 @@ COMMANDS = {
     "settings.set": ("cmd_settings_set", False),
     "settings.playback": ("cmd_settings_playback", False),
     "settings.autoDownload": ("cmd_settings_auto_download", False),
+    "settings.reactions": ("cmd_settings_reactions", False),
+    "chat.setSilent": ("cmd_chat_set_silent", True),
     "shortcuts.apply": ("cmd_shortcuts_apply", False),
     "voice.start": ("cmd_voice_start", True),
     "voice.stop": ("cmd_voice_stop", True),

@@ -987,7 +987,8 @@ function sendMenu(chat, meId, nowMs, hasText) {
   if (!isObject(chat)) return []
   var out = []
   if (hasText) {
-    out.push({ id: "silent", label: "Send without sound" })
+    // A chat set to silent sending sends without sound already: the one-off is a message with sound.
+    out.push(chat.silent ? { id: "loud", label: "Send with sound" } : { id: "silent", label: "Send without sound" })
     if (chat.kind !== "secret") {   // a secret chat cannot schedule
       var p = schedulePresets(nowMs)
       out.push({ id: "at:" + p.hour, label: "Send in an hour" },
@@ -1014,6 +1015,7 @@ function rescheduleMenu(chat, meId, nowMs) {
 // What a send or reschedule menu item asks for: { silent } or { sendAt }; null for anything else.
 function sendChoice(id) {
   if (id === "silent") return { silent: true }
+  if (id === "loud") return { silent: false }
   if (id === "online") return { sendAt: -1 }
   if (id === "now") return { sendAt: 0 }
   var m = /^at:([1-9][0-9]{0,10})$/.exec(String(id))

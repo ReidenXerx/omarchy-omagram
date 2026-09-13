@@ -1427,6 +1427,44 @@ class ChatsAndAccount(Harness):
         self.assertEqual((q["chat_folder_ids"], q["main_chat_list_position"]), ([3, 2], 0))
         self.assertFalse(self.request(self.conn, 210, "folders.reorder", ids=[2])["ok"])
 
+    def test_a_chat_set_to_silent_sends_everything_without_sound(self):
+        q, r = self.call(270, "chat.setSilent", "toggleChatDefaultDisableNotification", {"@type": "ok"}, chatId=500, silent=True)
+        self.assertEqual((q["chat_id"], q["default_disable_notification"], r["result"]), (500, True, {"silent": True}))
+        self.assertFalse(self.request(self.conn, 271, "chat.setSilent", chatId=500, silent="yes")["ok"])
+        self.td_event({"@type": "updateChatDefaultDisableNotification", "chat_id": 500, "default_disable_notification": True,
+                       "@client_id": 1})
+        self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == 500 and v["chat"]["silent"] is True)
+        q, _ = self.call(272, "message.send", "sendMessage", {"@type": "message", "id": 20, "chat_id": 500}, chatId=500, text="quiet")
+        self.assertIs(q["options"]["disable_notification"], True, "every message there goes without sound")
+        q, _ = self.call(273, "message.send", "sendMessage", {"@type": "message", "id": 21, "chat_id": 500}, chatId=500, text="loud",
+                         silent=False)
+        self.assertIsNone(q["options"], "unless you send one with sound")
+        q, _ = self.call(274, "message.send", "sendMessage", {"@type": "message", "id": 22, "chat_id": -66}, chatId=-66, text="hi")
+        self.assertIsNone(q["options"], "other chats are not touched")
+
+    def test_reactions_count_as_seen_in_the_chat_on_screen(self):
+        self.td_event({"@type": "updateChatUnreadReactionCount", "chat_id": 500, "unread_reaction_count": 2, "@client_id": 1})
+        self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == 500 and v["chat"]["unreadReactions"] == 2)
+        self.request(self.conn, 259, "hello")   # everything before it has been handled
+        self.assertEqual(self.sent_count("readAllChatReactions"), 0, "not while nobody looks at the chat")
+        before = self.sent_count("readAllChatReactions")
+        self.assertTrue(self.request(self.conn, 260, "ui.focus", chatId=500)["ok"])
+        self.assertEqual(self.next_query("readAllChatReactions", before)["chat_id"], 500)
+        before = self.sent_count("readAllChatReactions")   # one arriving while it is on screen is seen at once too
+        self.td_event({"@type": "updateMessageUnreadReactions", "chat_id": 500, "message_id": 9, "unread_reactions": [],
+                       "unread_reaction_count": 1, "@client_id": 1})
+        self.assertEqual(self.next_query("readAllChatReactions", before)["chat_id"], 500)
+        self.assertTrue(self.request(self.conn, 261, "settings.reactions", seen=False)["ok"])
+        count = self.sent_count("readAllChatReactions")
+        self.td_event({"@type": "updateChatUnreadReactionCount", "chat_id": 500, "unread_reaction_count": 3, "@client_id": 1})
+        self.request(self.conn, 262, "hello")
+        self.assertEqual(self.sent_count("readAllChatReactions"), count, "with the setting off they wait to be seen")
+        self.assertTrue(self.request(self.conn, 263, "settings.reactions", seen=True)["ok"])
+        self.assertTrue(self.request(self.conn, 264, "ui.focus", chatId=0)["ok"])
+        self.td_event({"@type": "updateChatUnreadReactionCount", "chat_id": 500, "unread_reaction_count": 4, "@client_id": 1})
+        self.request(self.conn, 265, "hello")
+        self.assertEqual(self.sent_count("readAllChatReactions"), count, "nor once the window looks away")
+
     def test_disappearing_messages(self):
         q, r = self.call(250, "chat.setAutoDelete", "setChatMessageAutoDeleteTime", {"@type": "ok"}, chatId=500, seconds=604800)
         self.assertEqual((q["chat_id"], q["message_auto_delete_time"], r["result"]), (500, 604800, {"seconds": 604800}))
@@ -1779,7 +1817,8 @@ class Settings(Harness):
     def test_settings_come_with_hello_and_are_saved_and_shared(self):
         hello = self.request(self.conn, 1, "hello")["result"]
         self.assertEqual(hello["settings"], {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1,
-                                             "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0}})
+                                             "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0},
+                                             "reactionsSeen": True})
         self.assertEqual(hello["globalStatus"]["global.quickReply"], "off")
         other = self.connect()
         answer = self.request(self.conn, 2, "settings.set", settings={"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}})
@@ -1808,6 +1847,11 @@ class Settings(Harness):
         self.assertEqual((saved["autoDownload"], saved["playbackRate"]), (mine, 1.5), "the shortcuts page leaves both alone")
         for rid, rules in ((47, {"videos": 20}), (48, "all"), (49, {"photos": 1})):
             self.assertFalse(self.request(self.conn, rid, "settings.autoDownload", rules=rules)["ok"], rules)
+        answer = self.request(self.conn, 50, "settings.reactions", seen=False)
+        self.assertIs(answer["result"]["settings"]["reactionsSeen"], False)
+        self.assertTrue(self.request(self.conn, 51, "settings.set", settings={"shortcuts": {}})["ok"])
+        self.assertIs(json.loads(self.d.prefs.SETTINGS.read_text())["reactionsSeen"], False, "the shortcuts page leaves it alone")
+        self.assertFalse(self.request(self.conn, 52, "settings.reactions", seen="no")["ok"])
 
     def test_global_shortcuts_are_registered_and_registered_again(self):
         answer = self.request(self.conn, 5, "settings.set",

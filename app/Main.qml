@@ -100,10 +100,12 @@ Scope {
     omagram.connection = view.connection || ""
     omagram.playbackRate = Model.playbackRate(view.settings.playbackRate)
     omagram.autoDownloadRules = view.settings.autoDownload || null
+    omagram.reactionsSeen = view.settings.reactionsSeen !== false
   }
 
   // What downloads by itself as it comes on screen (Model.autoDownload); kept in the settings.
   property var autoDownloadRules: null
+  property bool reactionsSeen: true        // reactions to your messages count as seen when the chat opens
   function setAutoDownload(rules) {
     omagram.autoDownloadRules = rules
     service.request("settings.autoDownload", { rules: rules })

@@ -367,7 +367,7 @@ FocusScope {
     var args = root.target({ chatId: root.chat.id, paths: root.attachments.map(function (a) { return a.path }),
                              asMedia: root.attachAsMedia, caption: caption })
     if (root.replyToId) args.replyToMessageId = root.replyToId
-    if (options && options.silent) args.silent = true
+    if (options && typeof options.silent === "boolean") args.silent = options.silent
     if (options && options.sendAt) args.sendAt = options.sendAt
     client.request("message.sendFiles", args, function (answer) {
       if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
@@ -411,6 +411,7 @@ FocusScope {
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.nextReaction"); enabled: root.shortcutsOn; onActivated: root.nextReaction() }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.jumpToDate"); enabled: root.shortcutsOn; onActivated: root.openDateBar() }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.autoDelete"); enabled: root.shortcutsOn; onActivated: root.openAutoDeleteMenu() }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.silent"); enabled: root.shortcutsOn; onActivated: root.toggleSilent() }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.mute"); enabled: root.shortcutsOn; onActivated: app.toggleMute(root.chat.id) }
   Shortcut {
     sequences: Keymap.keysFor(app.shortcuts, "window.pinnedMessage")
@@ -1148,6 +1149,17 @@ FocusScope {
     else if (id === "autoDelete") root.openAutoDeleteMenu()
   }
 
+  // Silent sending, Telegram's own setting of the chat: everything sent here goes without sound until it is off.
+  function toggleSilent() {
+    if (!root.chat || !root.canWrite) return
+    var chatId = root.chat.id
+    var silent = !root.chat.silent
+    client.request("chat.setSilent", { chatId: chatId, silent: silent }, function (answer) {
+      if (!answer.ok) root.flash(answer.error || "Telegram did not take the change")
+      else root.flash(silent ? "Silent sending is on: messages here go without sound" : "Silent sending is off")
+    })
+  }
+
   // After how long messages in the open chat disappear: from its info, or its key.
   function openAutoDeleteMenu() {
     if (!root.chat) return
@@ -1341,7 +1353,7 @@ FocusScope {
     if (root.replyToId) args.replyToMessageId = root.replyToId
     if (root.linkPreviewMode !== "below") args.linkPreview = root.linkPreviewMode
     var later = options && options.sendAt ? options.sendAt : 0
-    if (options && options.silent) args.silent = true
+    if (options && typeof options.silent === "boolean") args.silent = options.silent
     if (later) args.sendAt = later
     client.request("message.send", args, function (answer) {
       if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
@@ -2525,14 +2537,59 @@ FocusScope {
         anchors.bottom: parent.bottom
         anchors.margins: Style.space(10)
         radius: Style.cornerRadius
-        color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.05)
+        readonly property bool silent: !!root.chat && root.chat.silent === true
+        color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, silent ? 0.02 : 0.05)
         border.width: Math.max(1, Style.space(1.5))
-        border.color: composer.activeFocus ? app.accent : "transparent"
+        // Silent sending draws the box as an outline, focused or not: a message without sound is never a surprise.
+        border.color: silent ? Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, composer.activeFocus ? 0.55 : 0.3)
+                             : (composer.activeFocus ? app.accent : "transparent")
+
+        Rectangle {
+          id: silentChip
+          visible: parent.silent
+          anchors.left: parent.left
+          anchors.top: parent.top
+          anchors.leftMargin: Style.space(8)
+          anchors.topMargin: Style.space(7)
+          width: silentChipRow.implicitWidth + Style.space(14)
+          height: silentChipRow.implicitHeight + Style.space(6)
+          radius: height / 2
+          color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.08)
+
+          Row {
+            id: silentChipRow
+            anchors.centerIn: parent
+            spacing: Style.space(5)
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: String.fromCodePoint(0xF00A0)   // md-bell-sleep
+              color: app.foreground
+              font.family: app.glyphFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Silent"
+              textFormat: Text.PlainText
+              color: app.foreground
+              font.family: app.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+          }
+
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.toggleSilent()
+          }
+        }
 
         Flickable {
           id: composerFlick
           anchors.fill: parent
-          anchors.leftMargin: Style.space(12)
+          anchors.leftMargin: silentChip.visible ? silentChip.width + Style.space(16) : Style.space(12)
           anchors.rightMargin: Style.space(12)
           anchors.topMargin: Style.space(8)
           anchors.bottomMargin: Style.space(8)
@@ -2604,7 +2661,8 @@ FocusScope {
                   : root.attachments.length ? "A caption for the files, if you like   "
                                               + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.send")[0] || "") + " to send"
                   : (root.threadOpen ? (app.openTopic.name === "Comments" ? "Comment" : "Reply") : "Message") + "   "
-                    + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.send")[0] || "") + " to send, "
+                    + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.send")[0] || "")
+                    + (root.chat && root.chat.silent ? " to send without sound, " : " to send, ")
                     + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.newLine")[0] || "") + " for a new line"
               color: app.muted
               opacity: 0.7
@@ -2624,9 +2682,12 @@ FocusScope {
         spacing: 0
 
         Repeater {
-          // md-send-clock-outline U+F1164, md-emoticon-outline U+F01F2, md-paperclip U+F03E2, md-plus-circle-outline U+F0419, md-sticker-emoji U+F0785,
-          // md-video U+F0567, md-microphone U+F036C
+          // md-bell-sleep U+F00A0 (its outline U+F0A93), md-send-clock-outline U+F1164, md-emoticon-outline U+F01F2, md-paperclip U+F03E2,
+          // md-plus-circle-outline U+F0419, md-sticker-emoji U+F0785, md-video U+F0567, md-microphone U+F036C
           model: [
+            { glyph: String.fromCodePoint(root.chat && root.chat.silent ? 0xF00A0 : 0xF0A93), action: "silent",
+              hint: (root.chat && root.chat.silent ? "Silent sending is on: messages here go without sound" : "Silent sending in this chat")
+                    + "   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.silent")[0] || "") },
             { glyph: String.fromCodePoint(0xF1164), action: "later",
               hint: "Send later or without sound   " + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.later")[0] || "") },
             { glyph: String.fromCodePoint(0xF01F2), action: "emoji", hint: "Emoji   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.emoji")[0] || "") },
@@ -2645,7 +2706,8 @@ FocusScope {
             Text {
               anchors.centerIn: parent
               text: composerButton.modelData.glyph
-              color: buttonArea.containsMouse || (composerButton.modelData.action === "stickers" && root.stickersOpen) ? app.accent : app.muted
+              color: buttonArea.containsMouse || (composerButton.modelData.action === "stickers" && root.stickersOpen)
+                     || (composerButton.modelData.action === "silent" && !!root.chat && root.chat.silent) ? app.foreground : app.muted
               font.family: app.glyphFamily
               font.pixelSize: Style.font.title
             }
@@ -2654,7 +2716,10 @@ FocusScope {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onClicked: root.composerAction(composerButton.modelData.action, composerButton)
+              onClicked: {
+                if (composerButton.modelData.action === "silent") root.toggleSilent()
+                else root.composerAction(composerButton.modelData.action, composerButton)
+              }
               onContainsMouseChanged: if (containsMouse) root.flash(composerButton.modelData.hint)
             }
           }

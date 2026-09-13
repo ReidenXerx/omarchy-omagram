@@ -63,6 +63,7 @@ var ACTIONS = [
   { id: "window.nextReaction", label: "Jump to the next reaction you have not seen", keys: ["Ctrl+Shift+E"] },
   { id: "window.jumpToDate", label: "Go to a date in the chat", keys: ["Ctrl+Shift+J"] },
   { id: "window.autoDelete", label: "Set messages in the open chat to disappear", keys: ["Ctrl+Shift+D"] },
+  { id: "window.silent", label: "Silent sending in the open chat: on or off", keys: ["Ctrl+Shift+B"] },
   { id: "window.mute", label: "Mute or unmute the open chat", keys: ["Ctrl+Shift+M"] },
   { id: "window.pinnedMessage", label: "Go to the pinned message", keys: ["Ctrl+Shift+P"] },
   { id: "window.chatInfo", label: "Show or hide the chat's info", keys: ["Ctrl+I"] },

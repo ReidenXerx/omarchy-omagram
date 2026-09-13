@@ -394,6 +394,9 @@ test("sending later: presets, words and choices", () => {
   eq(M.sendChoice("online"), { sendAt: -1 })
   eq(M.sendChoice("now"), { sendAt: 0 })
   eq(M.sendChoice("at:1789999999"), { sendAt: 1789999999 })
+  eq(M.sendMenu(Object.assign({}, person, { silent: true }), 1, now, true)[0], { id: "loud", label: "Send with sound" },
+     "a chat sending silently offers one message with sound")
+  eq(M.sendChoice("loud"), { silent: false })
   assert.strictEqual(M.sendChoice("at:soon"), null)
   eq(M.sendMenu({ id: -5, kind: "secret", userId: 7 }, 1, now, true).map(i => i.id), ["silent"], "a secret chat cannot schedule")
 })

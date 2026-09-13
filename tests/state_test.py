@@ -385,6 +385,14 @@ class Messages(unittest.TestCase):
                                         "type": {"@type": "linkPreviewTypeUnsupported"}}
         self.assertEqual(s.message(m)["content"]["linkPreview"]["above"], True)
 
+    def test_silent_sending_is_a_setting_of_the_chat(self):
+        s = model.State()
+        s.apply({"@type": "updateNewChat", "chat": dict(chat(7, "Ann"), default_disable_notification=True)})
+        s.apply({"@type": "updateNewChat", "chat": chat(8, "Bob")})
+        self.assertEqual((s.chat_view(7)["silent"], s.chat_view(8)["silent"]), (True, False))
+        out = s.apply({"@type": "updateChatDefaultDisableNotification", "chat_id": 7, "default_disable_notification": False})
+        self.assertIs(out[0]["chat"]["silent"], False)
+
     def test_proxies_and_the_connection(self):
         s = model.State()
         added = {"@type": "addedProxy", "id": 3, "last_used_date": 1789000000, "is_enabled": True, "comment": "",

@@ -56,7 +56,8 @@ BINDS_MAX = 4 * 1024 * 1024
 
 
 def empty():
-    return {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1, "autoDownload": dict(DOWNLOADS_DEFAULT)}
+    return {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1, "autoDownload": dict(DOWNLOADS_DEFAULT),
+            "reactionsSeen": True}
 
 
 # ---------------------------------------------------------------- key combinations for Hyprland
@@ -162,6 +163,11 @@ def check(value, strict=True):
             bad(f"autoDownload.{key} is " + ("true or false" if yes_or_no else "0, 10 or 50"))
             continue
         out["autoDownload"][key] = v
+    reactions_seen = value.get("reactionsSeen", True)   # reactions to your messages count as seen when the chat opens
+    if not isinstance(reactions_seen, bool):
+        bad("reactionsSeen is true or false")
+    else:
+        out["reactionsSeen"] = reactions_seen
     return out
 
 

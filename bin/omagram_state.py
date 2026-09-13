@@ -1112,6 +1112,8 @@ class State:
             "unreadReactions": chat.get("reactions", 0),   # messages of yours with reactions you have not seen
             # Messages disappear this many seconds after they are sent (once seen, in a secret chat); 0 when they stay.
             "autoDelete": chat.get("autoDelete", 0),
+            # Silent sending, Telegram's own setting of the chat: on, what you send goes without sound until it is off.
+            "silent": chat.get("silent", False),
             "canSetAutoDelete": self._can_set_auto_delete(chat, group),
             "muted": chat["muteFor"] > 0,
             # int64 order, as text: a JavaScript number would round it and shuffle the list.
@@ -1189,6 +1191,7 @@ class State:
             "mentions": max(0, _int(c.get("unread_mention_count"))),
             "reactions": max(0, _int(c.get("unread_reaction_count"))),
             "autoDelete": max(0, _int(c.get("message_auto_delete_time"))),
+            "silent": c.get("default_disable_notification") is True,   # what you send here goes without sound
             "canChangeInfo": _obj(c.get("permissions")).get("can_change_info") is True,   # what every member may do
             "muteFor": max(0, _int(_obj(c.get("notification_settings")).get("mute_for"))),
             "positions": {},
@@ -1272,6 +1275,13 @@ class State:
         if not chat:
             return []
         chat["mentions"] = max(0, _int(u.get("unread_mention_count")))
+        return self._chat_event(chat["id"])
+
+    def _on_updateChatDefaultDisableNotification(self, u):
+        chat = self._chat(_int(u.get("chat_id")))
+        if not chat:
+            return []
+        chat["silent"] = u.get("default_disable_notification") is True
         return self._chat_event(chat["id"])
 
     def _on_updateConnectionState(self, u):
