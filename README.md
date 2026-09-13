@@ -15,7 +15,8 @@ overlay on a key, and desktop notifications you can answer without leaving what 
 
 ## What it does
 
-- **Chats** — your chat list with folders as tabs, pinned, muted and archived chats, unread
+- **Chats** — your chat list with folders as tabs (make, change, reorder and delete folders in
+  Settings: the kinds of chats a folder takes, what it leaves out, chats always or never in it), pinned, muted and archived chats, unread
   counts (or mark a chat unread), and drafts that follow you to your other devices. Pin (`p`),
   archive (`a`) and mute (`m`) from the keyboard, or right-click a chat. Start a chat with a
   contact or anyone's @username, or create a group or a channel (`Ctrl+Shift+N`, or the pencil).

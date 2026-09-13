@@ -40,7 +40,8 @@ FocusScope {
   readonly property var rows: settings.buildRows()
   readonly property var current: settings.rows[settings.cursor] || null
   readonly property var accountKinds: ["profilePhoto", "profileField", "profilePhone", "privacy", "blocked", "blockedSender", "password",
-                                       "passwordOff", "passwordCode", "accountTtl", "scope", "previews", "download",
+                                       "passwordOff", "passwordCode", "accountTtl", "scope", "previews", "download", "folder", "newFolder",
+                                       "folderName", "folderFlag", "folderChat", "folderAdd", "folderSave", "folderDelete",
                                        "storage", "sessions", "session", "otherSessions", "logout"]
 
   signal closed()
@@ -53,11 +54,13 @@ FocusScope {
     settings.editing = null
     settings.flow = null
     settings.editorError = ""
+    settings.folderOpen = null
     settings.nowMs = Date.now()
     settings.forceActiveFocus()
     settings.loadProfile()
     settings.loadPrivacy()
     settings.loadNotifications()
+    settings.loadFolders()
     settings.loadStorage()
     settings.loadSessions()
   }
@@ -75,6 +78,7 @@ FocusScope {
   }
 
   function buildRows() {
+    if (settings.folderOpen) return settings.folderRows()
     var out = [{ kind: "header", title: "Profile", note: "" },
                { kind: "profilePhoto", label: "Photo" },
                { kind: "profileField", field: "firstName", label: "First name" },
@@ -109,6 +113,9 @@ FocusScope {
              { kind: "download", id: "gifs", label: "GIFs and round video messages" },
              { kind: "download", id: "videos", label: "Videos" },
              { kind: "download", id: "files", label: "Files and music" },
+             { kind: "header", title: "Chat folders", note: "Enter opens a folder  ·  [ and ] move it earlier or later" })
+    for (var f = 0; f < settings.folders.length; f++) out.push({ kind: "folder", folder: settings.folders[f], label: settings.folders[f].name })
+    out.push({ kind: "newFolder", label: "New folder" },
              { kind: "header", title: "Account", note: "" },
              { kind: "storage", label: "Storage on this computer" },
              { kind: "sessions", label: "Devices signed in" })
@@ -252,6 +259,13 @@ FocusScope {
 
   function saveEditing() {
     if (settings.flow) { settings.flowNext(); return }
+    if (settings.editing && settings.editing.field === "folderName") {
+      var folderName = editor.text.trim()
+      if (Model.profileProblem("folderName", folderName) !== "") return   // the field shows what is wrong
+      settings.changeFolder({ name: folderName })
+      settings.cancelEditing()
+      return
+    }
     var editing = settings.editing
     var profile = settings.profile
     if (!editing || !profile) return
@@ -430,6 +444,133 @@ FocusScope {
     for (var i = 0; i < all.length; i++) settings.changeScope(all[i], { preview: show })
   }
 
+  // ---------------------------------------------------------------- chat folders
+
+  property var folders: []           // what folders.get last said, in Telegram's order
+  property var folderOpen: null      // the folder being edited: a copy, with id 0 for a new one
+  property string pickerFor: ""      // "included" or "excluded": where the chat picked goes
+  readonly property bool pickerOpen: chatPicker.visible
+
+  function loadFolders() {
+    settings.app.request("folders.get", {}, function (answer) { if (answer.ok) settings.folders = answer.result.folders || [] })
+  }
+
+  // A folder's own page: its name, the kinds of chats it takes, what it leaves out, the chats always and never
+  // in it, then saving or deleting it.
+  function folderRows() {
+    var f = settings.folderOpen
+    var out = [{ kind: "header", title: f.id ? "Folder “" + f.name + "”" : "New folder", note: "Enter changes a row  ·  Esc goes back without saving" },
+               { kind: "folderName", label: "Name" },
+               { kind: "header", title: "The chats it takes", note: "" }]
+    for (var k = 0; k < Model.FOLDER_KINDS.length; k++) out.push({ kind: "folderFlag", key: Model.FOLDER_KINDS[k][0], label: Model.FOLDER_KINDS[k][1] })
+    out.push({ kind: "header", title: "What it leaves out", note: "" })
+    var leaves = [["excludeMuted", "Muted chats"], ["excludeRead", "Read chats"], ["excludeArchived", "Archived chats"]]
+    for (var l = 0; l < leaves.length; l++) out.push({ kind: "folderFlag", key: leaves[l][0], label: leaves[l][1] })
+    var lists = [["included", "Always in it", "Enter on a chat takes it out"], ["excluded", "Never in it", "Enter on a chat takes it off this list"]]
+    for (var i = 0; i < lists.length; i++) {
+      out.push({ kind: "header", title: lists[i][1], note: lists[i][2] })
+      var ids = Model.toList(f[lists[i][0]])
+      for (var j = 0; j < ids.length; j++) out.push({ kind: "folderChat", list: lists[i][0], chatId: ids[j] })
+      out.push({ kind: "folderAdd", list: lists[i][0], label: "Add a chat…" })
+    }
+    out.push({ kind: "header", title: "", note: "" }, { kind: "folderSave", label: f.id ? "Save the folder" : "Create the folder" })
+    if (f.id) out.push({ kind: "folderDelete", label: "Delete the folder" })
+    return out
+  }
+
+  function openFolder(folder) {
+    settings.cancelEditing()
+    settings.error = ""
+    var copy = Model.newFolder()
+    if (folder) for (var key in copy) if (folder[key] !== undefined) copy[key] = Model.isList(folder[key]) ? Model.toList(folder[key]).slice() : folder[key]
+    settings.folderOpen = copy
+    settings.cursor = 1
+    list.positionViewAtBeginning()
+  }
+
+  function closeFolder() {
+    settings.cancelEditing()
+    settings.folderOpen = null
+    settings.cursor = 1
+  }
+
+  // The folder being edited, changed: a new object, so the rows see it.
+  function changeFolder(change) {
+    var next = {}
+    for (var key in settings.folderOpen) next[key] = settings.folderOpen[key]
+    for (var c in change) next[c] = change[c]
+    settings.folderOpen = next
+  }
+
+  function startEditingFolderName() {
+    settings.error = ""
+    settings.editing = { field: "folderName", label: "The folder's name, up to 12 characters" }
+    editor.text = settings.folderOpen.name || ""
+    editor.forceActiveFocus()
+  }
+
+  function startAddingChat(listName) {
+    settings.pickerFor = listName
+    chatPicker.open(0, [])
+  }
+
+  // A chat goes on one list and off the other: a chat cannot be both always and never in a folder.
+  function addFolderChat(chatId) {
+    var f = settings.folderOpen
+    if (!f || !settings.pickerFor) return
+    var other = settings.pickerFor === "included" ? "excluded" : "included"
+    var change = {}
+    change[settings.pickerFor] = Model.toList(f[settings.pickerFor]).filter(function (id) { return id !== chatId }).concat([chatId])
+    change[other] = Model.toList(f[other]).filter(function (id) { return id !== chatId })
+    settings.changeFolder(change)
+    settings.forceActiveFocus()
+  }
+
+  function removeFolderChat(listName, chatId) {
+    var change = {}
+    change[listName] = Model.toList(settings.folderOpen[listName]).filter(function (id) { return id !== chatId })
+    if (listName === "included") change.pinned = Model.toList(settings.folderOpen.pinned).filter(function (id) { return id !== chatId })
+    settings.changeFolder(change)
+  }
+
+  function saveFolder() {
+    var f = settings.folderOpen
+    var problem = Model.folderProblem(f)
+    if (problem !== "") { settings.error = problem; return }
+    var args = {}
+    for (var key in f) if (key !== "id" && key !== "icon") args[key] = f[key]
+    args.name = String(f.name).trim()
+    if (f.icon) args.icon = f.icon
+    if (f.id) args.id = f.id
+    settings.app.request("folder.save", args, function (answer) {
+      if (!answer.ok) { settings.error = answer.error || "Telegram did not take the folder"; return }
+      settings.closeFolder()
+      settings.loadFolders()
+    })
+  }
+
+  function askDeleteFolder() {
+    var f = settings.folderOpen
+    if (!f || !f.id) return
+    settings.ask("Delete the folder “" + f.name + "”? The chats in it stay where they are.", function () {
+      settings.app.request("folder.delete", { id: f.id }, function (answer) {
+        if (!answer.ok) { settings.error = answer.error || "Could not delete the folder"; return }
+        settings.closeFolder()
+        settings.loadFolders()
+      })
+    })
+  }
+
+  function moveFolder(folderId, delta) {
+    var ids = settings.folders.map(function (f) { return f.id })
+    var moved = Model.movedFolders(ids, folderId, delta)
+    if (moved.join(",") === ids.join(",")) return
+    settings.app.request("folders.reorder", { ids: moved }, function (answer) {
+      if (!answer.ok) settings.error = answer.error || "Could not move the folder"
+      settings.loadFolders()
+    })
+  }
+
   FileDialog {
     id: photoDialog
     title: "Your new profile photo"
@@ -437,6 +578,17 @@ FocusScope {
     nameFilters: ["Pictures (*.jpg *.jpeg *.png *.webp *.gif *.bmp)"]
     onAccepted: settings.setPhoto(settings.urlToPath(selectedFile))
     onRejected: settings.forceActiveFocus()
+  }
+
+  // Choosing a chat for a folder: the forward picker, with a title of its own.
+  ForwardPicker {
+    id: chatPicker
+    anchors.fill: parent
+    app: settings.app
+    chats: settings.app && settings.app.chats ? settings.app.chats : []
+    title: settings.pickerFor === "excluded" ? "A chat never in the folder" : "A chat always in the folder"
+    onPicked: function (chatId, title) { settings.addFolderChat(chatId) }
+    onDismissed: settings.forceActiveFocus()
   }
 
   // ---------------------------------------------------------------- the account
@@ -483,6 +635,24 @@ FocusScope {
       settings.togglePreviews()
     } else if (row.kind === "download") {
       settings.app.setAutoDownload(Model.nextDownloadRule(settings.app.autoDownloadRules, row.id))
+    } else if (row.kind === "folder") {
+      settings.openFolder(row.folder)
+    } else if (row.kind === "newFolder") {
+      settings.openFolder(null)
+    } else if (row.kind === "folderName") {
+      settings.startEditingFolderName()
+    } else if (row.kind === "folderFlag") {
+      var flag = {}
+      flag[row.key] = !settings.folderOpen[row.key]
+      settings.changeFolder(flag)
+    } else if (row.kind === "folderChat") {
+      settings.removeFolderChat(row.list, row.chatId)
+    } else if (row.kind === "folderAdd") {
+      settings.startAddingChat(row.list)
+    } else if (row.kind === "folderSave") {
+      settings.saveFolder()
+    } else if (row.kind === "folderDelete") {
+      settings.askDeleteFolder()
     } else if (row.kind === "storage") {
       settings.ask("Clear the cache? Downloaded photos, videos and files are deleted from this computer; they download again when you open them.", function () {
         settings.app.request("storage.clear", {}, function (answer) {
@@ -539,7 +709,7 @@ FocusScope {
       event.accepted = true   // nothing else happens while a question waits
       return
     }
-    if (key === Qt.Key_Escape) settings.closed()
+    if (key === Qt.Key_Escape) { if (settings.folderOpen) settings.closeFolder(); else settings.closed() }
     else if (key === Qt.Key_Down || key === Qt.Key_J) settings.move(1)
     else if (key === Qt.Key_Up || key === Qt.Key_K) settings.move(-1)
     else if (key === Qt.Key_PageDown) settings.move(8)
@@ -548,6 +718,8 @@ FocusScope {
     else if (key === Qt.Key_A) settings.startRecording(true)
     else if (key === Qt.Key_Backspace || key === Qt.Key_Delete) settings.removeLast()
     else if (key === Qt.Key_R) settings.reset()
+    else if ((key === Qt.Key_BracketLeft || key === Qt.Key_BracketRight) && settings.current && settings.current.kind === "folder")
+      settings.moveFolder(settings.current.folder.id, key === Qt.Key_BracketLeft ? -1 : 1)
     else return
     event.accepted = true
   }
@@ -730,7 +902,7 @@ FocusScope {
         height: header ? Style.space(modelData.note ? 58 : 44)
               : (account ? Style.space(modelData.kind === "profilePhoto" ? 66
                                        : (["session", "storage", "profileField", "profilePhone", "privacy", "blocked", "password", "accountTtl",
-                                           "scope", "previews", "download"]
+                                           "scope", "previews", "download", "folder", "folderName", "folderFlag"]
                                             .indexOf(modelData.kind) >= 0 ? 58 : 44))
                          : Style.space(clashes.length || modelData.kind === "global" ? 58 : 42))
         radius: Style.cornerRadius
@@ -764,7 +936,7 @@ FocusScope {
         ColumnLayout {
           visible: row.account
           anchors.fill: parent
-          anchors.leftMargin: Style.space(row.modelData.kind === "session" || row.modelData.kind === "blockedSender" ? 30 : 14)
+          anchors.leftMargin: Style.space(["session", "blockedSender", "folderChat"].indexOf(row.modelData.kind) >= 0 ? 30 : 14)
           anchors.rightMargin: Style.space(14)
           anchors.topMargin: Style.space(6)
           anchors.bottomMargin: Style.space(6)
@@ -789,15 +961,19 @@ FocusScope {
               textFormat: Text.PlainText
               text: row.modelData.kind === "session" ? Model.sessionTitle(row.modelData.session)
                   : row.modelData.kind === "blockedSender" ? row.modelData.sender.name
+                  : row.modelData.kind === "folderChat" ? (Model.chatTitle(Model.findChat(settings.app.chats || [], row.modelData.chatId), settings.app.meId)
+                                                           || "A chat that is in none of your lists")
                   : row.modelData.label + (row.modelData.kind === "sessions" && settings.sessions.length ? "  (" + settings.sessions.length + ")" : "")
-              color: ["logout", "otherSessions", "passwordOff"].indexOf(row.modelData.kind) >= 0 ? settings.app.urgent : settings.app.foreground
+              color: ["logout", "otherSessions", "passwordOff", "folderDelete"].indexOf(row.modelData.kind) >= 0 ? settings.app.urgent : settings.app.foreground
               font.family: settings.app.fontFamily
-              font.pixelSize: row.modelData.kind === "session" || row.modelData.kind === "blockedSender" ? Style.font.bodySmall : Style.font.body
+              font.pixelSize: ["session", "blockedSender", "folderChat"].indexOf(row.modelData.kind) >= 0 ? Style.font.bodySmall : Style.font.body
             }
             Text {
               textFormat: Text.PlainText
               text: ({ profileField: "Enter changes it", privacy: "Enter changes it", accountTtl: "Enter changes it",
                        scope: "Enter changes it", previews: "Enter changes it", download: "Enter changes it",
+                       folder: "Enter opens it", newFolder: "Enter", folderName: "Enter changes it", folderFlag: "Enter changes it",
+                       folderChat: "Enter takes it off", folderAdd: "Enter", folderSave: "Enter", folderDelete: "Enter",
                        blocked: settings.blockedOpen ? "Enter hides them" : "Enter shows them", blockedSender: "Enter unblocks",
                        password: settings.password && settings.password.hasPassword ? "Enter changes the password" : "Enter turns it on",
                        passwordOff: "Enter", passwordCode: "Enter",
@@ -828,6 +1004,9 @@ FocusScope {
                 : row.modelData.kind === "scope" ? Model.scopeText(settings.scopes[row.modelData.id])
                 : row.modelData.kind === "previews" ? Model.previewsText(settings.scopes)
                 : row.modelData.kind === "download" ? Model.downloadText(settings.app.autoDownloadRules, row.modelData.id)
+                : row.modelData.kind === "folder" ? Model.folderSummary(row.modelData.folder)
+                : row.modelData.kind === "folderName" ? (settings.folderOpen && settings.folderOpen.name ? settings.folderOpen.name : "None yet")
+                : row.modelData.kind === "folderFlag" ? (settings.folderOpen && settings.folderOpen[row.modelData.key] ? "Yes" : "No")
                 : row.modelData.kind === "profilePhoto" ? (settings.photoBusy ? "Setting your new photo…" : Model.profileValue(settings.profile, "photo"))
                 : ""
             color: settings.app.muted

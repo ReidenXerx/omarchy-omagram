@@ -514,6 +514,32 @@ def password_view(value):
             "resetDate": max(0, _int(p.get("pending_reset_date")))}
 
 
+FOLDER_FLAGS = {"includeContacts": "include_contacts", "includeNonContacts": "include_non_contacts",
+                "includeGroups": "include_groups", "includeChannels": "include_channels", "includeBots": "include_bots",
+                "excludeMuted": "exclude_muted", "excludeRead": "exclude_read", "excludeArchived": "exclude_archived"}
+FOLDER_IDS_MAX = 1000
+
+
+def folder_ids(value):
+    return [i for i in (_int(x) for x in _list(value, FOLDER_IDS_MAX)) if i]
+
+
+def folder_view(value, fid):
+    """A chat folder as Settings edits it: its name, the kinds of chats it takes, what it leaves out, and the
+    chats pinned in it, always in it and never in it."""
+    f = _obj(value, "chatFolder")
+    if not f or fid <= 0:
+        return None
+    name, _ = formatted(_obj(f.get("name")).get("text"))
+    view = {"id": fid, "name": _str(name, NAME_MAX), "icon": _str(_obj(f.get("icon")).get("name"), 32),
+            "colorId": _int(f.get("color_id"), -1), "shareable": f.get("is_shareable") is True,
+            "pinned": folder_ids(f.get("pinned_chat_ids")), "included": folder_ids(f.get("included_chat_ids")),
+            "excluded": folder_ids(f.get("excluded_chat_ids"))}
+    for key, field in FOLDER_FLAGS.items():
+        view[key] = f.get(field) is True
+    return view
+
+
 NOTIFICATION_SCOPES = {"private": "notificationSettingsScopePrivateChats", "groups": "notificationSettingsScopeGroupChats",
                        "channels": "notificationSettingsScopeChannelChats"}
 SCOPE_FIELDS = ("mute_for", "sound_id", "show_preview", "use_default_mute_stories", "mute_stories", "story_sound_id",

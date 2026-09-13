@@ -611,6 +611,19 @@ class Privacy(unittest.TestCase):
         self.assertEqual((hidden["mute_for"], hidden["show_preview"]), (3600, False))
         self.assertEqual(model.scope_view(None), {"muted": False, "preview": False})
 
+    def test_a_chat_folder_to_edit(self):
+        tdlib = {"@type": "chatFolder", "name": {"@type": "chatFolderName", "animate_custom_emoji": False,
+                                                 "text": {"@type": "formattedText", "text": "Work", "entities": []}},
+                 "icon": {"@type": "chatFolderIcon", "name": "Work"}, "color_id": 2, "is_shareable": False,
+                 "pinned_chat_ids": [5], "included_chat_ids": [-100, "junk", 0], "excluded_chat_ids": [],
+                 "exclude_muted": True, "exclude_read": False, "exclude_archived": True, "include_contacts": False,
+                 "include_non_contacts": False, "include_bots": False, "include_groups": True, "include_channels": True}
+        view = model.folder_view(tdlib, 4)
+        self.assertEqual((view["id"], view["name"], view["icon"], view["colorId"], view["pinned"], view["included"], view["excluded"]),
+                         (4, "Work", "Work", 2, [5], [-100], []))
+        self.assertEqual([key for key in model.FOLDER_FLAGS if view[key]], ["includeGroups", "includeChannels", "excludeMuted", "excludeArchived"])
+        self.assertIsNone(model.folder_view("junk", 4))
+
     def test_two_step_verification(self):
         state = model.password_view({"@type": "passwordState", "has_password": True, "password_hint": "cat",
                                      "has_recovery_email_address": False, "pending_reset_date": 0,

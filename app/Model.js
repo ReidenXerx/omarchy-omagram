@@ -1281,6 +1281,7 @@ function profileProblem(field, text) {
   if (field === "firstName") return trimmed === "" ? "A first name is needed" : (trimmed.length > 64 ? "At most 64 characters" : "")
   if (field === "lastName") return trimmed.length > 64 ? "At most 64 characters" : ""
   if (field === "bio") return trimmed.length > 140 ? "At most 140 characters" : ""
+  if (field === "folderName") return trimmed === "" ? "A folder needs a name" : (trimmed.length > 12 ? "At most 12 characters" : "")
   if (field === "username") {
     var name = trimmed.replace(/^@/, "")
     if (name === "") return ""
@@ -1321,6 +1322,55 @@ function profileChat(profile) {
   if (!isObject(profile)) return null
   return { id: 0, kind: "private", userId: 0, photo: profile.photo || null,
            title: [profile.firstName, profile.lastName].filter(function (part) { return !!part }).join(" ") }
+}
+
+// ---------------------------------------------------------------- chat folders
+
+var FOLDER_KINDS = [["includeContacts", "Contacts"], ["includeNonContacts", "Other people"], ["includeGroups", "Groups"],
+                    ["includeChannels", "Channels"], ["includeBots", "Bots"]]
+var FOLDER_LEAVES = [["excludeMuted", "muted"], ["excludeRead", "read"], ["excludeArchived", "archived"]]
+
+// Under a folder in Settings: the kinds of chats it takes, the chats always in it, and what it leaves out.
+function folderSummary(folder) {
+  if (!isObject(folder)) return ""
+  var parts = []
+  var kinds = FOLDER_KINDS.filter(function (k) { return folder[k[0]] === true }).map(function (k) { return k[1] })
+  if (kinds.length) parts.push(kinds.join(", "))
+  var always = toList(folder.pinned).concat(toList(folder.included)).filter(function (id, i, all) { return all.indexOf(id) === i }).length
+  if (always) parts.push(always + (always === 1 ? " chat always in it" : " chats always in it"))
+  var never = toList(folder.excluded).length
+  if (never) parts.push(never + (never === 1 ? " chat left out" : " chats left out"))
+  var leaves = FOLDER_LEAVES.filter(function (k) { return folder[k[0]] === true }).map(function (k) { return k[1] })
+  if (leaves.length) parts.push("without " + leaves.join(", ") + " chats")
+  return parts.length ? parts.join(" · ") : "Empty"
+}
+
+function newFolder() {
+  return { id: 0, name: "", icon: "", colorId: -1, shareable: false, includeContacts: false, includeNonContacts: false,
+           includeGroups: false, includeChannels: false, includeBots: false, excludeMuted: false, excludeRead: false,
+           excludeArchived: false, pinned: [], included: [], excluded: [] }
+}
+
+// What stops a folder from being saved, or "".
+function folderProblem(folder) {
+  if (!isObject(folder)) return "No folder"
+  var name = String(folder.name || "").trim()
+  if (name === "") return "A folder needs a name"
+  if (name.length > 12) return "A folder's name is at most 12 characters"
+  var takes = FOLDER_KINDS.some(function (k) { return folder[k[0]] === true })
+  if (!takes && !toList(folder.included).length && !toList(folder.pinned).length) return "Choose chats for it: a kind of chat, or a chat always in it"
+  return ""
+}
+
+// The folders' ids with one of them moved a step earlier (-1) or later (1).
+function movedFolders(ids, id, delta) {
+  var list = toList(ids).slice()
+  var at = list.indexOf(id)
+  var to = at + delta
+  if (at < 0 || to < 0 || to >= list.length) return list
+  list.splice(at, 1)
+  list.splice(to, 0, id)
+  return list
 }
 
 // ---------------------------------------------------------------- privacy and security

@@ -236,6 +236,11 @@ HINT_MAX = 64
 EMAIL_MAX = 256
 EMAIL = re.compile(r"[^@ ]+@[^@ ]+[.][^@ ]+")
 ACCOUNT_TTL_DAYS = (30, 730)   # Telegram deletes an unused account after a month to two years
+FOLDER_NAME_MAX = 12
+FOLDER_CHATS_MAX = 200
+FOLDER_ICONS = {"All", "Unread", "Unmuted", "Bots", "Channels", "Groups", "Private", "Custom", "Setup", "Cat", "Crown", "Favorite",
+                "Flower", "Game", "Home", "Love", "Mask", "Party", "Sport", "Study", "Trade", "Travel", "Work", "Airplane", "Book",
+                "Light", "Like", "Money", "Note", "Palette"}
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
 MEDIA_FILTERS = {"photos": "searchMessagesFilterPhotoAndVideo", "files": "searchMessagesFilterDocument",
@@ -315,6 +320,36 @@ def join_result(event, chat_id=0):
     """What joining came to: joined, a request for the admins to approve, a guard bot to satisfy
     first (its page opens only in another Telegram app), or declined by that bot."""
     return {"chatId": model._int(event.get("chat_id")) or chat_id, "state": JOIN_RESULTS.get(event.get("@type"), "")}
+
+
+def folder_object(args):
+    """A chatFolder for TDLib from what the window sends, checked: a name of 1-12 characters on one line,
+    the kinds of chats it takes and leaves out, and the chats pinned in it, always in it and never in it."""
+    name = arg_str(args, "name", 64).strip()
+    if not 1 <= len(name) <= FOLDER_NAME_MAX or any(ord(c) < 32 for c in name):
+        raise BadRequest(f"a folder's name is 1-{FOLDER_NAME_MAX} characters on one line")
+    icon, color = args.get("icon"), args.get("colorId", -1)
+    folder = {"@type": "chatFolder",
+              "name": {"@type": "chatFolderName", "animate_custom_emoji": False,
+                       "text": {"@type": "formattedText", "text": name, "entities": []}},
+              "icon": {"@type": "chatFolderIcon", "name": icon} if isinstance(icon, str) and icon in FOLDER_ICONS else None,
+              "color_id": color if isinstance(color, int) and not isinstance(color, bool) and -1 <= color <= 6 else -1,
+              "is_shareable": args.get("shareable") is True}
+    for key, field in model.FOLDER_FLAGS.items():
+        value = args.get(key, False)
+        if not isinstance(value, bool):
+            raise BadRequest(f"{key} is true or false")
+        folder[field] = value
+    for key, field in (("pinned", "pinned_chat_ids"), ("included", "included_chat_ids"), ("excluded", "excluded_chat_ids")):
+        ids = args.get(key, [])
+        if (not isinstance(ids, list) or len(ids) > FOLDER_CHATS_MAX
+                or any(isinstance(i, bool) or not isinstance(i, int) or i == 0 or abs(i) > INT64_MAX for i in ids)):
+            raise BadRequest(f"{key} is a list of at most {FOLDER_CHATS_MAX} chat ids")
+        folder[field] = list(dict.fromkeys(ids))
+    takes = [field for key, field in model.FOLDER_FLAGS.items() if key.startswith("include")]
+    if not (folder["pinned_chat_ids"] or folder["included_chat_ids"] or any(folder[field] for field in takes)):
+        raise BadRequest("a folder needs chats: a kind of chat it takes, or a chat always in it")
+    return folder
 
 
 def mention_links(entities):
@@ -1775,6 +1810,48 @@ class Daemon:
             self.respond_error(client, rid, model._str(error.get("message"), 200) or "Telegram did not say the settings")
         self.td_send({"@type": "getScopeNotificationSettings", "scope": {"@type": kind}}, transform=got, failed=failed)
 
+    # ---------------------------------------------------------------- chat folders
+
+    def cmd_folders_get(self, client, rid, args):
+        """Every chat folder with what it holds, in Telegram's order; one Telegram does not answer for is left out."""
+        ids = [f["id"] for f in self.state.folders]
+        views = {}
+
+        def settle(fid, view):
+            views[fid] = view
+            if len(views) == len(ids):
+                self.respond(client, rid, {"folders": [views[i] for i in ids if views[i]], "mainPosition": self.state.main_position})
+
+        if not ids:
+            self.respond(client, rid, {"folders": [], "mainPosition": self.state.main_position})
+        for fid in ids:
+            self.td_send({"@type": "getChatFolder", "chat_folder_id": fid},
+                         transform=lambda event, f=fid: settle(f, model.folder_view(event, f)),
+                         failed=lambda _error, f=fid: settle(f, None))
+
+    def cmd_folder_save(self, client, rid, args):
+        """Creates a folder, or changes the one with `id`."""
+        folder = folder_object(args)
+        if args.get("id") is None:
+            self.td_send({"@type": "createChatFolder", "folder": folder}, client, rid,
+                         lambda info: {"id": model._int(model._obj(info, "chatFolderInfo").get("id"))})
+            return
+        fid = arg_int(args, "id", 1, INT32_MAX)
+        self.td_send({"@type": "editChatFolder", "chat_folder_id": fid, "folder": folder}, client, rid, lambda _info: {"id": fid})
+
+    def cmd_folder_delete(self, client, rid, args):
+        """Deletes a folder; the chats in it stay where they are."""
+        self.td_send({"@type": "deleteChatFolder", "chat_folder_id": arg_int(args, "id", 1, INT32_MAX), "leave_chat_ids": []},
+                     client, rid)
+
+    def cmd_folders_reorder(self, client, rid, args):
+        ids, known = args.get("ids"), [f["id"] for f in self.state.folders]
+        if (not isinstance(ids, list) or any(isinstance(i, bool) or not isinstance(i, int) for i in ids)
+                or sorted(ids) != sorted(known)):
+            raise BadRequest("ids are every folder's id, in the new order")
+        self.td_send({"@type": "reorderChatFolders", "chat_folder_ids": ids, "main_chat_list_position": self.state.main_position},
+                     client, rid)
+
     # ---------------------------------------------------------------- devices and storage
 
     def cmd_sessions_list(self, client, rid, args):
@@ -2618,6 +2695,10 @@ COMMANDS = {
     "account.setTtl": ("cmd_account_set_ttl", True),
     "notifications.get": ("cmd_notifications_get", True),
     "notifications.set": ("cmd_notifications_set", True),
+    "folders.get": ("cmd_folders_get", True),
+    "folder.save": ("cmd_folder_save", True),
+    "folder.delete": ("cmd_folder_delete", True),
+    "folders.reorder": ("cmd_folders_reorder", True),
     "topics.list": ("cmd_topics_list", True),
     "topic.history": ("cmd_topic_history", True),
     "chat.scheduled": ("cmd_chat_scheduled", True),

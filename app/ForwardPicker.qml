@@ -13,6 +13,7 @@ FocusScope {
   property var chats: []
   property var messageIds: []
   property real fromChatId: 0
+  property string title: ""     // said instead of "Forward … to…" when a chat is chosen for something else
   property string query: ""
   property int cursor: 0
 
@@ -84,7 +85,8 @@ FocusScope {
       Text {
         Layout.fillWidth: true
         elide: Text.ElideRight
-        text: "Forward " + (picker.messageIds.length === 1 ? "the message" : picker.messageIds.length + " messages") + " to…"
+        text: picker.title !== "" ? picker.title
+            : "Forward " + (picker.messageIds.length === 1 ? "the message" : picker.messageIds.length + " messages") + " to…"
         color: picker.app.foreground
         font.family: picker.app.fontFamily
         font.pixelSize: Style.font.title

@@ -1304,6 +1304,46 @@ class ChatsAndAccount(Harness):
         for rid, args in ((191, {"scope": "bots", "muted": True}), (192, {"scope": "groups"}), (193, {"scope": "groups", "muted": "yes"})):
             self.assertFalse(self.request(self.conn, rid, "notifications.set", **args)["ok"], args)
 
+    def test_chat_folders(self):
+        def info(fid, name):
+            return {"@type": "chatFolderInfo", "id": fid, "icon": {"@type": "chatFolderIcon", "name": "Work"}, "color_id": -1,
+                    "is_shareable": False, "has_my_invite_links": False,
+                    "name": {"@type": "chatFolderName", "text": {"@type": "formattedText", "text": name, "entities": []}}}
+        self.td_event({"@type": "updateChatFolders", "chat_folders": [info(2, "Work"), info(3, "Family")], "main_chat_list_position": 0,
+                       "are_tags_enabled": False, "@client_id": 1})
+        self.read(self.conn, lambda v: v.get("event") == "folders" and len(v["folders"]) == 2)
+        before = self.sent_count("getChatFolder")
+        self.send(self.conn, {"id": 200, "cmd": "folders.get", "args": {}})
+        self.wait(lambda: self.sent_count("getChatFolder") >= before + 2)
+        for q in [q for q in self.fake.sent if q.get("@type") == "getChatFolder"][before:]:
+            if q["chat_folder_id"] == 3:
+                self.td_event({"@type": "error", "code": 400, "message": "gone", "@extra": q["@extra"], "@client_id": 1})
+            else:
+                self.answer(q, {"@type": "chatFolder", "name": info(2, "Work")["name"], "icon": None, "color_id": -1, "is_shareable": False,
+                                "pinned_chat_ids": [], "included_chat_ids": [500], "excluded_chat_ids": [], "exclude_muted": True,
+                                "exclude_read": False, "exclude_archived": False, "include_contacts": False, "include_non_contacts": False,
+                                "include_bots": False, "include_groups": True, "include_channels": False})
+        r = self.read(self.conn, lambda v: v.get("id") == 200)["result"]
+        self.assertEqual(([(f["id"], f["name"], f["included"], f["includeGroups"], f["excludeMuted"]) for f in r["folders"]], r["mainPosition"]),
+                         ([(2, "Work", [500], True, True)], 0), "a folder Telegram did not answer for is left out")
+
+        q, r = self.call(201, "folder.save", "createChatFolder", {"@type": "chatFolderInfo", "id": 4},
+                         name=" Family ", includeContacts=True, included=[500, 500], excluded=[-10077], pinned=[], icon="Home")
+        f = q["folder"]
+        self.assertEqual((f["name"]["text"]["text"], f["icon"], f["include_contacts"], f["include_groups"], f["included_chat_ids"],
+                          f["excluded_chat_ids"], f["color_id"], r["result"]),
+                         ("Family", {"@type": "chatFolderIcon", "name": "Home"}, True, False, [500], [-10077], -1, {"id": 4}))
+        q, r = self.call(202, "folder.save", "editChatFolder", {"@type": "chatFolderInfo", "id": 2}, id=2, name="Work", includeGroups=True, icon="Nope")
+        self.assertEqual((q["chat_folder_id"], q["folder"]["icon"], r["result"]), (2, None, {"id": 2}))
+        for rid, args in ((203, {"name": "A much too long name", "includeBots": True}), (204, {"name": "Empty"}),
+                          (205, {"name": "X", "includeGroups": "yes"}), (206, {"name": "X", "included": [0]}), (207, {"name": "", "includeBots": True})):
+            self.assertFalse(self.request(self.conn, rid, "folder.save", **args)["ok"], args)
+        q, _ = self.call(208, "folder.delete", "deleteChatFolder", {"@type": "ok"}, id=3)
+        self.assertEqual((q["chat_folder_id"], q["leave_chat_ids"]), (3, []))
+        q, _ = self.call(209, "folders.reorder", "reorderChatFolders", {"@type": "ok"}, ids=[3, 2])
+        self.assertEqual((q["chat_folder_ids"], q["main_chat_list_position"]), ([3, 2], 0))
+        self.assertFalse(self.request(self.conn, 210, "folders.reorder", ids=[2])["ok"])
+
     def test_mention_and_command_suggestions(self):
         def member(uid):
             return {"@type": "chatMember", "member_id": {"@type": "messageSenderUser", "user_id": uid},
