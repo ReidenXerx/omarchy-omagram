@@ -343,6 +343,12 @@ class Chats(unittest.TestCase):
 
 
 class Messages(unittest.TestCase):
+    def test_dice_show_what_they_came_up_with(self):
+        s = model.State()
+        rolled = s.message({"@type": "message", "id": 1, "chat_id": 5, "content": {"@type": "messageDice", "emoji": "🎲", "value": 4}})
+        rolling = s.message({"@type": "message", "id": 2, "chat_id": 5, "content": {"@type": "messageDice", "emoji": "🎯", "value": 0}})
+        self.assertEqual((rolled["content"]["kind"], rolled["content"]["text"], rolling["content"]["text"]), ("emoji", "🎲 4", "🎯"))
+
     def setUp(self):
         self.s = model.State()
         self.s.apply({"@type": "updateUser", "user": {"@type": "user", "id": 7, "first_name": "Ann", "last_name": ""}})

@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError, autoDownload, downloadText, nextDownloadRule, scopeText, previewsText, folderSummary, newFolder, folderProblem, movedFolders }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError, autoDownload, downloadText, nextDownloadRule, scopeText, previewsText, folderSummary, newFolder, folderProblem, movedFolders, moreMenu, diceMenu, parseLocation, locationText }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -559,6 +559,18 @@ test("your profile: what can go to Telegram, its refusals in words, what each ro
      ["Ann", "None", "@ann_lee", "None", "+15550100", "None"])
   eq(M.profileValue(null, "bio"), "Loading…")
   eq([M.profileChat(Object.assign({}, p, { lastName: "Lee" })).title, M.profileChat(null)], ["Ann Lee", null])
+})
+
+test("more to send: dice, and a location from coordinates or a map link", () => {
+  eq([M.moreMenu({ kind: "group" }).map(i => i.id), M.moreMenu(null)], [["dice", "contact", "location"], []])
+  eq(M.diceMenu().map(i => i.id), ["dice:🎲", "dice:🎯", "dice:🏀", "dice:⚽", "dice:🎳", "dice:🎰"])
+  const where = t => { const p = M.parseLocation(t); return p ? [p.latitude, p.longitude] : null }
+  eq(["50.4501, 30.5234", "50.4501 30.5234", "geo:50.45,30.52", "https://www.google.com/maps/@50.4501,30.5234,15z",
+      "https://maps.google.com/?q=50.45,30.52", "https://www.openstreetmap.org/?mlat=50.45&mlon=30.52#map=15/50.45/30.52",
+      "https://www.openstreetmap.org/#map=15/50.4501/30.5234", "91, 30", "Kyiv", ""].map(where),
+     [[50.4501, 30.5234], [50.4501, 30.5234], [50.45, 30.52], [50.4501, 30.5234], [50.45, 30.52], [50.45, 30.52],
+      [50.4501, 30.5234], null, null, null])
+  eq(M.locationText({ latitude: 50.45, longitude: 30.5 }), "50.45000, 30.50000")
 })
 
 test("chat folders: what each takes, what stops saving one, a new order", () => {

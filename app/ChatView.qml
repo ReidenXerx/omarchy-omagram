@@ -59,6 +59,7 @@ FocusScope {
   property var menuReactions: []
   property bool menuToComposer: false
   readonly property bool modalOpen: messageMenu.visible || muteMenu.visible || sendMenu.visible || rescheduleMenu.visible
+                                    || moreMenu.visible || diceMenu.visible || peoplePicker.visible
   property bool blocked: false        // a dialog over the whole window, such as choosing where to forward
   property bool confirmDeleteRevoke: true
   property var pinnedMessage: null
@@ -180,6 +181,7 @@ FocusScope {
     root.suggestions = []
     root.attachments = []
     root.joiningChatId = 0
+    root.locationOpen = false
     root.scheduledOpen = false
     root.scheduledMessages = []
     // The chat's draft, as Telegram keeps it: you continue where you left off, on any device.
@@ -208,6 +210,71 @@ FocusScope {
     root.stickToBottom = true
     root.savedDraft = root.topicId ? (app.openTopic.draft || "") : (root.chat.draft || "")
     root.setComposerText(root.savedDraft)
+  }
+
+  // ---------------------------------------------------------------- more to send: dice, contact cards, locations
+
+  property bool locationOpen: false
+  readonly property var typedLocation: root.locationOpen ? Model.parseLocation(locationField.text) : null
+
+  function openMoreMenu(item) {
+    if (!root.chat || !root.canWrite) return
+    var at = item ? item.mapToItem(root, 0, 0) : composer.mapToItem(root, composer.cursorRectangle.x, composer.cursorRectangle.y)
+    moreMenu.open(at.x, at.y - Style.space(4))
+  }
+
+  function morePicked(id) {
+    if (!root.chat) return
+    if (id === "dice") {
+      var at = composer.mapToItem(root, composer.cursorRectangle.x, composer.cursorRectangle.y)
+      diceMenu.open(at.x, at.y - Style.space(4))
+    } else if (id === "contact") {
+      peoplePicker.open(0, [])
+    } else if (id === "location") {
+      root.openLocationBar()
+    }
+  }
+
+  // What the + button sends goes where a message would: into the open topic or thread, as a reply.
+  function sendExtra(command, args, what) {
+    if (!root.chat) return
+    args.chatId = root.chat.id
+    root.target(args)
+    if (root.replyToId) args.replyToMessageId = root.replyToId
+    client.request(command, args, function (answer) {
+      if (!answer.ok) root.flash("Could not send " + what + ": " + (answer.error || "unknown error"))
+    })
+    root.replyToId = 0
+    root.stickToBottom = true
+  }
+
+  function sendDice(emoji) {
+    root.sendExtra("message.sendDice", { emoji: emoji }, "the dice")
+  }
+
+  function shareContact(chatId) {
+    root.focusComposer()
+    var person = Model.findChat(app.chats || [], chatId)
+    if (person && person.userId) root.sendExtra("message.sendContact", { userId: person.userId }, "the contact card")
+  }
+
+  function openLocationBar() {
+    locationField.text = ""
+    root.locationOpen = true
+    locationField.forceActiveFocus()
+  }
+
+  function closeLocationBar() {
+    root.locationOpen = false
+    locationField.text = ""
+    root.focusComposer()
+  }
+
+  function sendLocation() {
+    var place = Model.parseLocation(locationField.text)
+    if (!place) return
+    root.sendExtra("message.sendLocation", { latitude: place.latitude, longitude: place.longitude }, "the location")
+    root.closeLocationBar()
   }
 
   function attach(asPhoto) {
@@ -280,6 +347,7 @@ FocusScope {
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.attach"); enabled: root.shortcutsOn; onActivated: root.attach(true) }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.attachFiles"); enabled: root.shortcutsOn; onActivated: root.attach(false) }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.stickers"); enabled: root.shortcutsOn; onActivated: root.toggleStickers() }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.more"); enabled: root.shortcutsOn && root.canWrite; onActivated: root.openMoreMenu(null) }
   Shortcut {
     sequences: Keymap.keysFor(app.shortcuts, "window.voice")
     enabled: root.shortcutsOn && !videoNote.visible
@@ -346,6 +414,7 @@ FocusScope {
     else if (action === "stickers") root.toggleStickers()
     else if (action === "video") videoNote.open(root.chat.id)
     else if (action === "voice") root.startVoice()
+    else if (action === "more") root.openMoreMenu(item)
   }
 
   FileDialog {
@@ -1867,6 +1936,45 @@ FocusScope {
       }
     }
 
+    // ------------------------------------------------ a location to send
+    Rectangle {
+      Layout.fillWidth: true
+      Layout.preferredHeight: visible ? locationColumn.implicitHeight + Style.space(20) : 0
+      visible: root.locationOpen && !!root.chat && !root.showTopics
+      color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.03)
+
+      Rectangle { width: parent.width; height: 1; color: app.border; opacity: 0.35 }
+
+      Column {
+        id: locationColumn
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: Style.space(10)
+        spacing: Style.space(4)
+
+        Field {
+          id: locationField
+          width: parent.width
+          app: root.app
+          label: "A location: coordinates, or a link from Google Maps or OpenStreetMap   ·   Enter sends   ·   Esc cancels"
+          placeholder: "50.4501, 30.5234"
+          maximumLength: 2048
+          error: locationField.text.trim() !== "" && !root.typedLocation ? "No coordinates in that: paste a map link, or type them like 50.4501, 30.5234" : ""
+          onAccepted: root.sendLocation()
+          Keys.onEscapePressed: root.closeLocationBar()
+        }
+        Text {
+          visible: !!root.typedLocation
+          text: "Sends the place at " + Model.locationText(root.typedLocation)
+          textFormat: Text.PlainText
+          color: app.muted
+          font.family: app.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+    }
+
     // ------------------------------------------------ files waiting to be sent
     Rectangle {
       Layout.fillWidth: true
@@ -2238,13 +2346,14 @@ FocusScope {
         spacing: 0
 
         Repeater {
-          // md-send-clock-outline U+F1164, md-emoticon-outline U+F01F2, md-paperclip U+F03E2, md-sticker-emoji U+F0785,
+          // md-send-clock-outline U+F1164, md-emoticon-outline U+F01F2, md-paperclip U+F03E2, md-plus-circle-outline U+F0419, md-sticker-emoji U+F0785,
           // md-video U+F0567, md-microphone U+F036C
           model: [
             { glyph: String.fromCodePoint(0xF1164), action: "later",
               hint: "Send later or without sound   " + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.later")[0] || "") },
             { glyph: String.fromCodePoint(0xF01F2), action: "emoji", hint: "Emoji   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.emoji")[0] || "") },
             { glyph: String.fromCodePoint(0xF03E2), action: "attach", hint: "Attach photos or files   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.attach")[0] || "") },
+            { glyph: String.fromCodePoint(0xF0419), action: "more", hint: "Dice, a contact card or a location   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.more")[0] || "") },
             { glyph: String.fromCodePoint(0xF0785), action: "stickers", hint: "Stickers   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.stickers")[0] || "") },
             { glyph: String.fromCodePoint(0xF0567), action: "video", hint: "Video message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.videoNote")[0] || "") },
             { glyph: String.fromCodePoint(0xF036C), action: "voice", hint: "Voice message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.voice")[0] || "") }
@@ -2450,6 +2559,42 @@ FocusScope {
       root.focusComposer()
       if (root.chat && Model.muteSeconds(id) >= 0) app.muteChat(root.chat.id, Model.muteSeconds(id))
     }
+  }
+
+  // The + button: dice, a person's contact card, a location.
+  ContextMenu {
+    id: moreMenu
+    anchors.fill: parent
+    app: root.app
+    upward: true
+    items: Model.moreMenu(root.chat)
+    onDismissed: root.focusComposer()
+    onPicked: function (id) { root.morePicked(id) }
+  }
+
+  ContextMenu {
+    id: diceMenu
+    anchors.fill: parent
+    app: root.app
+    upward: true
+    items: Model.diceMenu()
+    onDismissed: root.focusComposer()
+    onPicked: function (id) {
+      root.focusComposer()
+      if (id.indexOf("dice:") === 0) root.sendDice(id.slice(5))
+    }
+  }
+
+  // Whose contact card to share: the forward picker, people only.
+  ForwardPicker {
+    id: peoplePicker
+    anchors.fill: parent
+    app: root.app
+    chats: root.app && root.app.chats ? root.app.chats : []
+    peopleOnly: true
+    title: "Share whose contact card?"
+    onPicked: function (chatId, title) { root.shareContact(chatId) }
+    onDismissed: root.focusComposer()
   }
 
   ContextMenu {

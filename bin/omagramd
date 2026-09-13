@@ -241,6 +241,7 @@ FOLDER_CHATS_MAX = 200
 FOLDER_ICONS = {"All", "Unread", "Unmuted", "Bots", "Channels", "Groups", "Private", "Custom", "Setup", "Cat", "Crown", "Favorite",
                 "Flower", "Game", "Home", "Love", "Mask", "Party", "Sport", "Study", "Trade", "Travel", "Work", "Airplane", "Book",
                 "Light", "Like", "Money", "Note", "Palette"}
+DICE_EMOJI = ("🎲", "🎯", "🏀", "⚽", "🎳", "🎰")
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
 MEDIA_FILTERS = {"photos": "searchMessagesFilterPhotoAndVideo", "files": "searchMessagesFilterDocument",
@@ -2514,6 +2515,32 @@ class Daemon:
                                "width": arg_int(args, "width", 0, 10000, 0), "height": arg_int(args, "height", 0, 10000, 0)}}
         self.send_content(client, rid, chat_id, content, args)
 
+    def cmd_message_send_dice(self, client, rid, args):
+        """Dice, darts, a ball, bowling or a slot machine: the server decides what they come up with."""
+        emoji = args.get("emoji")
+        if emoji not in DICE_EMOJI:
+            raise BadRequest("dice are one of " + " ".join(DICE_EMOJI))
+        self.send_content(client, rid, arg_int(args, "chatId"), {"@type": "inputMessageDice", "emoji": emoji, "clear_draft": False}, args)
+
+    def cmd_message_send_contact(self, client, rid, args):
+        """A person's contact card: their name, and their number when Telegram shows it to you."""
+        user_id = arg_int(args, "userId", 1)
+        user = self.state.users.get(user_id)
+        if user is None or user["bot"]:
+            raise BadRequest("a contact card is for a person Omagram knows")
+        first, _, last = user["name"].partition(" ")
+        self.send_content(client, rid, arg_int(args, "chatId"), {"@type": "inputMessageContact", "contact": {
+            "@type": "contact", "phone_number": user.get("phone", ""), "first_name": first, "last_name": last, "vcard": "",
+            "user_id": user_id}}, args)
+
+    def cmd_message_send_location(self, client, rid, args):
+        latitude, longitude = args.get("latitude"), args.get("longitude")
+        if (any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in (latitude, longitude))
+                or not (-90 <= latitude <= 90 and -180 <= longitude <= 180)):
+            raise BadRequest("a location is a latitude from -90 to 90 and a longitude from -180 to 180")
+        self.send_content(client, rid, arg_int(args, "chatId"), {"@type": "inputMessageLocation", "location": {
+            "@type": "location", "latitude": float(latitude), "longitude": float(longitude), "horizontal_accuracy": 0}}, args)
+
     def sticker_views(self, stickers):
         views = []
         for raw in model._list(stickers, STICKERS_MAX):
@@ -2715,6 +2742,9 @@ COMMANDS = {
     "chat.mentions": ("cmd_chat_mentions", True),
     "chat.commands": ("cmd_chat_commands", True),
     "message.sendFiles": ("cmd_message_send_files", True),
+    "message.sendDice": ("cmd_message_send_dice", True),
+    "message.sendContact": ("cmd_message_send_contact", True),
+    "message.sendLocation": ("cmd_message_send_location", True),
     "chat.join": ("cmd_chat_join", True),
     "thread.open": ("cmd_thread_open", True),
     "thread.history": ("cmd_thread_history", True),

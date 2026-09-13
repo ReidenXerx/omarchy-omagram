@@ -53,6 +53,7 @@ var ACTIONS = [
   { id: "window.attach", label: "Attach photos or files", keys: ["Ctrl+O"] },
   { id: "window.attachFiles", label: "Send files uncompressed", keys: ["Ctrl+Shift+O"] },
   { id: "window.stickers", label: "Stickers", keys: ["Ctrl+S"] },
+  { id: "window.more", label: "Dice, a contact card or a location", keys: ["Ctrl+Shift+A"] },
   { id: "window.voice", label: "Record a voice message", keys: ["Ctrl+R"] },
   { id: "window.videoNote", label: "Record a video message", keys: ["Ctrl+Shift+R"] },
   { id: "window.settings", label: "Settings", keys: ["Ctrl+,"] },

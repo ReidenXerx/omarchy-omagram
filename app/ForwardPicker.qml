@@ -13,11 +13,14 @@ FocusScope {
   property var chats: []
   property var messageIds: []
   property real fromChatId: 0
+  property bool peopleOnly: false   // only people, as for sharing someone's contact card
   property string title: ""     // said instead of "Forward … to…" when a chat is chosen for something else
   property string query: ""
   property int cursor: 0
 
-  readonly property var results: picker.visible ? Model.forwardTargets(picker.chats, picker.query, picker.app.meId) : []
+  readonly property var results: !picker.visible ? [] : Model.forwardTargets(picker.chats, picker.query, picker.app.meId).filter(function (c) {
+    return !picker.peopleOnly || (c.kind === "private" && !c.bot && c.userId !== picker.app.meId)
+  })
 
   signal picked(real chatId, string title)
   signal dismissed()

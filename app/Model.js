@@ -1324,6 +1324,41 @@ function profileChat(profile) {
            title: [profile.firstName, profile.lastName].filter(function (part) { return !!part }).join(" ") }
 }
 
+// ---------------------------------------------------------------- more to send: dice, contact cards, locations
+
+var DICE = [["🎲", "Dice"], ["🎯", "Darts"], ["🏀", "Basketball"], ["⚽", "Football"], ["🎳", "Bowling"], ["🎰", "Slot machine"]]
+
+// What the message box's + button offers.
+function moreMenu(chat) {
+  if (!isObject(chat)) return []
+  return [{ id: "dice", label: "Dice, darts or a slot machine" }, { id: "contact", label: "A contact card" }, { id: "location", label: "A location" }]
+}
+
+function diceMenu() {
+  return DICE.map(function (d) { return { id: "dice:" + d[0], label: d[0] + "   " + d[1] } })
+}
+
+// Coordinates from what you typed or pasted: "50.45, 30.52", a geo: link, or a Google Maps or OpenStreetMap link.
+function parseLocation(text) {
+  var s = String(text === undefined || text === null ? "" : text).trim()
+  var number = "(-?[0-9]{1,3}(?:[.][0-9]+)?)"
+  var patterns = [new RegExp("@" + number + "," + number), new RegExp("[?&](?:q|query|ll|center)=" + number + "(?:,|%2C)" + number, "i"),
+                  new RegExp("mlat=" + number + "&mlon=" + number), new RegExp("#map=[0-9]{1,2}/" + number + "/" + number),
+                  new RegExp("^geo:" + number + "," + number, "i"), new RegExp("^" + number + "[ ]*[, ][ ]*" + number + "$")]
+  for (var i = 0; i < patterns.length; i++) {
+    var m = patterns[i].exec(s)
+    if (!m) continue
+    var latitude = Number(m[1])
+    var longitude = Number(m[2])
+    if (Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180) return { latitude: latitude, longitude: longitude }
+  }
+  return null
+}
+
+function locationText(place) {
+  return isObject(place) ? Number(place.latitude).toFixed(5) + ", " + Number(place.longitude).toFixed(5) : ""
+}
+
 // ---------------------------------------------------------------- chat folders
 
 var FOLDER_KINDS = [["includeContacts", "Contacts"], ["includeNonContacts", "Other people"], ["includeGroups", "Groups"],

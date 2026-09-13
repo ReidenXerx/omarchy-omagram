@@ -187,6 +187,8 @@ def content(value, files_root=""):
         out["fileName"] = _str(_obj(c.get("document")).get("file_name"), TITLE_MAX)
     elif kind == "emoji":
         out["text"] = _str(c.get("emoji"), 16)
+        if kind_name == "messageDice" and _int(c.get("value")) > 0:   # what it came up with, once the server says
+            out["text"] += f" {_int(c.get('value'))}"
     elif kind in ("service", "unsupported"):
         out["type"] = _str(kind_name, 64)
     elif kind == "poll":

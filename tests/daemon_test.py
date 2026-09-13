@@ -1344,6 +1344,26 @@ class ChatsAndAccount(Harness):
         self.assertEqual((q["chat_folder_ids"], q["main_chat_list_position"]), ([3, 2], 0))
         self.assertFalse(self.request(self.conn, 210, "folders.reorder", ids=[2])["ok"])
 
+    def test_dice_contact_cards_and_locations(self):
+        q, _ = self.call(220, "message.sendDice", "sendMessage", {"@type": "message", "id": 1, "chat_id": 500}, chatId=500, emoji="🎯")
+        self.assertEqual(q["input_message_content"], {"@type": "inputMessageDice", "emoji": "🎯", "clear_draft": False})
+        self.assertFalse(self.request(self.conn, 221, "message.sendDice", chatId=500, emoji="🍕")["ok"])
+        q, _ = self.call(222, "message.sendContact", "sendMessage", {"@type": "message", "id": 2, "chat_id": -10077},
+                         chatId=-10077, userId=500, replyToMessageId=7)
+        self.assertEqual((q["input_message_content"]["contact"], q["reply_to"]["message_id"]),
+                         ({"@type": "contact", "phone_number": "380671234567", "first_name": "Ann", "last_name": "", "vcard": "",
+                           "user_id": 500}, 7))
+        q, _ = self.call(223, "message.sendContact", "sendMessage", {"@type": "message", "id": 3, "chat_id": -10077}, chatId=-10077, userId=501)
+        self.assertEqual(q["input_message_content"]["contact"]["phone_number"], "", "a number Telegram does not show you stays out")
+        self.assertFalse(self.request(self.conn, 224, "message.sendContact", chatId=-10077, userId=999)["ok"])
+        q, _ = self.call(225, "message.sendLocation", "sendMessage", {"@type": "message", "id": 4, "chat_id": -10077},
+                         chatId=-10077, latitude=50.4501, longitude=30.5234, threadId=3)
+        place = q["input_message_content"]["location"]
+        self.assertEqual((place["latitude"], place["longitude"], q["topic_id"]),
+                         (50.4501, 30.5234, {"@type": "messageTopicThread", "message_thread_id": 3}))
+        for rid, args in ((226, {"latitude": 91, "longitude": 0}), (227, {"latitude": "50", "longitude": 30}), (228, {"latitude": True, "longitude": 1})):
+            self.assertFalse(self.request(self.conn, rid, "message.sendLocation", chatId=500, **args)["ok"], args)
+
     def test_mention_and_command_suggestions(self):
         def member(uid):
             return {"@type": "chatMember", "member_id": {"@type": "messageSenderUser", "user_id": uid},
