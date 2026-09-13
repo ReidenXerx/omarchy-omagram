@@ -1,10 +1,14 @@
-<img src="assets/omagram.svg" alt="" width="96" align="right">
+<p align="center">
+  <img src="assets/omagram.svg" alt="" width="112">
+</p>
 
-# Omagram
+<h1 align="center">Omagram</h1>
 
-**An unofficial Telegram client that lives in your [Omarchy](https://omarchy.org) desktop, not in
-another window.** Reply from the bar with a voice note, a round video or a sticker; know who wrote
-from the sound alone; act on a message from its notification. Keyboard-first, in your theme.
+<p align="center">
+  <b>An unofficial Telegram client that lives in your <a href="https://omarchy.org">Omarchy</a> desktop, not in another window.</b><br>
+  Reply from the bar with a voice note, a round video or a sticker; know who wrote from the sound alone;
+  act on a message from its notification. Keyboard-first, in your theme.
+</p>
 
 ![Omagram: the quick view under the bar, a notification, and a sound of their own for each person](preview.png)
 
