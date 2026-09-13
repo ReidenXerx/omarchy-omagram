@@ -334,6 +334,10 @@ secret-tool clear service omagram               # the API id, hash and database 
 Removing the data does not end the session on Telegram's side: to do that, terminate it from
 Settings → Devices in another Telegram app.
 
+## Support
+
+If Omagram is useful to you, you can support its development on [Donatello](https://donatello.to/DuduPhudu).
+
 ## License
 
 MIT. TDLib is © Aliaksei Levin and Arseny Smirnov, under the Boost Software License 1.0;
