@@ -138,6 +138,8 @@ var ACTIONS = [
   { id: "stickers.previousSet", label: "Previous sticker set", keys: ["Shift+Tab"] },
   { id: "stickers.send", label: "Send the sticker", keys: ["Return", "Enter"] },
   { id: "stickers.close", label: "Close", keys: ["Esc"] },
+  { id: "stickers.favorite", label: "Add the sticker to your favorites, or take it out of them", keys: ["F"] },
+  { id: "stickers.install", label: "Add the sticker set to yours, or remove it", keys: ["A"] },
 
   { id: "photo.previous", label: "Previous photo", keys: ["Left", "H"] },
   { id: "photo.next", label: "Next photo", keys: ["Right", "L"] },

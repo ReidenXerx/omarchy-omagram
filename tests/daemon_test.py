@@ -587,11 +587,23 @@ class Sending(Harness):
         self.send(self.conn, {"id": 52, "cmd": "stickers.set", "args": {"setId": "9223372036854775807"}})
         q = self.last_query("getStickerSet")
         self.assertEqual(q["set_id"], 9223372036854775807)
-        self.td_event({"@type": "stickerSet", "@extra": q["@extra"], "@client_id": 1, "title": "Pandas", "stickers": [self.sticker(8)]})
+        self.td_event({"@type": "stickerSet", "@extra": q["@extra"], "@client_id": 1, "title": "Pandas", "is_installed": True,
+                       "stickers": [self.sticker(8)]})
         one = self.read(self.conn, lambda v: v.get("id") == 52)["result"]
-        self.assertEqual((one["title"], [s["file"]["id"] for s in one["stickers"]]), ("Pandas", [8]))
+        self.assertEqual((one["title"], [s["file"]["id"] for s in one["stickers"]], one["installed"]), ("Pandas", [8], True))
         for bad in (123, "12a", ""):
             self.assertFalse(self.request(self.conn, 53, "stickers.set", setId=bad)["ok"], bad)
+
+        _, r = self.call(54, "stickers.favorites", "getFavoriteStickers", {"@type": "stickers", "stickers": [self.sticker(9)]})
+        self.assertEqual([s["file"]["id"] for s in r["result"]["stickers"]], [9])
+        q, _ = self.call(55, "sticker.favorite", "addFavoriteSticker", {"@type": "ok"}, fileId=9, favorite=True)
+        self.assertEqual(q["sticker"], {"@type": "inputFileId", "id": 9})
+        q, _ = self.call(56, "sticker.favorite", "removeFavoriteSticker", {"@type": "ok"}, fileId=9, favorite=False)
+        self.assertEqual(q["sticker"]["id"], 9)
+        self.assertFalse(self.request(self.conn, 57, "sticker.favorite", fileId=9, favorite="yes")["ok"])
+        q, _ = self.call(58, "stickers.install", "changeStickerSet", {"@type": "ok"}, setId="9223372036854775807", installed=True)
+        self.assertEqual((q["set_id"], q["is_installed"], q["is_archived"]), (9223372036854775807, True, False))
+        self.assertFalse(self.request(self.conn, 59, "stickers.install", setId="x", installed=True)["ok"])
 
 
     def test_markdown_is_read_into_formatting_and_written_back_for_editing(self):

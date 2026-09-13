@@ -561,6 +561,13 @@ test("your profile: what can go to Telegram, its refusals in words, what each ro
   eq([M.profileChat(Object.assign({}, p, { lastName: "Lee" })).title, M.profileChat(null)], ["Ann Lee", null])
 })
 
+test("a sticker's menu: favorites, and its set", () => {
+  const sticker = (setId) => ({ id: 3, chatId: 1, content: { kind: "sticker", media: { file: { id: 90 }, setId: setId, emoji: "🐼" } } })
+  const ids = (m) => M.messageMenu(m, null, false, { kind: "group" }).map(i => i.id).filter(id => id === "favoriteSticker" || id === "stickerSet")
+  eq([ids(sticker("777")), ids(sticker("")), ids({ id: 4, chatId: 1, content: { kind: "text", text: "hi", entities: [] } })],
+     [["favoriteSticker", "stickerSet"], ["favoriteSticker"], []])
+})
+
 test("more to send: dice, and a location from coordinates or a map link", () => {
   eq([M.moreMenu({ kind: "group" }, 1).map(i => i.id), M.moreMenu(null, 1)], [["poll", "dice", "contact", "location"], []])
   eq([{ kind: "private", userId: 5 }, { kind: "private", userId: 1 }, { kind: "private", userId: 9, bot: true }, { kind: "secret" }, { kind: "channel" }]

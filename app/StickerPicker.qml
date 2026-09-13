@@ -4,10 +4,11 @@ import qs.Commons
 import "Model.js" as Model
 import "Keymap.js" as Keymap
 
-// The sticker and GIF picker: recent stickers first, then GIFs (yours, or found by typing), then
-// each installed sticker set.
-// Keyboard: arrows or h/j/k/l move, Tab and Shift+Tab switch tabs, Enter sends, Esc closes. On the
-// GIF tab typing searches, ↓ goes from the search to the GIFs and ↑ from the top row back.
+// The sticker and GIF picker: recent stickers first, your favorites, GIFs (yours, or found by typing),
+// each installed sticker set, and last a set that is not yours, opened from a sticker in a chat.
+// Keyboard: arrows or h/j/k/l move, Tab and Shift+Tab switch tabs, Enter sends, F adds a sticker to your
+// favorites (or, among them, takes it out), A adds the set you are looking at to yours or removes it,
+// Esc closes. On the GIF tab typing searches, ↓ goes from the search to the GIFs and ↑ from the top row back.
 // Stickers and GIFs show small and still, so a grid of dozens does not run dozens of animations.
 FocusScope {
   id: picker
@@ -22,12 +23,19 @@ FocusScope {
   property string query: ""
   property string nextOffset: ""
   property int serial: 0
-  readonly property bool gifs: picker.tab === 1
+  property var previewSet: null       // a set that is not yours, opened from a sticker: { id, title }
+  property bool currentInstalled: false
+  readonly property bool favorites: picker.tab === 1
+  readonly property bool gifs: picker.tab === 2
+  readonly property int setsStart: 3
+  readonly property var currentSet: picker.tab < picker.setsStart ? null
+                                  : (picker.tab - picker.setsStart < picker.sets.length ? picker.sets[picker.tab - picker.setsStart] : picker.previewSet)
   readonly property int cell: Style.space(picker.gifs ? 112 : 84)
   readonly property int columns: Math.max(1, Math.floor(grid.width / cell))
 
   signal picked(var sticker)
   signal gifPicked(var item)
+  signal notice(string text)
   signal closed()
 
   function open() {
@@ -39,7 +47,7 @@ FocusScope {
   }
 
   function show(index) {
-    var count = picker.sets.length + 2
+    var count = picker.sets.length + picker.setsStart + (picker.previewSet ? 1 : 0)
     picker.tab = ((index % count) + count) % count
     picker.cursor = 0
     picker.items = []
@@ -55,10 +63,60 @@ FocusScope {
       if (serial !== picker.serial) return   // an answer for a tab that was already left
       picker.loading = false
       picker.items = answer.ok ? (answer.result.stickers || []) : []
+      if (answer.ok && answer.result.installed !== undefined) {
+        picker.currentInstalled = answer.result.installed === true
+        if (picker.previewSet && picker.previewSet.id === answer.result.id && !picker.previewSet.title)
+          picker.previewSet = { id: answer.result.id, title: answer.result.title }
+      }
     }
     picker.loading = true
+    picker.currentInstalled = picker.tab - picker.setsStart < picker.sets.length
     if (picker.tab === 0) app.request("stickers.recent", {}, done)
-    else app.request("stickers.set", { setId: picker.sets[picker.tab - 2].id }, done)
+    else if (picker.favorites) app.request("stickers.favorites", {}, done)
+    else if (picker.currentSet) app.request("stickers.set", { setId: picker.currentSet.id }, done)
+  }
+
+  // A sticker in a chat leads to its set: one of yours, or shown last until you add it.
+  function openSet(setId) {
+    app.request("stickers.sets", {}, function (answer) {
+      if (answer.ok) picker.sets = answer.result.sets || []
+      var at = -1
+      for (var i = 0; i < picker.sets.length; i++) if (picker.sets[i].id === setId) at = i
+      picker.previewSet = at < 0 ? { id: setId, title: "" } : null
+      grid.forceActiveFocus()
+      picker.show(at >= 0 ? at + picker.setsStart : picker.sets.length + picker.setsStart)
+    })
+  }
+
+  function toggleFavorite(index) {
+    var item = picker.items[index]
+    if (picker.gifs || !item || !item.file) return
+    var adding = !picker.favorites
+    app.request("sticker.favorite", { fileId: item.file.id, favorite: adding }, function (answer) {
+      if (!answer.ok) { picker.notice(answer.error || "Could not change your favorite stickers"); return }
+      picker.notice(adding ? "Added to your favorite stickers" : "Taken out of your favorite stickers")
+      if (!adding) picker.show(picker.tab)
+    })
+  }
+
+  function toggleInstall() {
+    var set = picker.currentSet
+    if (!set) return
+    var installing = !picker.currentInstalled
+    app.request("stickers.install", { setId: set.id, installed: installing }, function (answer) {
+      if (!answer.ok) { picker.notice(answer.error || "Could not change your sticker sets"); return }
+      picker.notice(installing ? "The set is one of yours now" : "The set is removed from yours")
+      picker.currentInstalled = installing
+      app.request("stickers.sets", {}, function (sets) {
+        if (!sets.ok) return
+        picker.sets = sets.result.sets || []
+        var at = -1
+        for (var i = 0; i < picker.sets.length; i++) if (picker.sets[i].id === set.id) at = i
+        picker.previewSet = at < 0 ? { id: set.id, title: set.title } : null
+        picker.tab = at >= 0 ? at + picker.setsStart : picker.sets.length + picker.setsStart
+        tabs.positionViewAtIndex(picker.tab, ListView.Contain)
+      })
+    })
   }
 
   // Your saved GIFs while nothing is typed; otherwise what the @gif bot finds, a page at a time.
@@ -134,8 +192,10 @@ FocusScope {
       spacing: Style.space(6)
       clip: true
       boundsBehavior: Flickable.StopAtBounds
-      // md-clock-outline U+F0150, md-file-gif-box U+F0D78
-      model: [{ title: "Recent", cover: null, glyph: 0xF0150 }, { title: "GIFs", cover: null, glyph: 0xF0D78 }].concat(picker.sets)
+      // md-clock-outline U+F0150, md-star-outline U+F04D2, md-file-gif-box U+F0D78, md-eye-outline U+F06D0
+      model: [{ title: "Recent", cover: null, glyph: 0xF0150 }, { title: "Favorites", cover: null, glyph: 0xF04D2 },
+              { title: "GIFs", cover: null, glyph: 0xF0D78 }].concat(picker.sets)
+             .concat(picker.previewSet ? [{ title: picker.previewSet.title, cover: null, glyph: 0xF06D0 }] : [])
 
       delegate: Rectangle {
         required property var modelData
@@ -230,9 +290,10 @@ FocusScope {
       Layout.fillWidth: true
       elide: Text.ElideRight
       textFormat: Text.PlainText
-      text: (picker.tab === 0 ? "Recent" : (picker.gifs ? (picker.query ? "GIFs found" : "Your GIFs")
-             : (picker.sets[picker.tab - 2] ? picker.sets[picker.tab - 2].title : "")))
-        + "   ←→↑↓ move · Tab next · Enter send · Esc close"
+      text: (picker.tab === 0 ? "Recent" : (picker.favorites ? "Favorites" : (picker.gifs ? (picker.query ? "GIFs found" : "Your GIFs")
+             : (picker.currentSet ? (picker.currentSet.title || "Sticker set") + (picker.currentInstalled ? "" : "  (not one of yours)") : ""))))
+        + "   ←→↑↓ move · Tab next · Enter send" + (picker.gifs ? "" : (picker.favorites ? " · F takes it out" : " · F favorite"))
+        + (picker.currentSet ? (picker.currentInstalled ? " · A removes the set" : " · A adds the set") : "") + " · Esc close"
       color: app.muted
       font.family: app.fontFamily
       font.pixelSize: Style.font.caption
@@ -266,6 +327,8 @@ FocusScope {
         else if (is("stickers.nextSet")) picker.show(picker.tab + 1)
         else if (is("stickers.send")) picker.send(picker.cursor)
         else if (is("stickers.close")) picker.closed()
+        else if (is("stickers.favorite")) picker.toggleFavorite(picker.cursor)
+        else if (is("stickers.install")) picker.toggleInstall()
         else return
         event.accepted = true
       }
@@ -346,7 +409,7 @@ FocusScope {
         visible: grid.count === 0
         text: picker.loading ? "Loading…"
             : (picker.gifs ? (picker.query ? "No GIFs found" : "No saved GIFs: type to search")
-               : (picker.tab === 0 ? "No recent stickers yet" : "This set is empty"))
+               : (picker.tab === 0 ? "No recent stickers yet" : (picker.favorites ? "No favorite stickers yet: F on a sticker adds it" : "This set is empty")))
         color: app.muted
         font.family: app.fontFamily
         font.pixelSize: Style.font.body

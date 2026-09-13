@@ -829,6 +829,10 @@ function messageMenu(message, properties, translated, chat) {
   if (p && p.canEdit) out.push({ id: "edit", label: c.kind === "text" ? "Edit" : "Edit caption" })
   if (p && p.canForward) out.push({ id: "forward", label: "Forward" })
   if (p && p.canPin) out.push(message.pinned ? { id: "unpin", label: "Unpin" } : { id: "pin", label: "Pin" })
+  if (c.kind === "sticker" && isObject(c.media) && isObject(c.media.file)) {
+    out.push({ id: "favoriteSticker", label: "Add to favorite stickers" })
+    if (c.media.setId) out.push({ id: "stickerSet", label: "Its sticker set" })
+  }
   out.push({ id: "select", label: "Select" })
   if (isObject(c.media) && isObject(c.media.file) && FILE_KINDS.indexOf(c.kind) >= 0 && (!p || p.canSave !== false)) {
     out.push({ id: "open", label: "Open with its app" })

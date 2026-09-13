@@ -715,6 +715,8 @@ FocusScope {
     if (!message || !root.chat) return
     if (id === "reply") root.startReply(message)
     else if (id === "thread") root.openThread(message)
+    else if (id === "favoriteSticker") root.favoriteSticker(message)
+    else if (id === "stickerSet") root.openStickerSet(message)
     else if (id === "copy") root.copyText(message.content.text)
     else if (id === "link") root.copyLink(message)
     else if (id === "edit") root.startEdit(root.captionHolder(message), true)
@@ -730,6 +732,23 @@ FocusScope {
     else if (id === "sendNow") root.reschedule(message, 0)
     else if (id === "reschedule") root.openRescheduleMenu(message)
   }
+
+  function favoriteSticker(message) {
+    var media = message && message.content ? message.content.media : null
+    if (!media || !media.file) return
+    client.request("sticker.favorite", { fileId: media.file.id, favorite: true }, function (answer) {
+      root.flash(answer.ok ? "Added to your favorite stickers" : (answer.error || "Could not add it to your favorites"))
+    })
+  }
+
+  // A sticker's set, in the sticker picker: one of yours, or shown last with A to add it.
+  function openStickerSet(message) {
+    var media = message && message.content ? message.content.media : null
+    if (!media || !media.setId || !root.chat) return
+    root.stickersOpen = true
+    Qt.callLater(function () { stickerPicker.openSet(media.setId) })
+  }
+  readonly property var stickers: stickerPicker   // the sticker picker, for checks from outside
 
   function react(message, emoji) {
     if (!message || !emoji) return
@@ -1930,6 +1949,7 @@ FocusScope {
       app: root.app
       chatId: root.chat ? root.chat.id : 0
       onGifPicked: function (item) { root.sendGif(item) }
+      onNotice: function (text) { root.flash(text) }
       onPicked: function (sticker) {
         if (!root.chat) return
         app.sendSticker(root.chat.id, sticker, root.replyToId, function (answer) {

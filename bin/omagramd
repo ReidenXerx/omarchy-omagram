@@ -2611,8 +2611,29 @@ class Daemon:
             raise BadRequest("setId is a sticker set id, as text")
 
         def stickers(event):
-            return {"id": set_id, "title": model._str(event.get("title"), 128), "stickers": self.sticker_views(event.get("stickers"))}
+            return {"id": set_id, "title": model._str(event.get("title"), 128), "installed": event.get("is_installed") is True,
+                    "stickers": self.sticker_views(event.get("stickers"))}
         self.td_send({"@type": "getStickerSet", "set_id": int(set_id)}, client, rid, stickers)
+
+    def cmd_stickers_favorites(self, client, rid, args):
+        self.td_send({"@type": "getFavoriteStickers"}, client, rid, lambda e: {"stickers": self.sticker_views(e.get("stickers"))})
+
+    def cmd_sticker_favorite(self, client, rid, args):
+        """Adds a sticker to your favorites (to the front, if it is there already), or takes it out."""
+        favorite = args.get("favorite")
+        if not isinstance(favorite, bool):
+            raise BadRequest("favorite is true or false")
+        self.td_send({"@type": "addFavoriteSticker" if favorite else "removeFavoriteSticker",
+                      "sticker": {"@type": "inputFileId", "id": arg_int(args, "fileId", 1, FILE_ID_MAX)}}, client, rid)
+
+    def cmd_stickers_install(self, client, rid, args):
+        """Adds a sticker set to yours, or removes it."""
+        set_id, installed = args.get("setId"), args.get("installed")
+        if not isinstance(set_id, str) or not SET_ID.fullmatch(set_id):
+            raise BadRequest("setId is a sticker set id, as text")
+        if not isinstance(installed, bool):
+            raise BadRequest("installed is true or false")
+        self.td_send({"@type": "changeStickerSet", "set_id": int(set_id), "is_installed": installed, "is_archived": False}, client, rid)
 
     def cmd_message_edit(self, client, rid, args):
         chat_id, message_id = arg_int(args, "chatId"), arg_int(args, "messageId", 1)
@@ -2781,6 +2802,9 @@ COMMANDS = {
     "chat.commands": ("cmd_chat_commands", True),
     "message.sendFiles": ("cmd_message_send_files", True),
     "message.sendDice": ("cmd_message_send_dice", True),
+    "stickers.favorites": ("cmd_stickers_favorites", True),
+    "sticker.favorite": ("cmd_sticker_favorite", True),
+    "stickers.install": ("cmd_stickers_install", True),
     "message.sendPoll": ("cmd_message_send_poll", True),
     "message.sendContact": ("cmd_message_send_contact", True),
     "message.sendLocation": ("cmd_message_send_location", True),

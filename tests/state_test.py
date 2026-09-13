@@ -343,6 +343,12 @@ class Chats(unittest.TestCase):
 
 
 class Messages(unittest.TestCase):
+    def test_a_sticker_knows_its_set(self):
+        media = model.media_for("sticker", {"sticker": {"@type": "sticker", "set_id": "9223372036854775807", "emoji": "🐼",
+                                                        "sticker": {"@type": "file", "id": 5, "size": 10}}}, "")
+        loose = model.media_for("sticker", {"sticker": {"@type": "sticker", "set_id": "0", "sticker": {"@type": "file", "id": 6}}}, "")
+        self.assertEqual((media["setId"], loose["setId"]), ("9223372036854775807", ""))
+
     def test_dice_show_what_they_came_up_with(self):
         s = model.State()
         rolled = s.message({"@type": "message", "id": 1, "chat_id": 5, "content": {"@type": "messageDice", "emoji": "🎲", "value": 4}})

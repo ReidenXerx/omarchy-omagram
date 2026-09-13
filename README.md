@@ -59,7 +59,8 @@ overlay on a key, and desktop notifications you can answer without leaving what 
 - **Stories** — the stories of the people and channels you follow, above the chat list
   (`Ctrl+Shift+S`): photos and videos one after another. Watching one shows you among its
   viewers, as in any Telegram app. Posting stories needs an official app.
-- **Stickers and GIFs** — static, animated (TGS) and video (WebM) stickers, custom emoji, and a
+- **Stickers and GIFs** — favorite stickers (`F` on a sticker in the picker, or a sticker's menu in a chat),
+  a sticker set added from a sticker someone sent (`A` in the picker), static, animated (TGS) and video (WebM) stickers, custom emoji, and a
   picker with your recent stickers, your GIFs (or GIFs found through Telegram's @gif, as its own
   apps search them) and your installed sets.
 - **Search** — chats in every list, and messages in all chats or in the open one.

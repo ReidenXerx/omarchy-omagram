@@ -737,7 +737,9 @@ def media_for(kind, c, files_root):
         w, h = _dims(s)
         return {"file": view, "format": STICKER_FORMATS.get(_obj(s.get("format")).get("@type"), "unknown"),
                 "width": w, "height": h, "emoji": _str(s.get("emoji"), 16),
-                "thumb": thumbnail(s.get("thumbnail"), files_root)}
+                "thumb": thumbnail(s.get("thumbnail"), files_root),
+                # The set it belongs to, as text (int64): a sticker in a chat leads to its set.
+                "setId": str(_int(s.get("set_id"))) if _int(s.get("set_id")) else ""}
     if kind == "gif":
         a = _obj(c.get("animation"), "animation")
         view = file_view(a.get("animation"), files_root)
