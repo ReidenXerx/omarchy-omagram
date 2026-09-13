@@ -45,6 +45,7 @@ import omagram_td as td  # noqa: E402
 import omagram_notify as notify  # noqa: E402
 import omagram_media as media  # noqa: E402
 import omagram_settings as prefs  # noqa: E402
+import omagram_sounds as sounds  # noqa: E402
 
 VERSION = "0.1.0"
 RUN = pathlib.Path(safe.runtime_dir()) / "omagram"
@@ -65,6 +66,11 @@ NOTIFY_IMAGES = pathlib.Path(safe.home_dir()) / ".cache/omagram/notify"   # pict
 NOTIFY_IMAGES_MAX = 200
 PICTURE_FORMATS = ("jpeg", "png", "webp")   # thumbnails the notification server can draw
 MUTE_HOUR = 3600
+SOUNDS = pathlib.Path(safe.home_dir()) / ".cache/omagram/sounds"   # each person's sound, made once and kept
+SOUNDS_MAX = 300
+SOUND_GAP = 1.2           # seconds between any two sounds
+SOUND_PERSON_GAP = 4.0    # and between two of the same person's
+OMARCHY_NOTIFICATIONS = pathlib.Path(safe.home_dir()) / ".local/state/omarchy/notifications.json"   # where Do Not Disturb is kept
 # Telegram caps animated stickers at 64 KB compressed; a megabyte is far past any real one.
 TGS_MAX = 1024 * 1024
 LOTTIE_MAX = 16 * 1024 * 1024
@@ -492,6 +498,8 @@ class Daemon:
         self.focus_client = None   # the client whose focused chat keeps notifications quiet
         self.focused_chat = 0      # the chat it shows
         self.notified = {}         # chat id -> the message its notification shows, for the notification's buttons
+        self.sound_last = 0.0      # when a sound last played, and each person's, so a busy chat is not a din
+        self.sound_by_person = {}
         self.recording = None      # the voice message being recorded: proc, path, chatId, started
         self.tasks = queue.Queue() # finished background work, run on the loop: (done, result, error)
         self.jobs = 0
@@ -796,7 +804,8 @@ class Daemon:
                 self.notified.clear()
             self.notified[chat_id] = message["id"]
         shown = message if kind.get("show_preview") is True else None
-        self.notifier.show(chat_id, title, body, self.notification_picture(chat, shown))
+        if self.notifier.show(chat_id, title, body, self.notification_picture(chat, shown)) and message is not None:
+            self.play_person(self.sound_seed(chat, message))
 
     def on_notification_action(self, chat_id, action):
         if action == "reply":
@@ -875,6 +884,59 @@ class Daemon:
         except (safe.UnsafeError, OSError):
             return ""
         return str(path)
+
+    # ---------------------------------------------------------------- a sound for each person
+
+    def sound_seed(self, chat, message):
+        """Whose sound a message plays: the person who wrote it, or the chat when a channel or a group wrote it."""
+        sender = message.get("sender") if isinstance(message.get("sender"), dict) else {}
+        if sender.get("type") == "user" and sender.get("id"):
+            return sender["id"]
+        return chat["id"] if chat else 0
+
+    def do_not_disturb(self):
+        try:
+            data = safe.read_json(OMARCHY_NOTIFICATIONS, 64 * 1024, default={})
+        except (safe.UnsafeError, OSError, ValueError):
+            return False
+        return isinstance(data, dict) and data.get("dnd") is True
+
+    def play_person(self, seed, force=False):
+        """A person's own sound, quietly: made once in the background and kept, then played with pw-play. Not while
+        Omarchy's Do Not Disturb is on, and not again and again for a busy chat; `force` is for hearing it on purpose."""
+        settings = self.prefs.get("sounds") or {}
+        style = settings.get("style", "glass")
+        if style not in sounds.STYLES or not seed:
+            return
+        if not force:
+            now = time.monotonic()
+            if (now - self.sound_last < SOUND_GAP or now - self.sound_by_person.get(seed, -SOUND_PERSON_GAP) < SOUND_PERSON_GAP
+                    or self.do_not_disturb()):
+                return
+            if len(self.sound_by_person) >= 512:
+                self.sound_by_person.clear()
+            self.sound_last = now
+            self.sound_by_person[seed] = now
+        variant = (settings.get("variants") or {}).get(str(seed), 0)
+        name = hashlib.sha256(f"{seed}:{variant}".encode()).hexdigest()[:24]
+        path = SOUNDS / f"{style}-{name}.wav"
+        if os.path.isfile(path):
+            self.spawn_sound(path)
+            return
+
+        def make():
+            data = sounds.render(sounds.motif(seed, variant), style)
+            entries = safe.list_dir(SOUNDS, SOUNDS_MAX + 50)
+            if len(entries) >= SOUNDS_MAX:   # a cache: it starts again
+                for old, _stat in entries:
+                    safe.remove_file(SOUNDS / old)
+            safe.write_file(path, data, 0o600)
+            return path
+        self.background(make, lambda made, error: self.spawn_sound(made) if made and error is None else None)
+
+    def spawn_sound(self, path):
+        if safe.has_tool("pw-play"):
+            self.spawn([str(safe.tool("pw-play")), "--media-role", "Notification", str(path)], timeout=10)
 
     def summon_quick_reply(self, chat_id):
         """Reply opens the quick-reply overlay on that chat. The overlay lives in Omarchy's shell;
@@ -2491,7 +2553,7 @@ class Daemon:
     def cmd_settings_set(self, client, rid, args):
         settings = args.get("settings")
         if isinstance(settings, dict):   # the shortcuts page leaves the speed and the downloads as they are
-            settings = dict({k: self.prefs[k] for k in ("playbackRate", "autoDownload", "reactionsSeen", "emoji") if k in self.prefs}, **settings)
+            settings = dict({k: self.prefs[k] for k in ("playbackRate", "autoDownload", "reactionsSeen", "emoji", "sounds") if k in self.prefs}, **settings)
         try:
             new = prefs.check(settings)
         except ValueError as e:
@@ -2548,6 +2610,46 @@ class Daemon:
         self.prefs = new
         self.respond(client, rid, self.settings_view())
         self.broadcast(dict({"event": "settings"}, **self.settings_view()))
+
+    def cmd_settings_sounds(self, client, rid, args):
+        """The instrument every person's sound is played on, or off. The new one plays at once, as your own sound."""
+        current = self.prefs.get("sounds") or {}
+        try:
+            new = prefs.check(dict(self.prefs, sounds=dict(current, style=args.get("style"))))
+        except ValueError as e:
+            raise BadRequest(str(e))
+        try:
+            prefs.save(new)
+        except (safe.UnsafeError, OSError):
+            raise BadRequest("the settings could not be saved")
+        self.prefs = new
+        self.respond(client, rid, self.settings_view())
+        self.broadcast(dict({"event": "settings"}, **self.settings_view()))
+        self.play_person(self.state.me_id, force=True)
+
+    def cmd_sounds_play(self, client, rid, args):
+        """A person's sound, heard on purpose: theirs from their info, yours from Settings."""
+        self.play_person(arg_int(args, "userId", 1, INT64_MAX), force=True)
+        self.respond(client, rid, {})
+
+    def cmd_sounds_another(self, client, rid, args):
+        """Another tune for a person whose sound is not liked, played at once."""
+        user_id = arg_int(args, "userId", 1, INT64_MAX)
+        current = self.prefs.get("sounds") or {}
+        variants = dict(current.get("variants") or {})
+        variants[str(user_id)] = variants.get(str(user_id), 0) % 99 + 1
+        try:
+            new = prefs.check(dict(self.prefs, sounds=dict(current, variants=variants)))
+        except ValueError as e:
+            raise BadRequest(str(e))
+        try:
+            prefs.save(new)
+        except (safe.UnsafeError, OSError):
+            raise BadRequest("the settings could not be saved")
+        self.prefs = new
+        self.respond(client, rid, self.settings_view())
+        self.broadcast(dict({"event": "settings"}, **self.settings_view()))
+        self.play_person(user_id, force=True)
 
     def cmd_settings_auto_download(self, client, rid, args):
         """What downloads by itself as it comes on screen: photos, and GIFs with round video messages (yes
@@ -3163,6 +3265,9 @@ COMMANDS = {
     "settings.autoDownload": ("cmd_settings_auto_download", False),
     "settings.reactions": ("cmd_settings_reactions", False),
     "settings.emoji": ("cmd_settings_emoji", False),
+    "settings.sounds": ("cmd_settings_sounds", False),
+    "sounds.play": ("cmd_sounds_play", False),
+    "sounds.another": ("cmd_sounds_another", False),
     "chat.setSilent": ("cmd_chat_set_silent", True),
     "shortcuts.apply": ("cmd_shortcuts_apply", False),
     "voice.start": ("cmd_voice_start", True),

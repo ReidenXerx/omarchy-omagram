@@ -941,7 +941,9 @@ function infoActions(chat, meId) {
   if (!isObject(chat)) return []
   var out = [{ id: "mute", label: chat.muted ? "Unmute" : "Mute" }, { id: "search", label: "Search" }]
   if (chat.canSetAutoDelete) out.push({ id: "autoDelete", label: "Auto-delete messages" })
-  if (chat.kind === "private" && !chat.bot && chat.userId && chat.userId !== meId) out.push({ id: "secret", label: "Start a secret chat" })
+  if (chat.kind === "private" && !chat.bot && chat.userId && chat.userId !== meId)
+    out.push({ id: "secret", label: "Start a secret chat" }, { id: "hearSound", label: "Hear their sound" },
+             { id: "otherSound", label: "Give them another sound" })
   if (chat.kind === "secret" && isObject(chat.secret) && chat.secret.state !== "closed")
     out.push({ id: "endSecret", label: "End the secret chat", danger: true })
   return out.concat(leaveActions(chat))
@@ -1349,6 +1351,23 @@ function profileChat(profile) {
   if (!isObject(profile)) return null
   return { id: 0, kind: "private", userId: 0, photo: profile.photo || null,
            title: [profile.firstName, profile.lastName].filter(function (part) { return !!part }).join(" ") }
+}
+
+// ---------------------------------------------------------------- a sound for each person
+
+var SOUND_STYLES = [["glass", "Glass", "a soft bell"], ["wood", "Wood", "a small marimba"], ["pluck", "Pluck", "a plucked string"],
+                    ["dot", "Dot", "short digital dots"], ["air", "Air", "a breathy chime"]]
+
+function soundStyleText(style) {
+  for (var i = 0; i < SOUND_STYLES.length; i++) if (SOUND_STYLES[i][0] === style) return SOUND_STYLES[i][1] + ", " + SOUND_STYLES[i][2]
+  return "Off"
+}
+
+// Round and round: each instrument, then off.
+function nextSoundStyle(style) {
+  var keys = SOUND_STYLES.map(function (s) { return s[0] }).concat(["off"])
+  var at = keys.indexOf(style)
+  return keys[(at < 0 ? 0 : at + 1) % keys.length]
 }
 
 // ---------------------------------------------------------------- readable colours

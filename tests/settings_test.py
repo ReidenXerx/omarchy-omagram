@@ -90,7 +90,9 @@ class Checking(unittest.TestCase):
         self.assertEqual(prefs.check(good), {"shortcuts": {"window.voice": ["Ctrl+Alt+V"], "list.pin": []},
                                              "globalShortcuts": {"global.quickReply": "SUPER + ALT + M"}, "playbackRate": 1,
                                              "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0},
-                                             "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}})
+                                             "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}},
+                                             "sounds": {"style": "glass", "variants": {}}})
+        self.assertEqual(prefs.check(dict(good, sounds={"style": "off", "variants": {"500": 3}}))["sounds"], {"style": "off", "variants": {"500": 3}})
         mine = {"tone": 2, "recents": {"emoji:👍": {"c": 1.5, "t": 1789000000000}, "kaomoji:(╯°□°）╯︵ ┻━┻": {"c": 1, "t": 1789000000001}}}
         self.assertEqual(prefs.check(dict(good, emoji=mine))["emoji"], mine)
         self.assertEqual([prefs.check(dict(good, playbackRate=r))["playbackRate"] for r in (1, 1.5, 2)], [1, 1.5, 2])
@@ -102,6 +104,8 @@ class Checking(unittest.TestCase):
                     {"reactionsSeen": "yes"}, {"reactionsSeen": 1},
                     {"emoji": []}, {"emoji": {"tone": 6}}, {"emoji": {"tone": True}}, {"emoji": {"recents": {"flag:x": {"c": 1, "t": 1}}}},
                     {"emoji": {"recents": {"emoji:": {"c": 1, "t": 1}}}}, {"emoji": {"recents": {"emoji:x": {"c": 0, "t": 1}}}},
+                    {"sounds": []}, {"sounds": {"style": "trumpet"}}, {"sounds": {"variants": {"ann": 1}}}, {"sounds": {"variants": {"5": 0}}},
+                    {"sounds": {"variants": {"5": True}}},
                     {"shortcuts": {"Bad Id": ["A"]}}, {"shortcuts": {"window.voice": "A"}},
                     {"shortcuts": {"window.voice": ["has space"]}}, {"shortcuts": {"window.voice": ["A"] * 7}},
                     {"shortcuts": {"global.quickReply": ["A"]}}, {"globalShortcuts": {"global.nope": "SUPER + M"}},
@@ -118,7 +122,7 @@ class Checking(unittest.TestCase):
         self.assertEqual(prefs.check(mixed, strict=False),
                          {"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}, "globalShortcuts": {"global.quickReply": "SUPER + M"},
                           "playbackRate": 1, "autoDownload": {"photos": True, "gifs": True, "videos": 50, "files": 0},
-                          "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}})
+                          "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}, "sounds": {"style": "glass", "variants": {}}})
         self.assertEqual(prefs.check("junk", strict=False), prefs.empty())
 
 

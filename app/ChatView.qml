@@ -1155,6 +1155,10 @@ FocusScope {
     else if (id === "secret") root.startSecretChat(root.chat)
     else if (id === "endSecret") root.askEndSecret(root.chat)
     else if (id === "autoDelete") root.openAutoDeleteMenu()
+    else if (id === "hearSound") client.request("sounds.play", { userId: root.chat.userId })
+    else if (id === "otherSound") client.request("sounds.another", { userId: root.chat.userId }, function (answer) {
+      root.flash(answer.ok ? "A new sound for them: this is it" : (answer.error || "Could not change their sound"))
+    })
   }
 
   // Silent sending, Telegram's own setting of the chat: everything sent here goes without sound until it is off.

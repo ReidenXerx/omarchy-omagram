@@ -110,12 +110,14 @@ Scope {
     omagram.autoDownloadRules = view.settings.autoDownload || null
     omagram.reactionsSeen = view.settings.reactionsSeen !== false
     omagram.emojiState = view.settings.emoji || ({ tone: 0, recents: ({}) })
+    omagram.soundStyle = (view.settings.sounds || {}).style || "glass"
   }
 
   // What downloads by itself as it comes on screen (Model.autoDownload); kept in the settings.
   property var autoDownloadRules: null
   property bool reactionsSeen: true        // reactions to your messages count as seen when the chat opens
   property var emojiState: ({ tone: 0, recents: ({}) })   // the skin tone, and the emoji you use most
+  property string soundStyle: "glass"      // the instrument each person's notification sound is played on, or "off"
 
   function saveEmojiState(state) {
     omagram.emojiState = state

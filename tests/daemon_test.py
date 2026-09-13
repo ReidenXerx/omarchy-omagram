@@ -120,7 +120,8 @@ class Harness(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root, True)
         self.d = load_daemon()
         for name, value in (("RUN", self.root), ("SOCKET", self.root / "omagram.sock"),
-                            ("LOCK", self.root / "omagram.lock"), ("CLOSE_TIMEOUT", 2.0), ("NOTIFY_IMAGES", self.root / "notify")):
+                            ("LOCK", self.root / "omagram.lock"), ("CLOSE_TIMEOUT", 2.0), ("NOTIFY_IMAGES", self.root / "notify"),
+                            ("SOUNDS", self.root / "sounds"), ("OMARCHY_NOTIFICATIONS", self.root / "omarchy-notifications.json")):
             patch = mock.patch.object(self.d, name, value)
             patch.start()
             self.addCleanup(patch.stop)
@@ -1827,7 +1828,8 @@ class Settings(Harness):
         hello = self.request(self.conn, 1, "hello")["result"]
         self.assertEqual(hello["settings"], {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1,
                                              "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0},
-                                             "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}})
+                                             "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}},
+                                             "sounds": {"style": "glass", "variants": {}}})
         self.assertEqual(hello["globalStatus"]["global.quickReply"], "off")
         other = self.connect()
         answer = self.request(self.conn, 2, "settings.set", settings={"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}})
@@ -1867,6 +1869,13 @@ class Settings(Harness):
         self.assertEqual(json.loads(self.d.prefs.SETTINGS.read_text())["emoji"], mine, "the shortcuts page leaves it alone")
         for rid, bad in ((55, {"tone": 6, "recents": {}}), (56, {"tone": 1, "recents": {"flag:x": {"c": 1, "t": 1}}}), (57, {"tone": 1})):
             self.assertFalse(self.request(self.conn, rid, "settings.emoji", **bad)["ok"], bad)
+        self.daemon.spawn = lambda argv, fallback=None, timeout=None: None   # no sound out of the speakers in a test
+        self.assertEqual(self.request(self.conn, 60, "settings.sounds", style="wood")["result"]["settings"]["sounds"]["style"], "wood")
+        self.assertFalse(self.request(self.conn, 61, "settings.sounds", style="trumpet")["ok"])
+        self.assertEqual(self.request(self.conn, 62, "sounds.another", userId=500)["result"]["settings"]["sounds"]["variants"], {"500": 1})
+        self.assertTrue(self.request(self.conn, 63, "settings.set", settings={"shortcuts": {}})["ok"])
+        self.assertEqual(json.loads(self.d.prefs.SETTINGS.read_text())["sounds"], {"style": "wood", "variants": {"500": 1}},
+                         "the shortcuts page leaves it alone")
 
     def test_global_shortcuts_are_registered_and_registered_again(self):
         answer = self.request(self.conn, 5, "settings.set",
@@ -1999,6 +2008,25 @@ class Notifications(Harness):
                 self.assertEqual((query["chat_id"], query["notification_settings"]["mute_for"]), (42, 3600))
             else:
                 self.assertEqual((query["message_id"], query["reaction_type"]["emoji"]), (60, "👍"))
+
+    def test_each_person_has_a_sound_but_not_in_do_not_disturb_or_a_burst(self):
+        def played():
+            return [argv for argv, _ in self.spawned if argv and argv[0].endswith("pw-play")]
+        self.td_event(self.group([self.note(7, "hi")]))
+        self.settle()
+        self.wait(lambda: len(played()) == 1)
+        wav = pathlib.Path(played()[0][-1])
+        self.assertEqual((wav.parent, wav.read_bytes()[:4], played()[0][1:3]), (self.root / "sounds", b"RIFF", ["--media-role", "Notification"]))
+        self.assertTrue(wav.name.startswith("glass-"), "Ann's own sound, in the style chosen")
+        self.td_event(self.group([self.note(8, "again")]))
+        self.settle()
+        self.assertEqual(len(played()), 1, "not again for the same person straight away")
+        (self.root / "omarchy-notifications.json").write_text(json.dumps({"dnd": True, "version": 1}))
+        self.daemon.sound_by_person.clear()
+        self.daemon.sound_last = 0.0
+        self.td_event(self.group([self.note(9, "while you do not want to be disturbed")]))
+        self.settle()
+        self.assertEqual(len(played()), 1, "Do Not Disturb keeps it quiet")
 
     def test_the_chat_being_read_stays_quiet(self):
         self.assertTrue(self.request(self.conn, 60, "ui.focus", chatId=42)["ok"])

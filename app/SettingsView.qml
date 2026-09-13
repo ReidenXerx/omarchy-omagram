@@ -40,7 +40,7 @@ FocusScope {
   readonly property var rows: settings.buildRows()
   readonly property var current: settings.rows[settings.cursor] || null
   readonly property var accountKinds: ["profilePhoto", "profileField", "profilePhone", "privacy", "blocked", "blockedSender", "password",
-                                       "passwordOff", "passwordCode", "accountTtl", "autoDelete", "proxy", "proxyAdd", "reactionsSeen", "scope", "previews", "download", "folder", "newFolder",
+                                       "passwordOff", "passwordCode", "accountTtl", "autoDelete", "proxy", "proxyAdd", "reactionsSeen", "sound", "soundHear", "scope", "previews", "download", "folder", "newFolder",
                                        "folderName", "folderFlag", "folderChat", "folderAdd", "folderSave", "folderDelete",
                                        "storage", "sessions", "session", "otherSessions", "logout"]
 
@@ -110,6 +110,8 @@ FocusScope {
              { kind: "scope", id: "groups", label: "Groups" },
              { kind: "scope", id: "channels", label: "Channels" },
              { kind: "previews", label: "Message text in notifications" },
+             { kind: "sound", label: "A sound of their own for each person" },
+             { kind: "soundHear", label: "Hear yours" },
              { kind: "header", title: "Chats", note: "" },
              { kind: "reactionsSeen", label: "Reactions to your messages" },
              { kind: "header", title: "Automatic downloads", note: "Stickers and voice messages always download: they are small" },
@@ -730,6 +732,12 @@ FocusScope {
       settings.app.request("settings.reactions", { seen: !settings.app.reactionsSeen }, function (answer) {
         if (!answer.ok) settings.error = answer.error || "The setting could not be saved"
       })
+    } else if (row.kind === "sound") {
+      settings.app.request("settings.sounds", { style: Model.nextSoundStyle(settings.app.soundStyle) }, function (answer) {
+        if (!answer.ok) settings.error = answer.error || "The setting could not be saved"
+      })
+    } else if (row.kind === "soundHear") {
+      settings.app.request("sounds.play", { userId: settings.app.meId }, function () {})
     } else if (row.kind === "scope") {
       settings.changeScope(row.id, { muted: !(settings.scopes[row.id] && settings.scopes[row.id].muted) })
     } else if (row.kind === "previews") {
@@ -1002,7 +1010,7 @@ FocusScope {
         width: list.width
         height: header ? Style.space(modelData.note ? 58 : 44)
               : (account ? Style.space(modelData.kind === "profilePhoto" ? 66
-                                       : (["session", "storage", "profileField", "profilePhone", "privacy", "blocked", "password", "accountTtl", "autoDelete", "proxy", "reactionsSeen",
+                                       : (["session", "storage", "profileField", "profilePhone", "privacy", "blocked", "password", "accountTtl", "autoDelete", "proxy", "reactionsSeen", "sound",
                                            "scope", "previews", "download", "folder", "folderName", "folderFlag"]
                                             .indexOf(modelData.kind) >= 0 ? 58 : 44))
                          : Style.space(clashes.length || modelData.kind === "global" ? 58 : 42))
@@ -1071,7 +1079,7 @@ FocusScope {
             }
             Text {
               textFormat: Text.PlainText
-              text: ({ profileField: "Enter changes it", privacy: "Enter changes it", accountTtl: "Enter changes it", autoDelete: "Enter changes it", proxy: "Enter uses it or stops", proxyAdd: "Enter", reactionsSeen: "Enter changes it",
+              text: ({ profileField: "Enter changes it", privacy: "Enter changes it", accountTtl: "Enter changes it", autoDelete: "Enter changes it", proxy: "Enter uses it or stops", proxyAdd: "Enter", reactionsSeen: "Enter changes it", sound: "Enter changes it", soundHear: "Enter plays it",
                        scope: "Enter changes it", previews: "Enter changes it", download: "Enter changes it",
                        folder: "Enter opens it", newFolder: "Enter", folderName: "Enter changes it", folderFlag: "Enter changes it",
                        folderChat: "Enter takes it off", folderAdd: "Enter", folderSave: "Enter", folderDelete: "Enter",
@@ -1105,6 +1113,7 @@ FocusScope {
                 : row.modelData.kind === "autoDelete" ? (settings.defaultAutoDelete < 0 ? "Loading…" : Model.autoDeleteText(settings.defaultAutoDelete))
                 : row.modelData.kind === "proxy" ? Model.proxyText(row.modelData.proxy, settings.proxyPings[row.modelData.proxy.id], settings.app.connection)
                 : row.modelData.kind === "reactionsSeen" ? (settings.app.reactionsSeen ? "Seen when you open the chat" : "Kept until you scroll to them")
+                : row.modelData.kind === "sound" ? Model.soundStyleText(settings.app.soundStyle)
                 : row.modelData.kind === "scope" ? Model.scopeText(settings.scopes[row.modelData.id])
                 : row.modelData.kind === "previews" ? Model.previewsText(settings.scopes)
                 : row.modelData.kind === "download" ? Model.downloadText(settings.app.autoDownloadRules, row.modelData.id)

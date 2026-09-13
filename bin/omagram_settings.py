@@ -31,6 +31,9 @@ DOWNLOADS_DEFAULT = {"photos": True, "gifs": True, "videos": 0, "files": 0}
 EMOJI_KINDS = ("emoji", "symbols", "kaomoji")   # the emoji panel's recents are "<kind>:<what it types>"
 EMOJI_RECENTS_MAX = 80
 EMOJI_TEXT_MAX = 80
+SOUND_STYLES = ("glass", "wood", "pluck", "dot", "air")   # the instrument each person's sound is played on; or "off"
+SOUND_VARIANTS_MAX = 500
+PERSON_ID = re.compile(r"-?[0-9]{1,19}")
 ACTION_ID = re.compile(r"[a-z][A-Za-z]{0,20}\.[a-z][A-Za-z]{0,40}")
 SEQUENCE = re.compile(r"[\x21-\x7e]{1,40}")
 
@@ -60,7 +63,7 @@ BINDS_MAX = 4 * 1024 * 1024
 
 def empty():
     return {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1, "autoDownload": dict(DOWNLOADS_DEFAULT),
-            "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}}
+            "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}, "sounds": {"style": "glass", "variants": {}}}
 
 
 # ---------------------------------------------------------------- key combinations for Hyprland
@@ -195,6 +198,24 @@ def check(value, strict=True):
             bad(f"{str(key)[:40]!r} is not a recent emoji")
             continue
         out["emoji"]["recents"][key] = {"c": float(entry["c"]), "t": int(entry["t"])}
+    sounds = value.get("sounds", {})   # a sound for each person: the instrument, and whose tune was changed how often
+    if not isinstance(sounds, dict):
+        bad("sounds must be an object")
+        sounds = {}
+    style = sounds.get("style", "glass")
+    if style not in SOUND_STYLES + ("off",):
+        bad("sounds.style is " + ", ".join(SOUND_STYLES) + " or off")
+    else:
+        out["sounds"]["style"] = style
+    variants = sounds.get("variants", {})
+    if not isinstance(variants, dict) or len(variants) > SOUND_VARIANTS_MAX:
+        bad(f"sounds.variants is an object of at most {SOUND_VARIANTS_MAX} people")
+        variants = {}
+    for key, n in variants.items():
+        if not isinstance(key, str) or not PERSON_ID.fullmatch(key) or isinstance(n, bool) or not isinstance(n, int) or not 0 < n < 100:
+            bad(f"{str(key)[:24]!r} is not a person with another sound")
+            continue
+        out["sounds"]["variants"][key] = n
     return out
 
 

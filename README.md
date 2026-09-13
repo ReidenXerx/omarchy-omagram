@@ -77,6 +77,9 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   them anywhere, with the chat's photo beside them, or a thumbnail of a photo, sticker or video
   just sent. **Open** opens the chat; **Reply** opens the quick-reply overlay on it; **Mark as
   read**, **Mute for an hour** and **👍** (a reaction to the message) work without opening anything.
+  Each person has a quiet sound of their own, a few notes picked from who they are, so you can tell
+  who wrote without looking; Settings picks the instrument (or turns it off) and a person's info can
+  play theirs or give them another. Not while Do Not Disturb is on.
   Telegram's own mute settings and Omarchy's Do Not Disturb apply.
 - **In the bar** — a message icon with a dot while unmuted chats have unread messages. Left
   click opens a panel of recent chats where you can reply inline; right click opens the window.
