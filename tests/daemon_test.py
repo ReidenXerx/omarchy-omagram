@@ -120,7 +120,7 @@ class Harness(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root, True)
         self.d = load_daemon()
         for name, value in (("RUN", self.root), ("SOCKET", self.root / "omagram.sock"),
-                            ("LOCK", self.root / "omagram.lock"), ("CLOSE_TIMEOUT", 2.0)):
+                            ("LOCK", self.root / "omagram.lock"), ("CLOSE_TIMEOUT", 2.0), ("NOTIFY_IMAGES", self.root / "notify")):
             patch = mock.patch.object(self.d, name, value)
             patch.start()
             self.addCleanup(patch.stop)
@@ -1892,9 +1892,11 @@ class FakeNotifierTransport:
     def __init__(self, on_action, on_closed):
         self.on_action, self.on_closed = on_action, on_closed
         self.shown, self.closed, self.clicks, self.next_id = [], [], [], 0
+        self.hints = []
 
     def notify(self, replaces, title, body, actions, hints):
         self.shown.append((title, body))
+        self.hints.append(dict(hints))
         self.next_id += 1
         return replaces or self.next_id
 
@@ -1968,6 +1970,35 @@ class Notifications(Harness):
         self.td_event(self.group(total=0, removed=[1, 3]))
         self.settle()
         self.assertEqual(self.bus.closed, [1])
+
+    def test_a_picture_beside_it_and_buttons_that_act_on_the_chat(self):
+        import base64
+        tiny = base64.b64encode(bytes((0xFF, 0xD8)) + b"a tiny jpeg").decode()
+        photo = self.note(4, "")
+        photo["type"]["message"]["content"] = {"@type": "messagePhoto", "caption": {"text": "look", "entities": []}, "photo": {
+            "@type": "photo", "minithumbnail": {"@type": "minithumbnail", "width": 40, "height": 30, "data": tiny},
+            "sizes": [{"@type": "photoSize", "type": "x", "width": 800, "height": 600, "photo": {
+                "@type": "file", "id": 55, "size": 1000, "local": {"@type": "localFile", "path": "", "is_downloading_completed": False}}}]}}
+        self.td_event(self.group([photo]))
+        self.settle()
+        picture = pathlib.Path(self.bus.hints[-1]["image-path"][len("file://"):])
+        self.assertEqual((picture.parent, picture.read_bytes()[:2]), (self.root / "notify", bytes((0xFF, 0xD8))),
+                         "Telegram's tiny preview of the photo, written out: no download waited for")
+        self.td_event(self.group([self.note(5, "no picture for this one")]))
+        self.settle()
+        self.assertNotIn("image-path", self.bus.hints[-1], "a text message in a chat without a photo")
+        for action, kind in (("read", "viewMessages"), ("mute", "setChatNotificationSettings"), ("react", "addMessageReaction")):
+            self.td_event(self.group([self.note(6, "again")]))
+            self.settle()
+            before = self.sent_count(kind)
+            self.click(action)
+            query = self.next_query(kind, before)
+            if kind == "viewMessages":
+                self.assertEqual((query["message_ids"], query["force_read"], query["source"]["@type"]), ([60], True, "messageSourceNotification"))
+            elif kind == "setChatNotificationSettings":
+                self.assertEqual((query["chat_id"], query["notification_settings"]["mute_for"]), (42, 3600))
+            else:
+                self.assertEqual((query["message_id"], query["reaction_type"]["emoji"]), (60, "👍"))
 
     def test_the_chat_being_read_stays_quiet(self):
         self.assertTrue(self.request(self.conn, 60, "ui.focus", chatId=42)["ok"])

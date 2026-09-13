@@ -6,11 +6,16 @@ shell's own notification service receives them (and applies Do Not Disturb). Tha
 renders body markup and hyperlinks, so everything taken from Telegram is escaped before it is
 sent: a message cannot add a link or an image to its own notification.
 
+The picture beside the text is one Omagram chooses and hands over as a file: the chat's photo, or a
+thumbnail of the photo, sticker or video just sent. The buttons open the chat, reply to it, mark it
+read, mute it for an hour, or react to the message with a thumbs up.
+
 One notification per chat: it is replaced as messages arrive and closed when TDLib reports the
 messages read (on any device). Nothing is shown for the chat you are looking at in Omagram.
 Without PyGObject the notifier is simply unavailable and the service runs without it.
 """
 import html
+import pathlib
 import re
 
 BUS = "org.freedesktop.Notifications"
@@ -19,7 +24,9 @@ CALL_TIMEOUT_MS = 2000
 TITLE_MAX = 120
 BODY_MAX = 300
 CHATS_MAX = 512
-ACTIONS = ["default", "Open", "reply", "Reply"]
+QUICK_REACTION = "👍"
+ACTIONS = ["default", "Open", "reply", "Reply", "read", "Mark as read", "mute", "Mute for an hour", "react", QUICK_REACTION]
+ACTION_IDS = tuple(ACTIONS[0::2])
 HINTS = {"category": "im.received", "desktop-entry": "omagram"}
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f  ]")
@@ -85,13 +92,17 @@ class Notifier:
     def available(self):
         return self.transport is not None
 
-    def show(self, chat_id, title, body):
+    def show(self, chat_id, title, body, image=""):
+        """`image`: the path of a picture for beside the text, or "" for none."""
         if self.transport is None or not chat_id or chat_id == self.focused_chat:
             return False
         replaces = self.by_chat.get(chat_id, 0)
+        hints = dict(HINTS)
+        if image:
+            hints["image-path"] = pathlib.Path(image).as_uri()
         try:
             nid = self.transport.notify(replaces, clean(title, TITLE_MAX) or "Omagram", body_markup(body),
-                                        ACTIONS, HINTS)
+                                        ACTIONS, hints)
         except Exception:
             return False
         if not isinstance(nid, int) or nid <= 0:
@@ -130,7 +141,7 @@ class Notifier:
 
     def _action(self, nid, action):
         chat_id = self.by_id.get(nid)
-        if chat_id and action in ("default", "reply"):
+        if chat_id and action in ACTION_IDS:
             self.on_action(chat_id, action)
 
     def _closed(self, nid, *_reason):

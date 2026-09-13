@@ -44,7 +44,8 @@ class Notifications(unittest.TestCase):
         self.assertTrue(self.n.show(7, "Mom", "call me"))
         self.assertEqual([s[0] for s in self.bus.shown], [0, 101, 0])
         self.assertEqual(self.n.by_chat, {42: 101, 7: 102})
-        self.assertEqual(self.bus.shown[0][3], ["default", "Open", "reply", "Reply"])
+        self.assertEqual(self.bus.shown[0][3][0::2], ["default", "reply", "read", "mute", "react"])
+        self.assertEqual(self.bus.shown[0][3][1::2], ["Open", "Reply", "Mark as read", "Mute for an hour", "👍"])
         self.assertEqual(self.bus.shown[0][4]["desktop-entry"], "omagram")
 
     def test_telegram_text_cannot_add_markup_links_or_images(self):
@@ -85,6 +86,15 @@ class Notifications(unittest.TestCase):
         self.n.show(5, "A", "b")
         self.n.withdraw(5)
         self.assertEqual(self.bus.closed, [102])
+
+    def test_a_picture_goes_as_a_file_uri_and_every_button_reaches_the_service(self):
+        self.n.show(42, "Friends", "hi", "/home/me/.cache/omagram/notify/a b.jpg")
+        self.assertEqual(self.bus.shown[0][4]["image-path"], "file:///home/me/.cache/omagram/notify/a%20b.jpg")
+        self.n.show(7, "Mom", "call me")
+        self.assertNotIn("image-path", self.bus.shown[1][4])
+        for action in ("read", "mute", "react", "default", "reply"):
+            self.bus.on_action(101, action)
+        self.assertEqual(self.actions, [(42, "read"), (42, "mute"), (42, "react"), (42, "default"), (42, "reply")])
 
     def test_a_failing_bus_or_no_bus_never_breaks_the_service(self):
         self.bus.fail = True

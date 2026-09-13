@@ -74,7 +74,9 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   apps search them) and your installed sets.
 - **Search** — chats in every list, and messages in all chats or in the open one.
 - **Notifications** — one per chat, replaced as messages arrive and withdrawn when you read
-  them anywhere. **Open** opens the chat; **Reply** opens the quick-reply overlay on it.
+  them anywhere, with the chat's photo beside them, or a thumbnail of a photo, sticker or video
+  just sent. **Open** opens the chat; **Reply** opens the quick-reply overlay on it; **Mark as
+  read**, **Mute for an hour** and **👍** (a reaction to the message) work without opening anything.
   Telegram's own mute settings and Omarchy's Do Not Disturb apply.
 - **In the bar** — a message icon with a dot while unmuted chats have unread messages. Left
   click opens a panel of recent chats where you can reply inline; right click opens the window.

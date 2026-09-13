@@ -61,6 +61,10 @@ IDS_MAX = 100
 CLOSE_TIMEOUT = 5.0
 
 LOTTIE = pathlib.Path(safe.home_dir()) / ".cache/omagram/lottie"
+NOTIFY_IMAGES = pathlib.Path(safe.home_dir()) / ".cache/omagram/notify"   # pictures handed to notifications
+NOTIFY_IMAGES_MAX = 200
+PICTURE_FORMATS = ("jpeg", "png", "webp")   # thumbnails the notification server can draw
+MUTE_HOUR = 3600
 # Telegram caps animated stickers at 64 KB compressed; a megabyte is far past any real one.
 TGS_MAX = 1024 * 1024
 LOTTIE_MAX = 16 * 1024 * 1024
@@ -487,6 +491,7 @@ class Daemon:
         self.pending_open = None   # (monotonic time, {"chatId", "reply"}) for the next window
         self.focus_client = None   # the client whose focused chat keeps notifications quiet
         self.focused_chat = 0      # the chat it shows
+        self.notified = {}         # chat id -> the message its notification shows, for the notification's buttons
         self.recording = None      # the voice message being recorded: proc, path, chatId, started
         self.tasks = queue.Queue() # finished background work, run on the loop: (done, result, error)
         self.jobs = 0
@@ -786,14 +791,90 @@ class Daemon:
             body = model.preview_text(message["content"])
             if chat and chat["kind"] != "private" and message["senderName"]:
                 body = f"{message['senderName']}: {body}"
-        self.notifier.show(chat_id, title, body)
+        if message is not None:
+            if len(self.notified) >= 512 and chat_id not in self.notified:
+                self.notified.clear()
+            self.notified[chat_id] = message["id"]
+        shown = message if kind.get("show_preview") is True else None
+        self.notifier.show(chat_id, title, body, self.notification_picture(chat, shown))
 
     def on_notification_action(self, chat_id, action):
         if action == "reply":
             self.summon_quick_reply(chat_id)
+        elif action in ("read", "mute", "react"):
+            self.notification_button(chat_id, action)
         else:
             self.open_chat(chat_id, False)
             self.launch_window()
+
+    def notification_button(self, chat_id, action):
+        """Mark as read (up to the message shown, as if it had been seen), Mute for an hour, or a thumbs up on the
+        message shown. The notification goes away whichever it is."""
+        message_id = self.notified.get(chat_id, 0)
+        chat = self.state.chats.get(chat_id)
+        if action == "read" and message_id:
+            self.td_send({"@type": "viewMessages", "chat_id": chat_id, "message_ids": [message_id],
+                          "source": {"@type": "messageSourceNotification"}, "force_read": True})
+        elif action == "mute" and chat is not None:
+            settings = dict(chat["notification"], use_default_mute_for=False, mute_for=MUTE_HOUR)
+            self.td_send({"@type": "setChatNotificationSettings", "chat_id": chat_id, "notification_settings": settings})
+        elif action == "react" and message_id:
+            self.td_send({"@type": "addMessageReaction", "chat_id": chat_id, "message_id": message_id,
+                          "reaction_type": {"@type": "reactionTypeEmoji", "emoji": notify.QUICK_REACTION},
+                          "is_big": False, "update_recent_reactions": True})
+        self.notifier.withdraw(chat_id)
+
+    def notification_picture(self, chat, message):
+        """What shows beside a notification: a thumbnail of the photo, sticker or video just sent (when previews
+        show), or else the chat's photo. A file TDLib already has goes as it is; otherwise Telegram's tiny preview
+        of it is written out, so a notification never waits for a download."""
+        content = message["content"] if message else {}
+        media = content.get("media") if isinstance(content.get("media"), dict) else {}
+        thumb = media.get("thumb") if isinstance(media.get("thumb"), dict) else {}
+        candidates = []
+        if content.get("kind") in ("sticker", "photo", "gif", "video", "videoNote"):
+            if thumb.get("format") in PICTURE_FORMATS:
+                candidates.append(thumb.get("file"))
+            if content.get("kind") == "photo" or (content.get("kind") == "sticker" and media.get("format") == "webp"):
+                candidates.append(media.get("file"))
+            candidates.append(media.get("mini"))
+        photo = chat.get("photo") if chat else None
+        if isinstance(photo, dict):
+            candidates += [photo.get("file"), photo.get("mini")]
+        for candidate in candidates:
+            path = self.picture_path(candidate)
+            if path:
+                return path
+        return ""
+
+    def picture_path(self, value):
+        if not isinstance(value, dict):
+            return ""
+        if "data" in value:
+            return self.minithumbnail_file(value["data"])
+        path = value.get("path") or ""
+        return path if path and os.path.isfile(path) else ""
+
+    def minithumbnail_file(self, data):
+        """A minithumbnail (a tiny JPEG, as base64) as a file the notification server can read: named by what is in
+        it, in a small private cache that starts again once it is full."""
+        try:
+            raw = base64.b64decode(data, validate=True)
+        except (TypeError, ValueError):
+            return ""
+        if raw[:2] != bytes((0xFF, 0xD8)):
+            return ""
+        path = NOTIFY_IMAGES / (hashlib.sha256(raw).hexdigest()[:32] + ".jpg")
+        try:
+            if not os.path.isfile(path):
+                entries = safe.list_dir(NOTIFY_IMAGES, NOTIFY_IMAGES_MAX + 50)
+                if len(entries) >= NOTIFY_IMAGES_MAX:
+                    for name, _stat in entries:
+                        safe.remove_file(NOTIFY_IMAGES / name)
+                safe.write_file(path, raw, 0o600)
+        except (safe.UnsafeError, OSError):
+            return ""
+        return str(path)
 
     def summon_quick_reply(self, chat_id):
         """Reply opens the quick-reply overlay on that chat. The overlay lives in Omarchy's shell;
