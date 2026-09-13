@@ -1344,6 +1344,25 @@ class ChatsAndAccount(Harness):
         self.assertEqual((q["chat_folder_ids"], q["main_chat_list_position"]), ([3, 2], 0))
         self.assertFalse(self.request(self.conn, 210, "folders.reorder", ids=[2])["ok"])
 
+    def test_polls_and_quizzes(self):
+        q, _ = self.call(230, "message.sendPoll", "sendMessage", {"@type": "message", "id": 5, "chat_id": -10077},
+                         chatId=-10077, question=" Lunch? ", options=["Pizza", " Soup "], multiple=True, anonymous=False)
+        poll = q["input_message_content"]
+        self.assertEqual((poll["question"]["text"], [o["text"]["text"] for o in poll["options"]], poll["is_anonymous"],
+                          poll["allows_multiple_answers"], poll["allows_revoting"], poll["type"]),
+                         ("Lunch?", ["Pizza", "Soup"], False, True, True, {"@type": "inputPollTypeRegular", "allow_adding_options": False}))
+        q, _ = self.call(231, "message.sendPoll", "sendMessage", {"@type": "message", "id": 6, "chat_id": -10077},
+                         chatId=-10077, question="2 + 2?", options=["3", "4", "5"], quiz=True, correct=1, explanation="Count them")
+        quiz = q["input_message_content"]
+        self.assertEqual((quiz["is_anonymous"], quiz["allows_revoting"], quiz["type"]["correct_option_ids"], quiz["type"]["explanation"]["text"]),
+                         (True, False, [1], "Count them"))
+        for rid, args in ((232, {"question": "", "options": ["a", "b"]}), (233, {"question": "Q", "options": ["only one"]}),
+                          (234, {"question": "Q", "options": ["a"] * 13}), (235, {"question": "Q", "options": ["Same", "same"]}),
+                          (236, {"question": "Q", "options": ["a", "b"], "quiz": True, "correct": 2}),
+                          (237, {"question": "Q", "options": ["a", "b"], "quiz": True, "multiple": True, "correct": 0}),
+                          (238, {"question": "Q", "options": ["a", "x" * 101]}), (239, {"question": "Q", "options": ["a", "b"], "anonymous": "no"})):
+            self.assertFalse(self.request(self.conn, rid, "message.sendPoll", chatId=-10077, **args)["ok"], args)
+
     def test_dice_contact_cards_and_locations(self):
         q, _ = self.call(220, "message.sendDice", "sendMessage", {"@type": "message", "id": 1, "chat_id": 500}, chatId=500, emoji="🎯")
         self.assertEqual(q["input_message_content"], {"@type": "inputMessageDice", "emoji": "🎯", "clear_draft": False})

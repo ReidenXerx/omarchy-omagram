@@ -1328,10 +1328,40 @@ function profileChat(profile) {
 
 var DICE = [["🎲", "Dice"], ["🎯", "Darts"], ["🏀", "Basketball"], ["⚽", "Football"], ["🎳", "Bowling"], ["🎰", "Slot machine"]]
 
-// What the message box's + button offers.
-function moreMenu(chat) {
+// What the message box's + button offers. Polls only where Telegram takes them: not in secret chats, and
+// in a private chat only with a bot or in Saved Messages.
+function moreMenu(chat, meId) {
   if (!isObject(chat)) return []
-  return [{ id: "dice", label: "Dice, darts or a slot machine" }, { id: "contact", label: "A contact card" }, { id: "location", label: "A location" }]
+  var out = []
+  var botOrSaved = chat.kind === "private" && (chat.bot === true || (!!meId && chat.userId === meId))
+  if (chat.kind !== "secret" && (chat.kind !== "private" || botOrSaved)) out.push({ id: "poll", label: "A poll or a quiz" })
+  return out.concat([{ id: "dice", label: "Dice, darts or a slot machine" }, { id: "contact", label: "A contact card" },
+                     { id: "location", label: "A location" }])
+}
+
+// What stops a poll from going out, or "". Its options are the answers typed, empty rows left out, and
+// `correct` counts among them.
+function pollProblem(poll) {
+  if (!isObject(poll)) return "No poll"
+  var question = String(poll.question || "").trim()
+  if (question === "") return "A poll needs a question"
+  if (question.length > 255) return "The question is at most 255 characters"
+  var answers = toList(poll.options).map(function (o) { return String(o === undefined || o === null ? "" : o).trim() })
+                                    .filter(function (o) { return o !== "" })
+  if (answers.length < 2) return "A poll needs at least two answers"
+  if (answers.length > 12) return "At most 12 answers"
+  if (answers.some(function (o) { return o.length > 100 })) return "An answer is at most 100 characters"
+  var seen = {}
+  for (var i = 0; i < answers.length; i++) {
+    var key = answers[i].toLowerCase()
+    if (seen[key]) return "Two answers are the same"
+    seen[key] = true
+  }
+  if (poll.quiz) {
+    if (!(poll.correct >= 0 && poll.correct < answers.length)) return "Mark the right answer"
+    if (String(poll.explanation || "").length > 200) return "The explanation is at most 200 characters"
+  }
+  return ""
 }
 
 function diceMenu() {

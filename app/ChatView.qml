@@ -59,7 +59,8 @@ FocusScope {
   property var menuReactions: []
   property bool menuToComposer: false
   readonly property bool modalOpen: messageMenu.visible || muteMenu.visible || sendMenu.visible || rescheduleMenu.visible
-                                    || moreMenu.visible || diceMenu.visible || peoplePicker.visible
+                                    || moreMenu.visible || diceMenu.visible || peoplePicker.visible || pollComposer.visible
+  readonly property var polls: pollComposer   // the poll being made, for checks from outside
   property bool blocked: false        // a dialog over the whole window, such as choosing where to forward
   property bool confirmDeleteRevoke: true
   property var pinnedMessage: null
@@ -225,7 +226,9 @@ FocusScope {
 
   function morePicked(id) {
     if (!root.chat) return
-    if (id === "dice") {
+    if (id === "poll") {
+      pollComposer.open(Model.chatTitle(root.chat, app.meId), root.chat.kind === "channel")
+    } else if (id === "dice") {
       var at = composer.mapToItem(root, composer.cursorRectangle.x, composer.cursorRectangle.y)
       diceMenu.open(at.x, at.y - Style.space(4))
     } else if (id === "contact") {
@@ -250,6 +253,13 @@ FocusScope {
 
   function sendDice(emoji) {
     root.sendExtra("message.sendDice", { emoji: emoji }, "the dice")
+  }
+
+  function sendPoll(poll) {
+    root.focusComposer()
+    root.sendExtra("message.sendPoll", { question: poll.question, options: poll.options, anonymous: poll.anonymous,
+                                         multiple: poll.multiple, quiz: poll.quiz, correct: poll.correct,
+                                         explanation: poll.explanation }, "the poll")
   }
 
   function shareContact(chatId) {
@@ -2353,7 +2363,7 @@ FocusScope {
               hint: "Send later or without sound   " + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.later")[0] || "") },
             { glyph: String.fromCodePoint(0xF01F2), action: "emoji", hint: "Emoji   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.emoji")[0] || "") },
             { glyph: String.fromCodePoint(0xF03E2), action: "attach", hint: "Attach photos or files   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.attach")[0] || "") },
-            { glyph: String.fromCodePoint(0xF0419), action: "more", hint: "Dice, a contact card or a location   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.more")[0] || "") },
+            { glyph: String.fromCodePoint(0xF0419), action: "more", hint: "A poll, dice, a contact card or a location   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.more")[0] || "") },
             { glyph: String.fromCodePoint(0xF0785), action: "stickers", hint: "Stickers   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.stickers")[0] || "") },
             { glyph: String.fromCodePoint(0xF0567), action: "video", hint: "Video message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.videoNote")[0] || "") },
             { glyph: String.fromCodePoint(0xF036C), action: "voice", hint: "Voice message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.voice")[0] || "") }
@@ -2561,13 +2571,21 @@ FocusScope {
     }
   }
 
-  // The + button: dice, a person's contact card, a location.
+  // The + button: a poll, dice, a person's contact card, a location.
+  PollComposer {
+    id: pollComposer
+    anchors.fill: parent
+    app: root.app
+    onSendRequested: function (poll) { root.sendPoll(poll) }
+    onDismissed: root.focusComposer()
+  }
+
   ContextMenu {
     id: moreMenu
     anchors.fill: parent
     app: root.app
     upward: true
-    items: Model.moreMenu(root.chat)
+    items: Model.moreMenu(root.chat, app.meId)
     onDismissed: root.focusComposer()
     onPicked: function (id) { root.morePicked(id) }
   }

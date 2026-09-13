@@ -31,8 +31,8 @@ overlay on a key, and desktop notifications you can answer without leaving what 
   message (or press `m`) for everything Telegram allows on it, translation included. Send without
   sound, at a time you pick or once the other person is online (`Ctrl+Alt+Enter`). Search finds public
   groups and channels by name too; one you open is joined from the bar that takes the message box's
-  place. The + button (`Ctrl+Shift+A`) sends dice, a person's contact card, or a location: coordinates,
-  or a Google Maps or OpenStreetMap link pasted in.
+  place. The + button (`Ctrl+Shift+A`) sends a poll or a quiz, dice, a person's contact card, or a
+  location: coordinates, or a Google Maps or OpenStreetMap link pasted in.
 - **Rich messages** — formatting (typed the way Telegram's own apps read it: `**bold**`,
   `__italic__`, `~~strikethrough~~`, `||spoiler||`, `` `code` ``, `[text](address)`, or with the keys
   below), links, mentions and hashtags, spoilers, link previews, polls
@@ -189,7 +189,7 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `↑` in an empty composer | edit your last message |
 | `Esc` | cancel a reply or edit |
 | `Ctrl+O` / `Ctrl+Shift+O` | attach photos / send files uncompressed |
-| `Ctrl+Shift+A` | dice, a contact card or a location |
+| `Ctrl+Shift+A` | a poll, dice, a contact card or a location |
 | `Ctrl+V` with an image copied | send the image (it asks first) |
 | `Ctrl+S` | stickers (arrows or `hjkl`, `Tab` switches sets, `Enter` sends) |
 | `Ctrl+R` | record a voice message (`Enter` sends, `Esc` cancels) |

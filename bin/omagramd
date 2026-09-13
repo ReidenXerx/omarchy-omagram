@@ -242,6 +242,10 @@ FOLDER_ICONS = {"All", "Unread", "Unmuted", "Bots", "Channels", "Groups", "Priva
                 "Flower", "Game", "Home", "Love", "Mask", "Party", "Sport", "Study", "Trade", "Travel", "Work", "Airplane", "Book",
                 "Light", "Like", "Money", "Note", "Palette"}
 DICE_EMOJI = ("🎲", "🎯", "🏀", "⚽", "🎳", "🎰")
+POLL_QUESTION_MAX = 255
+POLL_ANSWER_MAX = 100
+POLL_ANSWERS_MAX = 12   # TDLib's default poll_answer_count_max
+POLL_EXPLANATION_MAX = 200
 OMARCHY_SHELL = "/usr/bin/omarchy-shell"
 OPEN_TTL = 30.0   # seconds a notification's "open this chat" waits for a window to start
 MEDIA_FILTERS = {"photos": "searchMessagesFilterPhotoAndVideo", "files": "searchMessagesFilterDocument",
@@ -2522,6 +2526,40 @@ class Daemon:
             raise BadRequest("dice are one of " + " ".join(DICE_EMOJI))
         self.send_content(client, rid, arg_int(args, "chatId"), {"@type": "inputMessageDice", "emoji": emoji, "clear_draft": False}, args)
 
+    def cmd_message_send_poll(self, client, rid, args):
+        """A poll: a question and 2-12 answers, anonymous or not, one answer or several. A quiz has one
+        right answer (its index in `options`) and may explain it."""
+        question = arg_str(args, "question", 2 * POLL_QUESTION_MAX).strip()
+        if not 1 <= len(question) <= POLL_QUESTION_MAX:
+            raise BadRequest(f"a poll's question is 1-{POLL_QUESTION_MAX} characters")
+        options = args.get("options")
+        if (not isinstance(options, list) or not 2 <= len(options) <= POLL_ANSWERS_MAX
+                or any(not isinstance(o, str) or not 1 <= len(o.strip()) <= POLL_ANSWER_MAX for o in options)):
+            raise BadRequest(f"a poll has 2-{POLL_ANSWERS_MAX} answers of 1-{POLL_ANSWER_MAX} characters")
+        answers = [o.strip() for o in options]
+        if len({a.lower() for a in answers}) != len(answers):
+            raise BadRequest("two answers are the same")
+        flags = {}
+        for key, default in (("anonymous", True), ("multiple", False), ("quiz", False)):
+            flags[key] = args.get(key, default)
+            if not isinstance(flags[key], bool):
+                raise BadRequest(f"{key} is true or false")
+        if flags["quiz"]:
+            if flags["multiple"]:
+                raise BadRequest("a quiz has one right answer")
+            explanation = arg_str(args, "explanation", POLL_EXPLANATION_MAX, 0).strip() if args.get("explanation") is not None else ""
+            kind = {"@type": "inputPollTypeQuiz", "correct_option_ids": [arg_int(args, "correct", 0, len(answers) - 1)],
+                    "explanation": {"@type": "formattedText", "text": explanation, "entities": []}, "explanation_media": None}
+        else:
+            kind = {"@type": "inputPollTypeRegular", "allow_adding_options": False}
+        content = {"@type": "inputMessagePoll", "question": {"@type": "formattedText", "text": question, "entities": []},
+                   "options": [{"@type": "inputPollOption", "text": {"@type": "formattedText", "text": a, "entities": []}, "media": None}
+                               for a in answers],
+                   "description": None, "media": None, "is_anonymous": flags["anonymous"], "allows_multiple_answers": flags["multiple"],
+                   "allows_revoting": not flags["quiz"], "members_only": False, "country_codes": [], "shuffle_options": False,
+                   "hide_results_until_closes": False, "type": kind, "open_period": 0, "close_date": 0, "is_closed": False}
+        self.send_content(client, rid, arg_int(args, "chatId"), content, args)
+
     def cmd_message_send_contact(self, client, rid, args):
         """A person's contact card: their name, and their number when Telegram shows it to you."""
         user_id = arg_int(args, "userId", 1)
@@ -2743,6 +2781,7 @@ COMMANDS = {
     "chat.commands": ("cmd_chat_commands", True),
     "message.sendFiles": ("cmd_message_send_files", True),
     "message.sendDice": ("cmd_message_send_dice", True),
+    "message.sendPoll": ("cmd_message_send_poll", True),
     "message.sendContact": ("cmd_message_send_contact", True),
     "message.sendLocation": ("cmd_message_send_location", True),
     "chat.join": ("cmd_chat_join", True),
