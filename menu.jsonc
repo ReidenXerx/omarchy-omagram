@@ -11,7 +11,7 @@
   },
   "trigger.omagram.reply": {
     "icon": "󰑚",
-    "label": "Quick reply",
+    "label": "Quick view",
     "aliases": ["reply", "find chat", "switch chat"],
     "action": "/usr/bin/omarchy-shell shell toggle reidenxerx.omagram '{}'"
   },

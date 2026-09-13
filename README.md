@@ -2,20 +2,41 @@
 
 # Omagram
 
-**An unofficial Telegram client for [Omarchy](https://omarchy.org).** Omagram is not made,
-endorsed or supported by Telegram. It is built on TDLib, Telegram's own client library, and
-you sign in with an API id of your own.
+**An unofficial Telegram client that lives in your [Omarchy](https://omarchy.org) desktop, not in
+another window.** Reply from the bar with a voice note, a round video or a sticker; know who wrote
+from the sound alone; act on a message from its notification. Keyboard-first, in your theme.
 
-A keyboard-driven window in your Omarchy theme, a bar badge, a quick view in its panel or on a
-key, and desktop notifications you can answer without leaving what you are doing.
+![Omagram: the quick view under the bar, a notification, and a sound of their own for each person](preview.png)
 
 ![service](https://img.shields.io/badge/omarchy-service-blue) ![bar widget](https://img.shields.io/badge/omarchy-bar--widget-blue) ![overlay](https://img.shields.io/badge/omarchy-overlay-blue)
 
-> **Before you use it:** Telegram places accounts that sign in from unofficial clients
-> "under observation" and may limit accounts that misuse the API. Omagram uses the API as an
-> ordinary client does, but the risk is yours to take.
+> **Unofficial, and a risk to know about.** Omagram is not made, endorsed or supported by Telegram.
+> It is built on TDLib, Telegram's own client library, and you sign in with an API id of your own.
+> Telegram places accounts that sign in from unofficial clients "under observation" and may limit
+> accounts that misuse the API. Omagram uses the API as an ordinary client does, but the risk is
+> yours to take.
 
-## What it does
+## What makes it different
+
+- **Answer from the bar.** The quick view opens under Omagram's mark, or over everything on a key.
+  Find a chat by typing, then reply in words, with one of your recent stickers, or with a voice or
+  round video message recorded on the spot. Voice and round video messages play right there, photos
+  and videos open over the whole screen, and older messages come as you scroll up. Close it in the
+  middle of a conversation and for the next hour it opens back on that chat, with anything unsent.
+- **Know who wrote without looking.** Every person has a notification sound of their own: a couple
+  of soft drops generated from who they are. The same person always sounds the same, and a busy day
+  never rings in your ears. Do Not Disturb silences them.
+- **Notifications that do the work.** One per chat, with the photo, sticker or video that came in
+  beside the text, and buttons to mark it read, mute the chat for an hour or react with 👍 without
+  opening anything. Reply opens the quick view on that chat.
+- **Built for Omarchy.** Your theme's colours with text kept readable, the keyboard first everywhere,
+  every shortcut yours to change, global keys registered with Hyprland without touching your config,
+  and silent sending per chat that your other Telegram apps follow.
+- **Emoji by name, in three languages.** The emoji panel finds emoji, symbols and kaomoji by their
+  English, Ukrainian or Russian names and keeps the ones you use and your skin tone. Reactions to your
+  messages count as seen when you open the chat, instead of one by one.
+
+## Everything else
 
 - **Chats** — your chat list with folders as tabs (make, change, reorder and delete folders in
   Settings: the kinds of chats a folder takes, what it leaves out, chats always or never in it), pinned, muted and archived chats, unread
@@ -116,7 +137,7 @@ sudo pacman -S --needed git cmake gperf clang openssl zlib
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/ReidenXerx/omagram.git --enable
+omarchy plugin add https://github.com/ReidenXerx/omarchy-omagram.git --enable
 ~/.config/omarchy/plugins/reidenxerx.omagram/bin/omagram-build-tdlib
 ```
 
