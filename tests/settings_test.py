@@ -91,7 +91,7 @@ class Checking(unittest.TestCase):
                                              "globalShortcuts": {"global.quickReply": "SUPER + ALT + M"}, "playbackRate": 1,
                                              "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0},
                                              "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}},
-                                             "sounds": {"style": "pop", "variants": {}}})
+                                             "sounds": {"style": "drop", "variants": {}}})
         self.assertEqual(prefs.check(dict(good, sounds={"style": "off", "variants": {"500": 3}}))["sounds"], {"style": "off", "variants": {"500": 3}})
         mine = {"tone": 2, "recents": {"emoji:👍": {"c": 1.5, "t": 1789000000000}, "kaomoji:(╯°□°）╯︵ ┻━┻": {"c": 1, "t": 1789000000001}}}
         self.assertEqual(prefs.check(dict(good, emoji=mine))["emoji"], mine)
@@ -122,11 +122,11 @@ class Checking(unittest.TestCase):
         self.assertEqual(prefs.check(mixed, strict=False),
                          {"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}, "globalShortcuts": {"global.quickReply": "SUPER + M"},
                           "playbackRate": 1, "autoDownload": {"photos": True, "gifs": True, "videos": 50, "files": 0},
-                          "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}, "sounds": {"style": "pop", "variants": {}}})
+                          "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}, "sounds": {"style": "drop", "variants": {}}})
         self.assertEqual(prefs.check("junk", strict=False), prefs.empty())
-        # A style from before the pops (a bell, a plucked string...) comes back as the pop, the tunes you changed kept.
+        # A style from before the pops (a bell, a plucked string...) comes back as the default, the tunes you changed kept.
         self.assertEqual(prefs.check({"sounds": {"style": "glass", "variants": {"7": 2}}}, strict=False)["sounds"],
-                         {"style": "pop", "variants": {"7": 2}})
+                         {"style": "drop", "variants": {"7": 2}})
 
 
 class Storing(unittest.TestCase):

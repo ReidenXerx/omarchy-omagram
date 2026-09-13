@@ -1903,7 +1903,7 @@ class Settings(Harness):
         self.assertEqual(hello["settings"], {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1,
                                              "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0},
                                              "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}},
-                                             "sounds": {"style": "pop", "variants": {}}})
+                                             "sounds": {"style": "drop", "variants": {}}})
         self.assertEqual(hello["globalStatus"]["global.quickReply"], "off")
         other = self.connect()
         answer = self.request(self.conn, 2, "settings.set", settings={"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}})
@@ -1944,11 +1944,11 @@ class Settings(Harness):
         for rid, bad in ((55, {"tone": 6, "recents": {}}), (56, {"tone": 1, "recents": {"flag:x": {"c": 1, "t": 1}}}), (57, {"tone": 1})):
             self.assertFalse(self.request(self.conn, rid, "settings.emoji", **bad)["ok"], bad)
         self.daemon.spawn = lambda argv, fallback=None, timeout=None: None   # no sound out of the speakers in a test
-        self.assertEqual(self.request(self.conn, 60, "settings.sounds", style="drop")["result"]["settings"]["sounds"]["style"], "drop")
+        self.assertEqual(self.request(self.conn, 60, "settings.sounds", style="knock")["result"]["settings"]["sounds"]["style"], "knock")
         self.assertFalse(self.request(self.conn, 61, "settings.sounds", style="trumpet")["ok"])
         self.assertEqual(self.request(self.conn, 62, "sounds.another", userId=500)["result"]["settings"]["sounds"]["variants"], {"500": 1})
         self.assertTrue(self.request(self.conn, 63, "settings.set", settings={"shortcuts": {}})["ok"])
-        self.assertEqual(json.loads(self.d.prefs.SETTINGS.read_text())["sounds"], {"style": "drop", "variants": {"500": 1}},
+        self.assertEqual(json.loads(self.d.prefs.SETTINGS.read_text())["sounds"], {"style": "knock", "variants": {"500": 1}},
                          "the shortcuts page leaves it alone")
 
     def test_global_shortcuts_are_registered_and_registered_again(self):
@@ -2091,7 +2091,7 @@ class Notifications(Harness):
         self.wait(lambda: len(played()) == 1)
         wav = pathlib.Path(played()[0][-1])
         self.assertEqual((wav.parent, wav.read_bytes()[:4], played()[0][1:3]), (self.root / "sounds", b"RIFF", ["--media-role", "Notification"]))
-        self.assertTrue(wav.name.startswith("pop-"), "Ann's own sound, in the style chosen")
+        self.assertTrue(wav.name.startswith("drop-"), "Ann's own sound, in the style chosen")
         self.td_event(self.group([self.note(8, "again")]))
         self.settle()
         self.assertEqual(len(played()), 1, "not again for the same person straight away")

@@ -24,7 +24,7 @@ STABLE = (0, 2, 3)            # its root, third and fifth: where a melody comes 
 DEGREES = 8                   # the scale's notes over two octaves, less the top two
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 STYLES = {"pop": "soft and round", "drop": "a drop of water", "knock": "a knuckle on wood"}
-DEFAULT_STYLE = "pop"
+DEFAULT_STYLE = "drop"          # the user's pick, heard on the design page
 
 
 class Dice:
