@@ -35,6 +35,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import zlib
 
 sys.dont_write_bytecode = True
@@ -445,6 +446,27 @@ def clipboard_data(mime):
     r = safe.run([str(safe.tool("wl-paste")), "--no-newline", "--type", mime], timeout=5, max_output=CLIPBOARD_MAX + 1)
     data = r.stdout if isinstance(r.stdout, bytes) else bytes(r.stdout or b"")
     return data if r.ok and 0 < len(data) <= CLIPBOARD_MAX else None
+
+
+def clipboard_file_paths(data):
+    """The files a file manager copied, from its text/uri-list: absolute paths on this machine, in order, without
+    repeats, at most FILES_MAX. Addresses of anything else -- web pages, other machines -- are left out."""
+    text = data.decode("utf-8", "replace") if isinstance(data, (bytes, bytearray)) else ""
+    paths = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        address = urllib.parse.urlsplit(line)
+        if address.scheme != "file" or address.netloc not in ("", "localhost"):
+            continue
+        path = urllib.parse.unquote(address.path)
+        if not path.startswith("/") or any(ord(c) < 32 for c in path) or path in paths:
+            continue
+        paths.append(path)
+        if len(paths) >= FILES_MAX:
+            break
+    return paths
 
 
 def arg_list(args, name="list"):
@@ -1607,6 +1629,46 @@ class Daemon:
         except (safe.UnsafeError, OSError):
             pass
         self.respond(client, rid, {"path": ""})
+
+    def cmd_clipboard_files(self, client, rid, args):
+        """What Ctrl+V sends: the files a file manager copied, each checked as any file you send is, or else a copied
+        picture, saved privately. Answers {"paths", "skipped"}; no paths and nothing skipped means the clipboard holds
+        neither, and the text is pasted instead."""
+        try:
+            offered = clipboard_types()
+        except (safe.UnsafeError, OSError):
+            offered = []
+        if "text/uri-list" in offered:
+            paths, skipped = [], 0
+            try:
+                listed = clipboard_file_paths(clipboard_data("text/uri-list"))
+            except (safe.UnsafeError, OSError):
+                listed = []
+            for given in listed:
+                try:
+                    real = local_upload(given)[0]
+                except BadRequest:
+                    skipped += 1   # a folder, an empty or unreadable file, Omagram's own database
+                    continue
+                if real not in paths:
+                    paths.append(real)
+            if paths or skipped:
+                self.respond(client, rid, {"paths": paths, "skipped": skipped})
+                return
+        try:
+            for mime, suffix in CLIPBOARD_TYPES:
+                if mime not in offered:
+                    continue
+                data = clipboard_data(mime)
+                if data is None:
+                    break
+                path = media.new_path("paste", suffix)
+                safe.write_file(path, data, mode=0o600)
+                self.respond(client, rid, {"paths": [str(path)], "skipped": 0})
+                return
+        except (safe.UnsafeError, OSError):
+            pass
+        self.respond(client, rid, {"paths": [], "skipped": 0})
 
     # ---------------------------------------------------------------- a chat's info, members and shared media
 
@@ -3336,6 +3398,7 @@ COMMANDS = {
     "file.open": ("cmd_file_open", True),
     "file.save": ("cmd_file_save", True),
     "clipboard.image": ("cmd_clipboard_image", True),
+    "clipboard.files": ("cmd_clipboard_files", True),
     "chat.info": ("cmd_chat_info", True),
     "chat.members": ("cmd_chat_members", True),
     "chat.media": ("cmd_chat_media", True),

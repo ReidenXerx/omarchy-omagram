@@ -9,7 +9,7 @@ import "../app/Model.js" as Model
 import "../app/Keymap.js" as Keymap
 
 // The quick view: find a chat, read its latest messages and answer without leaving what you are doing -- in
-// words, with a sticker, a voice message or a round video message -- and listen to the voice and round video
+// words, with files you copied (Ctrl+V), a sticker, a voice message or a round video message -- and listen to the voice and round video
 // messages people sent, seeing their stickers and round videos (bigger under the pointer) and their photos and videos over the
 // whole screen (MediaViewer.qml, in a window of its own). The same view is the quick-reply
 // overlay, wide, with the chats beside the chat, and the bar's panel, compact, where the chat takes the chats'
@@ -95,6 +95,9 @@ Item {
   property int stickerCursor: 0
   property var hoverSticker: null
   property var hoverNote: null          // the round video message under the pointer
+  // Files waiting for Enter, the text in the box as their caption: pasted with Ctrl+V. Ten at most, as an album holds.
+  property var attachments: []            // [{ path, name, kind }]
+  property bool attachAsMedia: true       // photos and videos as themselves, or everything as files
   property var noteAnimations: ({})     // round videos' moving pictures by file id: {path, fps}, or {} while one is made
   property var asked: ({})   // pictures already asked for, by file id
   readonly property int rememberMs: 60 * 60 * 1000   // how long a closed quick view keeps its chat
@@ -102,7 +105,10 @@ Item {
   readonly property bool rounded: GraphicsInfo.api !== GraphicsInfo.Software
   property string toolHint: ""   // what the tool under the pointer is, and its key
   // The keys that work where your typing goes.
-  readonly property string keysHint: quick.replyChatId
+  readonly property string keysHint: quick.replyChatId && quick.attachments.length
+    ? quick.hints(["quickMessage.send", quick.attachments.length === 1 ? "sends it" : "sends them",
+                   "quickMessage.pasteFiles", "pastes as files", "quickMessage.back", "takes them away"])
+    : quick.replyChatId
     ? quick.hints(["quickMessage.send", "sends", "quickMessage.voice", "voice", "quickMessage.videoNote", "round video",
                    "quickMessage.stickers", "stickers", "quickMessage.play", "listen", "quickMessage.back", "back"])
     : quick.hints(["quick.reply", "answers", "quick.openInWindow", "opens in Omagram", "quick.close", "closes"])
@@ -156,6 +162,7 @@ Item {
     quick.hoverSticker = null
     quick.hoverNote = null
     quick.noteAnimations = ({})
+    quick.attachments = []
     quick.asked = ({})
     quick.viewingId = 0
     search.text = ""
@@ -191,6 +198,7 @@ Item {
     quick.stickersOpen = false
     quick.hoverSticker = null
     quick.hoverNote = null
+    quick.attachments = []
   }
 
   // ---------------------------------------------------------------- chats and answering
@@ -203,6 +211,7 @@ Item {
 
   function reply(chatId) {
     if (!chatId) return
+    if (chatId !== quick.replyChatId) quick.attachments = []   // files pasted for another chat stay out of this one
     var index = Model.indexOfChat(quick.results, chatId)
     if (index >= 0) {
       quick.cursor = index
@@ -213,7 +222,7 @@ Item {
     Qt.callLater(function () { composer.forceActiveFocus() })
   }
 
-  // Esc: out of a recording (thrown away), out of the stickers, then back to finding a chat.
+  // Esc: out of a recording (thrown away), out of the stickers, pasted files taken away, then back to finding a chat.
   function back() {
     if (quick.recordingHere) {
       quick.stopRecording(false)
@@ -225,6 +234,12 @@ Item {
       composer.forceActiveFocus()
       return
     }
+    if (quick.attachments.length) {
+      quick.attachments = []
+      quick.status = ""
+      composer.forceActiveFocus()
+      return
+    }
     quick.replyChatId = 0
     quick.status = ""
     search.forceActiveFocus()
@@ -232,7 +247,12 @@ Item {
 
   function send() {
     var text = composer.text
-    if (!quick.replyChatId || quick.sending || text.trim() === "" || !quick.ready) return
+    if (!quick.replyChatId || quick.sending || !quick.ready) return
+    if (quick.attachments.length) {
+      quick.sendAttachments()
+      return
+    }
+    if (text.trim() === "") return
     var chat = quick.replyChat   // before sending: afterwards its newest message is yours
     quick.sending = true
     quick.service.sendText(quick.replyChatId, text, function (answer) {
@@ -243,6 +263,79 @@ Item {
         quick.dismissRequested()
       } else {
         quick.status = answer.error || "Could not send"
+        composer.forceActiveFocus()
+      }
+    })
+  }
+
+  // ---------------------------------------------------------------- files
+
+  // Ctrl+V: files a file manager copied, or a copied picture, wait above the message box to go with the next Enter;
+  // with neither on the clipboard the text is pasted. Ctrl+Shift+V takes them as files, sent as they are.
+  function paste(asMedia) {
+    if (!quick.replyChatId || !quick.ready || quick.recordingHere || quick.sending) {
+      composer.paste()
+      return
+    }
+    var chatId = quick.replyChatId
+    quick.service.request("clipboard.files", {}, function (answer) {
+      if (quick.replyChatId !== chatId) return
+      var found = answer.ok && answer.result ? answer.result : { paths: [], skipped: 0 }
+      var paths = Array.isArray(found.paths) ? found.paths : []
+      quick.status = !(found.skipped > 0) ? ""
+                   : found.skipped === 1 ? "A folder or an empty or unreadable file was left out"
+                   : found.skipped + " folders or empty or unreadable files were left out"
+      if (paths.length) quick.addAttachments(paths, asMedia)
+      else if (!(found.skipped > 0)) composer.paste()
+    })
+  }
+
+  function addAttachments(paths, asMedia) {
+    var next = quick.attachments.slice()
+    if (!next.length || asMedia === false) quick.attachAsMedia = asMedia !== false
+    for (var i = 0; i < paths.length; i++) {
+      var path = String(paths[i])
+      if (next.some(function (a) { return a.path === path })) continue
+      if (next.length >= 10) {
+        quick.status = "Ten files go at once: the rest were left out"
+        break
+      }
+      next.push({ path: path, name: path.split("/").pop(), kind: Model.attachmentKind(path) })
+    }
+    quick.attachments = next
+    quick.stickersOpen = false
+    quick.hoverSticker = null
+    composer.forceActiveFocus()
+  }
+
+  function removeAttachment(index) {
+    var next = quick.attachments.slice()
+    next.splice(index, 1)
+    quick.attachments = next
+    composer.forceActiveFocus()
+  }
+
+  // The files go as Telegram's apps send them -- photos and videos in albums, files in albums of their own -- with the
+  // text in the box as the first one's caption.
+  function sendAttachments() {
+    var caption = composer.text.replace(/\s+$/, "")
+    if (caption.length > 2048) {
+      quick.status = "That caption is too long"
+      return
+    }
+    var chat = quick.replyChat   // before sending: afterwards its newest message is yours
+    quick.sending = true
+    quick.status = ""
+    quick.service.request("message.sendFiles", { chatId: quick.replyChatId, paths: quick.attachments.map(function (a) { return a.path }),
+                                                  asMedia: quick.attachAsMedia, caption: caption }, function (answer) {
+      quick.sending = false
+      if (answer.ok) {
+        quick.markRead(chat)
+        quick.attachments = []
+        composer.text = ""
+        quick.dismissRequested()
+      } else {
+        quick.status = answer.error || "Could not send the files"
         composer.forceActiveFocus()
       }
     })
@@ -1522,6 +1615,126 @@ Item {
         }
       }
 
+      // ---------------------------------------------- files waiting to be sent
+      Rectangle {
+        Layout.fillWidth: true
+        Layout.preferredHeight: visible ? Style.space(62) : 0
+        visible: quick.attachments.length > 0 && quick.replyChatId !== 0
+        radius: Style.cornerRadius
+        color: Qt.rgba(quick.text.r, quick.text.g, quick.text.b, 0.05)
+
+        ListView {
+          id: attachmentList
+          anchors.left: parent.left
+          anchors.right: attachmentMode.left
+          anchors.leftMargin: Style.space(7)
+          anchors.rightMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          height: Style.space(48)
+          orientation: ListView.Horizontal
+          spacing: Style.space(6)
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          model: quick.attachments
+
+          delegate: Rectangle {
+            id: attachment
+            required property var modelData
+            required property int index
+            width: Style.space(48)
+            height: Style.space(48)
+            radius: Style.cornerRadius
+            color: Qt.rgba(quick.text.r, quick.text.g, quick.text.b, 0.08)
+            clip: true
+
+            // What the file is, under the pointer.
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              onContainsMouseChanged: quick.toolHint = containsMouse ? attachment.modelData.name : ""
+            }
+            Image {
+              id: attachmentPicture
+              anchors.fill: parent
+              visible: status === Image.Ready
+              source: attachment.modelData.kind === "photo" ? Model.fileUrl(attachment.modelData.path) : ""
+              sourceSize.width: 96
+              sourceSize.height: 96
+              asynchronous: true
+              fillMode: Image.PreserveAspectCrop
+            }
+            // What has no picture shows what it is: md-video U+F0567, md-music-note U+F0387, md-file-outline U+F0224
+            Text {
+              anchors.centerIn: parent
+              visible: !attachmentPicture.visible
+              text: String.fromCodePoint(attachment.modelData.kind === "video" ? 0xF0567 : (attachment.modelData.kind === "audio" ? 0xF0387 : 0xF0224))
+              color: quick.muted
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+            }
+            // md-close U+F0156: leave this one out
+            Rectangle {
+              anchors.top: parent.top
+              anchors.right: parent.right
+              anchors.margins: Style.space(2)
+              width: Style.space(16)
+              height: width
+              radius: width / 2
+              color: Qt.rgba(0, 0, 0, removeArea.containsMouse ? 0.8 : 0.55)
+
+              Text {
+                anchors.centerIn: parent
+                text: String.fromCodePoint(0xF0156)
+                color: "white"
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+              MouseArea {
+                id: removeArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: quick.removeAttachment(attachment.index)
+              }
+            }
+          }
+        }
+
+        // Photos and videos as themselves, or everything as files, as they are.
+        Rectangle {
+          id: attachmentMode
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          width: modeLabel.implicitWidth + Style.space(16)
+          height: Style.space(26)
+          radius: Style.cornerRadius
+          color: Qt.rgba(quick.text.r, quick.text.g, quick.text.b, modeArea.containsMouse ? 0.16 : 0.08)
+
+          Text {
+            id: modeLabel
+            anchors.centerIn: parent
+            text: quick.attachAsMedia ? "As photos and videos" : "As files"
+            textFormat: Text.PlainText
+            color: quick.text
+            font.family: quick.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+          MouseArea {
+            id: modeArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              quick.attachAsMedia = !quick.attachAsMedia
+              composer.forceActiveFocus()
+            }
+            onContainsMouseChanged: quick.toolHint = containsMouse
+              ? (quick.attachAsMedia ? "Click to send them as files, as they are" : "Click to send photos and videos as themselves") : ""
+          }
+        }
+      }
+
       // ---------------------------------------------- composer
       Rectangle {
         Layout.fillWidth: true
@@ -1558,6 +1771,8 @@ Item {
               else if (quick.highlighted) quick.reply(quick.highlighted.id)
             }
             else if (is("quickMessage.back")) quick.back()
+            else if (event.matches(StandardKey.Paste)) quick.paste(quick.attachments.length ? quick.attachAsMedia : true)
+            else if (is("quickMessage.pasteFiles")) quick.paste(false)
             else if (is("quickMessage.openInWindow")) quick.openInWindowRequested(quick.shownChatId)
             else if (is("quickMessage.voice")) quick.startRecording("voice")
             else if (is("quickMessage.videoNote")) quick.startRecording("video")
@@ -1570,7 +1785,7 @@ Item {
           Text {
             anchors.fill: parent
             visible: composer.text === ""
-            text: quick.recordingHere ? "Recording…" : quick.sending ? "Sending…" : (quick.replyChatId ? "Message" : "Choose a chat to answer")
+            text: quick.recordingHere ? "Recording…" : quick.sending ? "Sending…" : (!quick.replyChatId ? "Choose a chat to answer" : quick.attachments.length ? "A caption, if you like" : "Message")
             textFormat: Text.PlainText
             color: quick.muted
             elide: Text.ElideRight

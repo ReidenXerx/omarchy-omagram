@@ -111,6 +111,7 @@ var ACTIONS = [
 
   { id: "composer.send", label: "Send", keys: ["Return", "Enter"] },
   { id: "composer.newLine", label: "New line", keys: ["Shift+Return", "Shift+Enter"] },
+  { id: "composer.pasteFiles", label: "Paste copied files or a picture, to send as files as they are", keys: ["Ctrl+Shift+V"] },
   { id: "composer.sendSilent", label: "Send without sound", keys: ["Ctrl+Shift+Return", "Ctrl+Shift+Enter"] },
   { id: "composer.later", label: "Send later, quietly or when online", keys: ["Ctrl+Alt+Return", "Ctrl+Alt+Enter"] },
   { id: "composer.bold", label: "Bold: **text**", keys: ["Ctrl+B"] },
@@ -217,6 +218,7 @@ var ACTIONS = [
   { id: "quickMessage.videoNote", label: "Record a round video message: Enter sends it, Esc throws it away", keys: ["Ctrl+Shift+R"] },
   { id: "quickMessage.play", label: "Listen to the newest voice or round video message, or stop", keys: ["Ctrl+P"] },
   { id: "quickMessage.stickers", label: "Stickers to send", keys: ["Ctrl+S"] },
+  { id: "quickMessage.pasteFiles", label: "Paste copied files or a picture, to send as files as they are", keys: ["Ctrl+Shift+V"] },
 
   { id: "quickMedia.previous", label: "The photo or video before", keys: ["Left", "H"] },
   { id: "quickMedia.next", label: "The next photo or video", keys: ["Right", "L"] },

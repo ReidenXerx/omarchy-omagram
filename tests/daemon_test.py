@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -1115,6 +1116,47 @@ class MessageActions(Harness):
                          (str(self.d.media.REC), b"\x89PNG image", 0o600))
         with mock.patch.object(self.d, "clipboard_types", lambda: ["text/plain"]):
             self.assertEqual(self.request(self.conn, 76, "clipboard.image")["result"], {"path": ""})
+
+    def test_pasting_copied_files_or_a_picture(self):
+        picked = self.root / "picked"
+        picked.mkdir(mode=0o700)
+        photo = picked / "cat photo.jpg"
+        photo.write_bytes(b"jpeg data")
+        report = picked / "report.pdf"
+        report.write_bytes(b"%PDF-1.7")
+        folder = picked / "folder"
+        folder.mkdir()
+        empty = picked / "empty.txt"
+        empty.write_bytes(b"")
+
+        def address(path, host=""):
+            return "file://" + host + urllib.parse.quote(str(path))
+
+        def paste(rid, offered):
+            with mock.patch.object(self.d, "clipboard_types", lambda: list(offered)), \
+                    mock.patch.object(self.d, "clipboard_data", lambda mime: offered.get(mime)):
+                return self.request(self.conn, rid, "clipboard.files")["result"]
+
+        listing = "\r\n".join(["# copied in a file manager", address(photo), address(report, "localhost"), address(folder),
+                               address(empty), "https://example.org/cat.png", "file://elsewhere/etc/hosts", address(photo)])
+        self.assertEqual(paste(80, {"text/uri-list": listing.encode(), "text/plain": b"cat photo.jpg", "image/png": b"PNG"}),
+                         {"paths": [str(photo), str(report)], "skipped": 2},
+                         "copied files come before a picture; a folder and an empty file are left out and said")
+        picture = paste(81, {"image/png": b"PNG bytes"})
+        self.assertEqual((picture["skipped"], len(picture["paths"])), (0, 1))
+        self.assertEqual((os.path.dirname(picture["paths"][0]), pathlib.Path(picture["paths"][0]).read_bytes()),
+                         (str(self.d.media.REC), b"PNG bytes"))
+        self.assertEqual(paste(82, {"text/uri-list": b"https://example.org/", "text/plain": b"https://example.org/"}),
+                         {"paths": [], "skipped": 0}, "a copied link is text to paste")
+        self.assertEqual(paste(83, {"text/plain": b"hello"}), {"paths": [], "skipped": 0})
+        many = []
+        for n in range(12):
+            extra = picked / f"note-{n}.txt"
+            extra.write_bytes(b"x")
+            many.append(address(extra))
+        self.assertEqual(len(paste(84, {"text/uri-list": "\n".join(many).encode()})["paths"]), 10, "ten at most, as an album holds")
+        self.assertEqual(paste(85, {"text/uri-list": address(folder).encode()}), {"paths": [], "skipped": 1},
+                         "only a folder: that is said, not pasted as text")
 
 
 class ChatsAndAccount(Harness):

@@ -23,8 +23,8 @@
 ## What makes it different
 
 - **Answer from the bar.** The quick view opens under Omagram's mark, or over everything on a key.
-  Find a chat by typing, then reply in words, with one of your recent stickers, or with a voice or
-  round video message recorded on the spot. Voice and round video messages play right there, a round
+  Find a chat by typing, then reply in words, with files or a picture you copied (`Ctrl+V`), with
+  one of your recent stickers, or with a voice or round video message recorded on the spot. Voice and round video messages play right there, a round
   video moving in a big circle while you point at it or listen; photos and videos open over the
   whole screen, and older messages come as you scroll up. Close it in the
   middle of a conversation and for the next hour it opens back on that chat, with anything unsent.
@@ -70,8 +70,9 @@
   Typing `@` in a group suggests who to mention, and `/` suggests the commands of the chat's bots.
 - **Media** — photos (with a full-size viewer), videos, GIFs, files, round video notes and
   voice messages with a waveform, played at 1×, 1.5× or 2× (`.`, or the chip beside them). Send photos, videos, music and files with `Ctrl+O`, by dropping
-  them on the chat or by pasting a copied image: they wait above the message box, which holds their
-  caption, and go as albums of up to ten (`Ctrl+Shift+O` sends them as files). Record voice
+  them on the chat, or by pasting files copied in a file manager or a copied picture (`Ctrl+V`): they wait
+  above the message box, which holds their caption, and go as albums of up to ten (`Ctrl+Shift+O` and
+  `Ctrl+Shift+V` send them as files). Record voice
   messages (`Ctrl+R`) and round video messages (`Ctrl+Shift+R`). A file's menu opens it with its app or saves it to Downloads.
 - **Emoji** — an emoji panel beside the message box (`Ctrl+;`), from the Omarchy emoji picker plugin's
   data and search: emoji, symbols and kaomoji found by their English, Ukrainian or Russian names, the
@@ -113,9 +114,10 @@
 - **In the bar** — Omagram's mark, with a dot while unmuted chats have unread messages. Left
   click opens the quick view under it; right click opens the window.
 - **Quick view** — in the bar's panel, or as an overlay on a key: find a chat by typing, read its
-  latest messages and answer without leaving what you are doing — in words, with one of your
-  recent stickers, or with a voice or round video message recorded on the spot (`Enter` sends it,
-  `Esc` throws it away). Voice and round video messages play right there, a sticker someone sent
+  latest messages and answer without leaving what you are doing — in words, with files or a picture
+  you copied (`Ctrl+V`, or `Ctrl+Shift+V` to send them as files; they wait above the message box and
+  `Esc` takes them away), with one of your recent stickers, or with a voice or round video message
+  recorded on the spot (`Enter` sends it, `Esc` throws it away). Voice and round video messages play right there, a sticker someone sent
   shows bigger under the pointer, a round video moves in a big circle while you point at it or listen
   to it, and photos, videos and GIFs show as small sharp pictures that open
   over the whole screen (a video plays in your own video player). Scroll up for older messages.
@@ -247,7 +249,7 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Esc` | cancel a reply or edit |
 | `Ctrl+O` / `Ctrl+Shift+O` | attach photos / send files uncompressed |
 | `Ctrl+Shift+A` | a poll, dice, a contact card or a location |
-| `Ctrl+V` with an image copied | send the image (it asks first) |
+| `Ctrl+V` / `Ctrl+Shift+V` | with files or a picture copied: attach them / send them as files |
 | `Ctrl+S` | stickers (arrows or `hjkl`, `Tab` switches sets, `Enter` sends) |
 | `Ctrl+R` | record a voice message (`Enter` sends, `Esc` cancels) |
 | `Ctrl+Shift+R` | record a round video message (`Enter` starts, then sends) |
@@ -271,6 +273,7 @@ omarchy-shell reidenxerx.omagram.panel toggle        # the quick view in the bar
 In the quick view: type to search, `↑` `↓` or `Ctrl+J` `Ctrl+K` to choose, `Enter` to answer and
 `Enter` again to send. In a chat, `Ctrl+R` records a voice message and `Ctrl+Shift+R` a round
 video message (`Enter` sends it, `Esc` throws it away), `Ctrl+S` opens your recent stickers,
+`Ctrl+V` pastes files or a picture you copied (`Ctrl+Shift+V` as files),
 `Ctrl+P` plays the newest voice or round video message (again to stop; a round video shows big
 while it plays), `Ctrl+O` opens the chat
 in the window and `Esc` goes back. Over a photo or video: `←` `→` step through them, `Enter` plays

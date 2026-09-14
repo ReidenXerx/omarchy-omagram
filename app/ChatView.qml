@@ -1263,12 +1263,27 @@ FocusScope {
     })
   }
 
-  function pasteImage() {
-    if (!root.chat) return
+  // Ctrl+V: files a file manager copied, or a copied picture, wait above the message box to be sent like attached ones;
+  // anything else pastes as text. `asMedia` false (Ctrl+Shift+V) sends them as files, as they are.
+  function pasteFromClipboard(asMedia) {
+    if (!root.chat || root.editingId || !root.canWrite) {
+      composer.paste()
+      return
+    }
     var chatId = root.chat.id
-    client.request("clipboard.image", {}, function (answer) {
-      if (!answer.ok || !answer.result.path || !root.chat || root.chat.id !== chatId) return
-      root.addAttachments([answer.result.path], true)   // it waits to be sent, like any file
+    client.request("clipboard.files", {}, function (answer) {
+      if (!root.chat || root.chat.id !== chatId) return
+      var found = answer.ok && answer.result ? answer.result : { paths: [], skipped: 0 }
+      var paths = Array.isArray(found.paths) ? found.paths : []
+      if (found.skipped > 0)
+        root.flash(found.skipped === 1 ? "A folder or an empty or unreadable file was left out"
+                                       : found.skipped + " folders or empty or unreadable files were left out")
+      if (paths.length) {
+        root.addAttachments(paths, asMedia)
+        if (asMedia === false) root.attachAsMedia = false
+      } else if (!(found.skipped > 0)) {
+        composer.paste()
+      }
     })
   }
 
@@ -2691,8 +2706,9 @@ FocusScope {
               // A text box takes Enter before any shortcut can, so a question is answered here.
               if (root.prompt && is("prompt.accept")) root.runPrompt(true)
               else if (root.prompt && is("prompt.cancel")) root.runPrompt(false)
-              // A copied image has no text to paste: it is offered to send instead.
-              else if (event.matches(StandardKey.Paste) && !composer.canPaste) root.pasteImage()
+              // Copied files or a copied picture wait to be sent; with neither on the clipboard the text is pasted.
+              else if (event.matches(StandardKey.Paste)) root.pasteFromClipboard(root.attachments.length ? root.attachAsMedia : true)
+              else if (is("composer.pasteFiles")) root.pasteFromClipboard(false)
               else if (is("composer.sendSilent")) root.send({ silent: true })
               else if (is("composer.later")) root.openSendMenu(null)
               else if (is("composer.bold")) root.wrapSelection("**", "**")
