@@ -50,6 +50,7 @@ Item {
   readonly property string codeBackground: "#" + [0x18, Math.round(row.app.foreground.r * 255), Math.round(row.app.foreground.g * 255),
                                                   Math.round(row.app.foreground.b * 255)]
     .map(function (v) { return (v < 16 ? "0" : "") + v.toString(16) }).join("")
+  readonly property string linkHex: Model.hexOf(row.app.accentText)
   property alias mediaItem: mediaView
   property alias bubbleItem: bubble
 
@@ -250,7 +251,7 @@ Item {
         visible: source !== "" && !row.cardKind
         width: Math.min(implicitWidth, bubble.inner)
         text: visible ? Model.richText(source, row.textSource.content.entities, row.revealed, row.codeBackground,
-                                       body.emojiIds.length ? row.app.customEmojiImages(body.emojiIds) : null) : ""
+                                       body.emojiIds.length ? row.app.customEmojiImages(body.emojiIds) : null, row.linkHex) : ""
         onEmojiIdsChanged: if (emojiIds.length) row.app.requestCustomEmoji(emojiIds)
         Component.onCompleted: if (emojiIds.length) row.app.requestCustomEmoji(emojiIds)
         textFormat: Text.RichText
@@ -287,7 +288,7 @@ Item {
           visible: !!translation.result
           width: Math.min(implicitWidth, bubble.inner)
           wrapMode: Text.Wrap
-          text: translation.result ? Model.richText(translation.result.text, translation.result.entities, true, row.codeBackground) : ""
+          text: translation.result ? Model.richText(translation.result.text, translation.result.entities, true, row.codeBackground, null, row.linkHex) : ""
           textFormat: Text.RichText
           color: row.app.foreground
           linkColor: row.app.accentText

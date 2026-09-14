@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError, autoDownload, downloadText, nextDownloadRule, scopeText, previewsText, folderSummary, newFolder, folderProblem, movedFolders, moreMenu, diceMenu, parseLocation, locationText, pollProblem, parseDay, composerLink, autoDeleteText, nextAutoDelete, autoDeleteMenu, autoDeleteSeconds, parseProxyAddress, isProxyLink, proxyLinkUrl, proxySteps, proxyStepProblem, proxyText, connectionText, colorLuminance, colorContrast, mixColors, readableColor, bestTextColor, inkOnFill, soundStyleText, nextSoundStyle }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, readRequests, hexOf, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError, autoDownload, downloadText, nextDownloadRule, scopeText, previewsText, folderSummary, newFolder, folderProblem, movedFolders, moreMenu, diceMenu, parseLocation, locationText, pollProblem, parseDay, composerLink, autoDeleteText, nextAutoDelete, autoDeleteMenu, autoDeleteSeconds, parseProxyAddress, isProxyLink, proxyLinkUrl, proxySteps, proxyStepProblem, proxyText, connectionText, colorLuminance, colorContrast, mixColors, readableColor, bestTextColor, inkOnFill, soundStyleText, nextSoundStyle }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -212,6 +212,28 @@ test("rich text is escaped, formatted and only links to safe places", () => {
   assert.ok(M.richText("👋 hi", [{ type: "bold", offset: 3, length: 2 }]).includes("<b>hi</b>"), "offsets are UTF-16, like JavaScript strings")
   assert.strictEqual(M.safeUrl("ftp://x.org"), "")
   assert.strictEqual(M.safeUrl("mailto:a@b.c"), "mailto:a@b.c")
+})
+
+test("links take the theme's colour, and answering a chat marks only what is unread", () => {
+  const url = [{ type: "url", offset: 4, length: 13 }]
+  assert.ok(M.richText("see example.com/a", url, false, "transparent", null, "#c2549d")
+    .includes('<a href="https://example.com/a" style="color:#c2549d; text-decoration:none">example.com/a</a>'))
+  assert.ok(M.richText("secret word", [{ type: "spoiler", offset: 0, length: 6 }], false, "", null, "#c2549d")
+    .includes('<a href="omagram:spoiler" style="color:#c2549d; text-decoration:none">'))
+  assert.ok(!M.richText("see example.com/a", url, false, "", null, "red; background:url(x)").includes("style=\"color"))
+  assert.ok(M.richText("see example.com/a", url).includes('<a href="https://example.com/a">'), "no colour given: plain links")
+  assert.strictEqual(M.hexOf({ r: 1, g: 0.5, b: 0 }), "#ff8000")
+  assert.strictEqual(M.hexOf({ r: 0.02, g: 0, b: 1.2 }), "#0500ff")
+  assert.strictEqual(M.hexOf({ r: NaN, g: 0, b: 0 }), "")
+  assert.strictEqual(M.hexOf(null), "")
+  eq(M.readRequests({ id: 5, unread: 2, mentions: 1, markedUnread: true, lastMessage: { id: 90 } }), [
+    { cmd: "chat.read", args: { chatId: 5, messageIds: [90] } },
+    { cmd: "chat.readMentions", args: { chatId: 5 } },
+    { cmd: "chat.markUnread", args: { chatId: 5, unread: false } }])
+  eq(M.readRequests({ id: -100123, unread: 1, lastMessage: { id: 7 } }), [{ cmd: "chat.read", args: { chatId: -100123, messageIds: [7] } }])
+  eq(M.readRequests({ id: 5, unread: 0, mentions: 0, markedUnread: false, lastMessage: { id: 90 } }), [])
+  eq(M.readRequests({ id: 5, unread: 3 }), [], "no newest message to read up to")
+  eq([M.readRequests(null), M.readRequests({ id: 0, unread: 1, lastMessage: { id: 2 } })], [[], []])
 })
 
 test("status, typing and read ticks in words", () => {

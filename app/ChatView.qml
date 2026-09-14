@@ -951,10 +951,9 @@ FocusScope {
     client.request("message.sendGif", args, function (answer) {
       if (!answer.ok) root.flash("Could not send the GIF: " + (answer.error || "unknown error"))
     })
+    // As with stickers, the picker stays open for another one.
     root.replyToId = 0
-    root.stickersOpen = false
     root.stickToBottom = true
-    root.focusComposer()
   }
 
   // ---------------------------------------------------------------- translation
@@ -2160,10 +2159,9 @@ FocusScope {
         app.sendSticker(root.chat.id, sticker, root.replyToId, function (answer) {
           if (!answer.ok) root.flash("Could not send: " + (answer.error || "unknown error"))
         })
+        // The picker stays open for another sticker; Esc closes it and goes back to the message box.
         root.replyToId = 0
-        root.stickersOpen = false
         root.stickToBottom = true
-        root.focusComposer()
       }
       onClosed: {
         root.stickersOpen = false

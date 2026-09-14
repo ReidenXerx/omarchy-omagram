@@ -400,6 +400,29 @@ function incomingIds(messages, count) {
   return ids.reverse()
 }
 
+// What marks a chat read up to its newest message, as "Mark as read" in the chat list does; nothing when nothing in
+// it is unread. Answering a chat from the quick view uses it, since answering means you have read it.
+function readRequests(chat) {
+  if (!isObject(chat) || typeof chat.id !== "number" || chat.id === 0) return []
+  var out = []
+  var last = isObject(chat.lastMessage) ? chat.lastMessage.id : 0
+  if (chat.unread > 0 && typeof last === "number" && last > 0) out.push({ cmd: "chat.read", args: { chatId: chat.id, messageIds: [last] } })
+  if (chat.mentions > 0) out.push({ cmd: "chat.readMentions", args: { chatId: chat.id } })
+  if (chat.markedUnread === true) out.push({ cmd: "chat.markUnread", args: { chatId: chat.id, unread: false } })
+  return out
+}
+
+// A Qt colour as "#rrggbb" for Rich Text, or "" when it is not one.
+function hexOf(color) {
+  if (!color || typeof color.r !== "number" || typeof color.g !== "number" || typeof color.b !== "number") return ""
+  var parts = [color.r, color.g, color.b]
+  if (!parts.every(function (v) { return isFinite(v) })) return ""
+  return "#" + parts.map(function (v) {
+    var n = Math.max(0, Math.min(255, Math.round(v * 255)))
+    return (n < 16 ? "0" : "") + n.toString(16)
+  }).join("")
+}
+
 function contentLabel(content) {
   if (!isObject(content)) return ""
   if (content.kind === "text" || content.kind === "emoji") return ""
@@ -649,8 +672,10 @@ function customEmojiIds(entities) {
   return out
 }
 
-function richText(text, entities, revealed, codeBackground, emojiImages) {
+function richText(text, entities, revealed, codeBackground, emojiImages, linkColor) {
   var s = String(text || "")
+  // Rich Text takes a link's colour from the palette (Qt's blue), not from Text.linkColor, so it is written on the link.
+  var linkStyle = /^#[0-9a-fA-F]{6}$/.test(String(linkColor || "")) ? ' style="color:' + linkColor + '; text-decoration:none"' : ""
   var list = toList(entities).filter(function (e) {
     return isObject(e) && typeof e.type === "string" && typeof e.offset === "number" && typeof e.length === "number"
         && e.offset >= 0 && e.length > 0 && e.offset + e.length <= s.length
@@ -665,7 +690,7 @@ function richText(text, entities, revealed, codeBackground, emojiImages) {
     var on = list.filter(function (e) { return e.offset <= start && e.offset + e.length >= end })
     var types = on.map(function (e) { return e.type })
     if (types.indexOf("spoiler") >= 0 && !revealed) {
-      out += '<a href="omagram:spoiler">' + piece.replace(/[^\s]/g, "▒") + "</a>"
+      out += '<a href="omagram:spoiler"' + linkStyle + '>' + piece.replace(/[^\s]/g, "▒") + "</a>"
       continue
     }
     // A custom emoji is its sticker once that is on this computer (a local file, never a remote
@@ -684,7 +709,7 @@ function richText(text, entities, revealed, codeBackground, emojiImages) {
     for (var k = 0; k < on.length; k++) {
       var whole = s.slice(on[k].offset, on[k].offset + on[k].length)
       var href = linkFor(on[k], whole)
-      if (href) { html = '<a href="' + escapeHtml(href) + '">' + html + "</a>"; break }
+      if (href) { html = '<a href="' + escapeHtml(href) + '"' + linkStyle + '>' + html + "</a>"; break }
     }
     out += html
   }

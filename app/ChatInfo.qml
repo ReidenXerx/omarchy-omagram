@@ -257,7 +257,8 @@ FocusScope {
             width: parent.width
             wrapMode: Text.Wrap
             maximumLineCount: 8
-            text: detail.modelData.entities ? Model.richText(detail.modelData.value, detail.modelData.entities, true, "transparent")
+            text: detail.modelData.entities ? Model.richText(detail.modelData.value, detail.modelData.entities, true, "transparent", null,
+                                                           Model.hexOf(info.app.accentText))
                                             : detail.modelData.value
             textFormat: detail.modelData.entities ? Text.RichText : Text.PlainText
             color: info.app.foreground

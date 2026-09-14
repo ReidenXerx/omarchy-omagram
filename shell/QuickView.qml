@@ -16,8 +16,9 @@ import "../app/Keymap.js" as Keymap
 // place.
 //
 // Recording and listening happen in Omagram's service, never here: the shell loads no media player, and a round
-// video shows while it records as a small picture the recorder rewrites several times a second. Text from
-// Telegram is only ever shown as plain text.
+// video shows while it records as a small picture the recorder rewrites several times a second. Message text is
+// drawn with its formatting and links (Model.richText escapes everything that comes from Telegram), and a link opens
+// only after the service has checked where it leads. Answering a chat marks what was unread in it read.
 Item {
   id: quick
 
@@ -38,6 +39,14 @@ Item {
   readonly property color muted: Qt.rgba(quick.text.r, quick.text.g, quick.text.b, 0.62)
   readonly property color accentText: quick.ink(Model.readableColor(quick.accent, quick.background, quick.text, 4.5))
   readonly property color onAccent: quick.ink(Model.inkOnFill(quick.accent, [quick.text, quick.background], 4.5))
+  readonly property string linkHex: Model.hexOf(quick.accentText)
+
+  // A message here shows six lines at most; the window has the rest.
+  FontMetrics {
+    id: bodyMetrics
+    font.family: quick.fontFamily
+    font.pixelSize: Style.font.bodySmall
+  }
 
   signal dismissRequested()
   signal openInWindowRequested(real chatId)
@@ -206,10 +215,12 @@ Item {
   function send() {
     var text = composer.text
     if (!quick.replyChatId || quick.sending || text.trim() === "" || !quick.ready) return
+    var chat = quick.replyChat   // before sending: afterwards its newest message is yours
     quick.sending = true
     quick.service.sendText(quick.replyChatId, text, function (answer) {
       quick.sending = false
       if (answer.ok) {
+        quick.markRead(chat)
         composer.text = ""
         quick.dismissRequested()
       } else {
@@ -233,11 +244,16 @@ Item {
   function stopRecording(send) {
     if (!quick.recordingHere) return
     var video = quick.recording.state === "video"
+    var chat = quick.replyChat
     if (send) quick.sending = true
     quick.service.request(video ? "videonote.stop" : "voice.stop", { send: send }, function (answer) {
       quick.sending = false
-      if (!answer.ok) quick.status = answer.error || "Could not send it"
-      else if (send) quick.dismissRequested()
+      if (!answer.ok) {
+        quick.status = answer.error || "Could not send it"
+      } else if (send) {
+        quick.markRead(chat)
+        quick.dismissRequested()
+      }
     })
   }
 
@@ -306,13 +322,64 @@ Item {
 
   function sendSticker(sticker) {
     if (!sticker || !sticker.file || !quick.replyChatId || quick.sending) return
+    var chat = quick.replyChat
     quick.sending = true
     quick.service.request("message.sendSticker", { chatId: quick.replyChatId, fileId: sticker.file.id, width: sticker.width || 0,
                                                    height: sticker.height || 0, emoji: sticker.emoji || "" }, function (answer) {
       quick.sending = false
-      if (answer.ok) quick.dismissRequested()
-      else quick.status = answer.error || "Could not send the sticker"
+      if (answer.ok) {
+        quick.markRead(chat)
+        // The stickers stay open for another one; Esc goes back to the message box.
+        stickerGrid.forceActiveFocus()
+      } else {
+        quick.status = answer.error || "Could not send the sticker"
+      }
     })
+  }
+
+  // ---------------------------------------------------------------- reading and links
+
+  // Answering a chat means you have read it, as in the window: what was unread in it is marked read.
+  function markRead(chat) {
+    if (!quick.ready) return
+    Model.readRequests(chat).forEach(function (r) { quick.service.request(r.cmd, r.args, function () {}) })
+  }
+
+  // A link in a message, as the window treats it: the web opens in your browser and Telegram links in Omagram's
+  // window, both only after the service has checked where they lead; a hidden spoiler shows.
+  function openLink(link, line) {
+    var s = String(link || "")
+    if (s === "omagram:spoiler") {
+      if (line) line.revealed = true
+      return
+    }
+    if (s.indexOf("omagram:mention:") === 0) { quick.openChatOf("username.chat", { username: decodeURIComponent(s.slice(16)) }); return }
+    if (s.indexOf("omagram:user:") === 0) { quick.openChatOf("user.chat", { userId: Number(s.slice(13)) }); return }
+    if (s.indexOf("omagram:") === 0) { quick.openInWindowRequested(quick.shownChatId); return }
+    var url = Model.safeUrl(s)
+    if (!url || !quick.ready) return
+    if (/^mailto:/i.test(url)) { quick.openExternal(url); return }
+    quick.service.request("link.open", { url: url }, function (answer) {
+      if (!answer.ok) { quick.status = answer.error || "That link cannot be opened"; return }
+      var r = answer.result
+      if (r.kind === "external") quick.openExternal(r.url)
+      else quick.openInWindowRequested(r.chatId || quick.shownChatId)
+    })
+  }
+
+  function openChatOf(cmd, args) {
+    if (!quick.ready) return
+    quick.service.request(cmd, args, function (answer) {
+      if (answer.ok && answer.result.chatId) quick.openInWindowRequested(answer.result.chatId)
+      else quick.status = answer.error || "That chat cannot be opened"
+    })
+  }
+
+  function openExternal(url) {
+    var safe = Model.safeUrl(url)
+    if (!safe) { quick.status = "That link cannot be opened"; return }
+    Quickshell.execDetached(["/usr/bin/xdg-open", safe])
+    quick.dismissRequested()
   }
 
   function fileOf(file) {
@@ -831,6 +898,7 @@ Item {
             required property int index
             readonly property var found: Model.rowMessage(quick.history, line.index, line.mid)
             property var kept: null
+            property bool revealed: false   // a spoiler clicked open
             onFoundChanged: if (line.found) line.kept = line.found
             Component.onCompleted: {
               line.kept = line.found
@@ -857,17 +925,28 @@ Item {
               font.bold: !line.message.outgoing
             }
 
-            Text {
-              visible: text !== ""
+            // Text and captions with their formatting and links; any other kind as its one-line description.
+            Item {
+              visible: bodyText.text !== ""
               width: parent.width
-              text: line.drawn ? (line.content.text || "") : Model.previewOf(line.message)
-              textFormat: Text.PlainText
-              wrapMode: Text.Wrap
-              maximumLineCount: 6
-              elide: Text.ElideRight
-              color: quick.text
-              font.family: quick.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              height: visible ? Math.min(bodyText.implicitHeight, Math.ceil(bodyMetrics.lineSpacing * 6)) : 0
+              clip: true
+
+              Text {
+                id: bodyText
+                readonly property bool rich: (line.drawn || line.kind === "text") && (line.content.text || "") !== ""
+                width: parent.width
+                text: bodyText.rich ? Model.richText(line.content.text, line.content.entities, line.revealed, "transparent", null, quick.linkHex)
+                                    : (line.drawn ? "" : Model.previewOf(line.message))
+                textFormat: bodyText.rich ? Text.RichText : Text.PlainText
+                wrapMode: Text.Wrap
+                color: quick.text
+                font.family: quick.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                onLinkActivated: function (link) { quick.openLink(link, line) }
+
+                HoverHandler { cursorShape: bodyText.hoveredLink ? Qt.PointingHandCursor : Qt.ArrowCursor }
+              }
             }
 
             // A sticker, small; bigger under the pointer.
