@@ -256,6 +256,17 @@ function playbackRate(value) {
   return SPEEDS.indexOf(Number(value)) >= 0 ? Number(value) : 1
 }
 
+// The frame of a round video's moving picture that goes with its sound: `elapsedMs` since it started playing at
+// `rate`, at `fps` frames a second, never past the last of `frames`.
+function noteFrame(elapsedMs, rate, fps, frames) {
+  var count = Math.floor(Number(frames) || 0)
+  var perSecond = Number(fps) || 0
+  if (count < 1 || perSecond <= 0) return 0
+  var speed = Number(rate) > 0 ? Number(rate) : 1
+  var frame = Math.floor(Math.max(0, Number(elapsedMs) || 0) / 1000 * speed * perSecond)
+  return Math.min(count - 1, frame)
+}
+
 function nextSpeed(rate) {
   return SPEEDS[(SPEEDS.indexOf(playbackRate(rate)) + 1) % SPEEDS.length]
 }

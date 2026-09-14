@@ -7,8 +7,12 @@ window's camera and cut here to a centred square, H.264 and AAC in MP4, at most 
 Every program runs by absolute path as an argument list, under a deadline and with bounded
 output. Recordings live in a 0700 directory in the runtime directory: the service only ever
 reads a recording from there, and stale ones are deleted.
+
+A round video someone sent moves in the quick view as a small, silent, animated WebP made here
+once and kept in ~/.cache/omagram/notes, because the shell loads no media player.
 """
 import base64
+import hashlib
 import json
 import os
 import pathlib
@@ -227,6 +231,97 @@ def prepare_video_note(source, target):
     if not r.ok:
         raise safe.UnsafeError("could not convert the recording")
     return duration_of(target)
+
+
+# ---------------------------------------------------------------- round videos, moving in the quick view
+
+# The quick view lives in the shell, which loads no media player, so a round video moves there as a small silent
+# animated WebP, made once for each file and kept. Its sound, when you listen, still comes from ffplay.
+NOTE_ANIMATIONS = pathlib.Path(safe.home_dir()) / ".cache" / "omagram" / "notes"
+NOTE_ANIMATION_SIDE = 240                        # pixels; the quick view draws it about 200 across
+NOTE_ANIMATION_RATE = 20                         # frames a second
+NOTE_ANIMATION_SOURCE_MAX = 64 * 1024 * 1024     # a round video is a few megabytes; anything larger is not one
+NOTE_ANIMATION_MAX = 16 * 1024 * 1024            # what ffmpeg may leave behind
+NOTE_ANIMATIONS_MAX = 128 * 1024 * 1024          # kept on disk; the least recently wanted go first
+NOTE_ANIMATIONS_FILES = 512
+NOTE_ANIMATION_TIMEOUT = 90
+
+
+def note_animation_argv(source, target):
+    """A round video as a silent, looping animated WebP: its middle square, NOTE_ANIMATION_SIDE wide, at
+    NOTE_ANIMATION_RATE frames a second, for at most a video message's length."""
+    ffmpeg = str(safe.tool("ffmpeg"))
+    return [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-t", str(NOTE_MAX_SECONDS), "-i", str(source),
+            "-an", "-sn", "-dn",
+            "-vf", f"crop='min(iw,ih)':'min(iw,ih)',fps={NOTE_ANIMATION_RATE},"
+                   f"scale={NOTE_ANIMATION_SIDE}:{NOTE_ANIMATION_SIDE}:flags=lanczos",
+            "-c:v", "libwebp_anim", "-quality", "60", "-compression_level", "3", "-loop", "0", "-f", "webp", str(target)]
+
+
+def note_animation_path(source):
+    """Where the animated picture of `source` is kept: named after the file's path, size and modification time, so a
+    file downloaded again gets a new one."""
+    st = os.stat(source)
+    key = f"{source}\0{st.st_size}\0{st.st_mtime_ns}".encode("utf-8", "surrogateescape")
+    return NOTE_ANIMATIONS / (hashlib.sha256(key).hexdigest() + ".webp")
+
+
+def kept_animation(path):
+    """A finished picture: a regular, non-empty file of yours, within the size limit."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and 0 < st.st_size <= NOTE_ANIMATION_MAX
+
+
+def make_note_animation(source):
+    """The animated picture of the round video at `source`, a file the caller found in TDLib's media folders: the
+    kept one, or made now with ffmpeg into a private temporary file and moved into place."""
+    st = os.stat(source)
+    if not stat.S_ISREG(st.st_mode) or not 0 < st.st_size <= NOTE_ANIMATION_SOURCE_MAX:
+        raise safe.UnsafeError("that is not a round video")
+    safe.ensure_dir(NOTE_ANIMATIONS, 0o700)
+    target = note_animation_path(source)
+    if kept_animation(target):
+        os.utime(target, follow_symlinks=False)   # wanted again: kept longer
+        return target
+    partial = NOTE_ANIMATIONS / f"making-{secrets.token_hex(8)}.webp"
+    try:
+        r = safe.run(note_animation_argv(source, partial), timeout=NOTE_ANIMATION_TIMEOUT, max_output=64 * 1024)
+        if not r.ok or not kept_animation(partial):
+            raise safe.UnsafeError("that round video could not be read")
+        os.replace(partial, target)
+    finally:
+        try:
+            os.unlink(partial)
+        except FileNotFoundError:
+            pass
+    trim_note_animations()
+    return target
+
+
+def trim_note_animations(now=None):
+    """Keeps the pictures under their size and count ceilings, the least recently wanted out first; a half-made one a
+    crash left behind goes after an hour."""
+    now = time.time() if now is None else now
+    try:
+        entries = [(name, st) for name, st in safe.list_dir(NOTE_ANIMATIONS, max_entries=NOTE_ANIMATIONS_FILES * 4)
+                   if name.endswith(".webp") and stat.S_ISREG(st.st_mode)]
+    except (safe.UnsafeError, OSError):
+        return
+    doomed = [name for name, st in entries if name.startswith("making-") and now - st.st_mtime > STALE_SECONDS]
+    kept = sorted(((name, st) for name, st in entries if not name.startswith("making-")), key=lambda e: e[1].st_mtime)
+    total = sum(st.st_size for _, st in kept)
+    while kept and (total > NOTE_ANIMATIONS_MAX or len(kept) > NOTE_ANIMATIONS_FILES):
+        name, st = kept.pop(0)
+        doomed.append(name)
+        total -= st.st_size
+    for name in doomed:
+        try:
+            safe.remove_file(NOTE_ANIMATIONS / name)
+        except (safe.UnsafeError, OSError):
+            pass
 
 
 # ---------------------------------------------------------------- profile photos

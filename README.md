@@ -24,8 +24,9 @@
 
 - **Answer from the bar.** The quick view opens under Omagram's mark, or over everything on a key.
   Find a chat by typing, then reply in words, with one of your recent stickers, or with a voice or
-  round video message recorded on the spot. Voice and round video messages play right there, photos
-  and videos open over the whole screen, and older messages come as you scroll up. Close it in the
+  round video message recorded on the spot. Voice and round video messages play right there, a round
+  video moving in a big circle while you point at it or listen; photos and videos open over the
+  whole screen, and older messages come as you scroll up. Close it in the
   middle of a conversation and for the next hour it opens back on that chat, with anything unsent.
 - **Know who wrote without looking.** Every person has a notification sound of their own: a couple
   of soft drops generated from who they are. The same person always sounds the same, and a busy day
@@ -115,7 +116,8 @@
   latest messages and answer without leaving what you are doing — in words, with one of your
   recent stickers, or with a voice or round video message recorded on the spot (`Enter` sends it,
   `Esc` throws it away). Voice and round video messages play right there, a sticker someone sent
-  shows bigger under the pointer, and photos, videos and GIFs show as small sharp pictures that open
+  shows bigger under the pointer, a round video moves in a big circle while you point at it or listen
+  to it, and photos, videos and GIFs show as small sharp pictures that open
   over the whole screen (a video plays in your own video player). Scroll up for older messages.
   Close it in a chat and for the next hour it opens there again, with anything you had not sent;
   Omagram's mark in its corner opens the whole window.
@@ -269,7 +271,8 @@ omarchy-shell reidenxerx.omagram.panel toggle        # the quick view in the bar
 In the quick view: type to search, `↑` `↓` or `Ctrl+J` `Ctrl+K` to choose, `Enter` to answer and
 `Enter` again to send. In a chat, `Ctrl+R` records a voice message and `Ctrl+Shift+R` a round
 video message (`Enter` sends it, `Esc` throws it away), `Ctrl+S` opens your recent stickers,
-`Ctrl+P` plays the newest voice or round video message (again to stop), `Ctrl+O` opens the chat
+`Ctrl+P` plays the newest voice or round video message (again to stop; a round video shows big
+while it plays), `Ctrl+O` opens the chat
 in the window and `Esc` goes back. Over a photo or video: `←` `→` step through them, `Enter` plays
 a video in your video player, `o` opens the chat in the window and `Esc` closes.
 
@@ -289,7 +292,8 @@ a video in your video player, `o` opens the chat in the window and `Esc` closes.
 - **Your data stays on your machine**, in `~/.local/share/omagram` (TDLib's database, encrypted
   with a key kept in your keyring, downloaded files, and in `sent/` the voice and video messages you
   send, so your own messages play from them) and `~/.cache/omagram` (the
-  TDLib build and unpacked animated stickers). Omagram sends nothing anywhere except to Telegram.
+  TDLib build, unpacked animated stickers, and the small silent animations that round videos move
+  with in the quick view). Omagram sends nothing anywhere except to Telegram.
 - **Secrets are never in files, command lines or logs.** The API id, hash and database key
   move through `secret-tool` on stdin and stdout. TDLib's own log is off, because at higher
   verbosity it records message text.

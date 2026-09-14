@@ -2657,6 +2657,42 @@ class Daemon:
             raise BadRequest("that is not a recording of Omagram's")
         self.respond(client, rid, {})
 
+    def cmd_videonote_animation(self, client, rid, args):
+        """A round video message moving in the quick view, which loads no media player: the file is fetched when it
+        is not here yet, then made into a small silent looping picture once and kept (see
+        omagram_media.make_note_animation). Answers the picture's path and its frames a second."""
+        file_id = arg_int(args, "fileId", 1, FILE_ID_MAX)
+        if not safe.has_tool("ffmpeg"):
+            raise BadRequest("a moving round video needs ffmpeg")
+
+        def fetched(f):
+            view = model.file_view(f, self.state.files_root)
+            if not view or not view["path"]:
+                raise BadRequest("the round video could not be fetched")
+            source = view["path"]
+            try:
+                kept = media.note_animation_path(source)
+            except OSError:
+                raise BadRequest("the round video could not be read") from None
+            if media.kept_animation(kept):
+                try:
+                    os.utime(kept, follow_symlinks=False)   # wanted again: kept longer
+                except OSError:
+                    pass
+                return {"path": str(kept), "fps": media.NOTE_ANIMATION_RATE}
+            if self.jobs >= JOBS_MAX:
+                raise BadRequest("still preparing something else; ask again in a moment")
+
+            def done(path, error):
+                if error is not None or not path:
+                    self.respond_error(client, rid, "that round video could not be shown")
+                else:
+                    self.respond(client, rid, {"path": str(path), "fps": media.NOTE_ANIMATION_RATE})
+            self.background(lambda: media.make_note_animation(source), done)
+            return DEFERRED
+        self.td_send({"@type": "downloadFile", "file_id": file_id, "priority": 32, "offset": 0, "limit": 0, "synchronous": True},
+                     client, rid, fetched)
+
     # ---------------------------------------------------------------- settings
 
     def apply_globals(self):
@@ -3399,6 +3435,7 @@ COMMANDS = {
     "videonote.discard": ("cmd_videonote_discard", True),
     "videonote.record": ("cmd_videonote_record", True),
     "videonote.stop": ("cmd_videonote_stop", True),
+    "videonote.animation": ("cmd_videonote_animation", True),
     "media.play": ("cmd_media_play", True),
     "media.stop": ("cmd_media_stop", True),
 }

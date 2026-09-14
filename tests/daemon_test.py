@@ -589,6 +589,47 @@ class MediaCommands(Harness):
             self.d.trim_lottie_cache()
         self.assertEqual(sorted(int(p.stem, 16) for p in cache.iterdir()), [2, 3, 4, 5])
 
+    def test_a_round_video_moves_in_the_quick_view_as_a_kept_picture(self):
+        note = self.files / "video_notes" / "n.mp4"
+        note.parent.mkdir(mode=0o700)
+        note.write_bytes(b"mp4")
+        made = []
+
+        def make(source):
+            made.append(source)
+            target = self.root / "notes" / "made.webp"
+            target.parent.mkdir(mode=0o700, exist_ok=True)
+            target.write_bytes(b"RIFF")
+            return target
+        for patch in (mock.patch.object(self.d.media, "NOTE_ANIMATIONS", self.root / "notes"),
+                      mock.patch.object(self.d.media, "make_note_animation", make),
+                      mock.patch.object(self.d.safe, "has_tool", lambda name: True)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+        def ask(rid, path):
+            before = self.sent_count("downloadFile")
+            self.send(self.conn, {"id": rid, "cmd": "videonote.animation", "args": {"fileId": 11}})
+            query = self.next_query("downloadFile", before)
+            self.assertEqual((query["file_id"], query["priority"], query["synchronous"]), (11, 32, True), "fetched at once")
+            self.td_event(self.file_event(query["@extra"], 11, path))
+            return self.read(self.conn, lambda v: v.get("id") == rid)
+
+        answer = ask(95, note)
+        self.assertEqual(answer["result"], {"path": str(self.root / "notes" / "made.webp"), "fps": self.d.media.NOTE_ANIMATION_RATE})
+        self.assertEqual(made, [str(note)])
+        kept = self.d.media.note_animation_path(str(note))
+        kept.write_bytes(b"RIFF")
+        self.assertEqual(ask(96, note)["result"]["path"], str(kept), "a kept picture is answered at once")
+        self.assertEqual(len(made), 1)
+        self.assertFalse(ask(97, self.root / "elsewhere.mp4")["ok"], "only files in TDLib's media folders")
+        kept.unlink()
+
+        def broken(source):
+            raise self.d.safe.UnsafeError("not a video")
+        with mock.patch.object(self.d.media, "make_note_animation", broken):
+            self.assertFalse(ask(98, note)["ok"], "a failure is an answer, not silence")
+
     def test_file_progress_reaches_clients(self):
         self.td_event({"@type": "updateFile", "@client_id": 1, "file": {
             "@type": "file", "id": 77, "size": 10, "expected_size": 10,

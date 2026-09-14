@@ -10,13 +10,14 @@ import "../app/Keymap.js" as Keymap
 
 // The quick view: find a chat, read its latest messages and answer without leaving what you are doing -- in
 // words, with a sticker, a voice message or a round video message -- and listen to the voice and round video
-// messages people sent, seeing their stickers (bigger under the pointer) and their photos and videos over the
+// messages people sent, seeing their stickers and round videos (bigger under the pointer) and their photos and videos over the
 // whole screen (MediaViewer.qml, in a window of its own). The same view is the quick-reply
 // overlay, wide, with the chats beside the chat, and the bar's panel, compact, where the chat takes the chats'
 // place.
 //
 // Recording and listening happen in Omagram's service, never here: the shell loads no media player, and a round
-// video shows while it records as a small picture the recorder rewrites several times a second. Message text is
+// video shows while it records as a small picture the recorder rewrites several times a second, while one
+// someone sent moves as a small silent animated picture the service makes once. Message text is
 // drawn with its formatting and links (Model.richText escapes everything that comes from Telegram), and a link opens
 // only after the service has checked where it leads. Answering a chat marks what was unread in it read.
 Item {
@@ -93,6 +94,8 @@ Item {
   property var stickers: []
   property int stickerCursor: 0
   property var hoverSticker: null
+  property var hoverNote: null          // the round video message under the pointer
+  property var noteAnimations: ({})     // round videos' moving pictures by file id: {path, fps}, or {} while one is made
   property var asked: ({})   // pictures already asked for, by file id
   readonly property int rememberMs: 60 * 60 * 1000   // how long a closed quick view keeps its chat
   // Round corners and circles take a shader, which the software renderer lacks: there pictures stay square.
@@ -105,6 +108,18 @@ Item {
     : quick.hints(["quick.reply", "answers", "quick.openInWindow", "opens in Omagram", "quick.close", "closes"])
   readonly property var playing: quick.service && quick.service.playing ? quick.service.playing : ({ fileId: 0 })
   readonly property var recording: quick.service && quick.service.recording ? quick.service.recording : ({ state: "idle" })
+  // The round video message playing in the chat shown, when what plays is one.
+  readonly property var playingNote: {
+    var id = quick.playing.fileId
+    if (!id) return null
+    for (var i = quick.history.length - 1; i >= 0; i--) {
+      var m = quick.history[i]
+      var media = m && m.content && m.content.kind === "videoNote" ? m.content.media : null
+      if (media && media.file && media.file.id === id) return media
+    }
+    return null
+  }
+  onPlayingNoteChanged: if (quick.playingNote) quick.wantNoteAnimation(quick.playingNote)
   readonly property bool recordingHere: quick.recording.state !== "idle" && quick.replyChatId !== 0 && quick.recording.chatId === quick.replyChatId
   readonly property Item focusItem: quick.replyChatId ? composer : search
   property bool loadingOlder: false
@@ -139,6 +154,8 @@ Item {
     quick.cursor = 0
     quick.stickersOpen = false
     quick.hoverSticker = null
+    quick.hoverNote = null
+    quick.noteAnimations = ({})
     quick.asked = ({})
     quick.viewingId = 0
     search.text = ""
@@ -173,6 +190,7 @@ Item {
     quick.sending = false
     quick.stickersOpen = false
     quick.hoverSticker = null
+    quick.hoverNote = null
   }
 
   // ---------------------------------------------------------------- chats and answering
@@ -441,6 +459,29 @@ Item {
     quick.service.request("file.download", { fileId: known.id, priority: 32 }, function (answer) {
       if (answer.ok && answer.result && answer.result.id && quick.service.noteFile) quick.service.noteFile(answer.result)
     })
+  }
+
+  // ---------------------------------------------------------------- round videos, moving
+
+  // A round video someone sent moves here as a small silent animated picture the service makes once, since the shell
+  // loads no media player. It is asked for when the message is pointed at or played, and again later if that failed.
+  function wantNoteAnimation(media) {
+    var id = media && media.file ? media.file.id : 0
+    if (!id || !quick.service || !quick.ready || quick.noteAnimations[id] !== undefined) return
+    quick.setNoteAnimation(id, {})
+    quick.service.request("videonote.animation", { fileId: id }, function (answer) {
+      if (answer.ok && answer.result && answer.result.path) quick.setNoteAnimation(id, { path: answer.result.path, fps: answer.result.fps || 20 })
+      else quick.setNoteAnimation(id, undefined)
+    })
+  }
+
+  function setNoteAnimation(id, value) {
+    var next = {}
+    for (var key in quick.noteAnimations) {
+      if (String(key) !== String(id)) next[key] = quick.noteAnimations[key]
+    }
+    if (value !== undefined) next[id] = value
+    quick.noteAnimations = next
   }
 
   // ---------------------------------------------------------------- over the whole screen
@@ -1162,6 +1203,15 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
+                onContainsMouseChanged: {
+                  if (line.kind !== "videoNote") return
+                  if (containsMouse) {
+                    quick.hoverNote = line.media
+                    quick.wantNoteAnimation(line.media)
+                  } else if (quick.hoverNote === line.media) {
+                    quick.hoverNote = null
+                  }
+                }
                 onClicked: quick.togglePlay(line.message)
               }
             }
@@ -1189,6 +1239,76 @@ Item {
             source: quick.hoverSticker ? quick.stickerSource(quick.hoverSticker) : ""
             sourceSize.width: 384
             sourceSize.height: 384
+          }
+        }
+
+        // The round video under the pointer, or the one you are listening to, bigger and moving. It is silent: the
+        // sound is the service's, and while it plays the picture starts where the sound is.
+        Item {
+          id: noteLook
+          readonly property var media: quick.hoverNote || quick.playingNote
+          readonly property var moving: noteLook.media && noteLook.media.file ? quick.noteAnimations[noteLook.media.file.id] : undefined
+          readonly property bool playingThis: !!noteLook.media && !!noteLook.media.file && quick.playing.fileId === noteLook.media.file.id
+          visible: !!noteLook.media && !quick.hoverSticker
+          z: 10
+          anchors.right: parent.right
+          anchors.top: parent.top
+          width: Style.space(208)
+          height: width
+
+          function keepUp() {
+            if (!noteLook.playingThis || noteMotion.status !== Image.Ready) return
+            noteMotion.currentFrame = Model.noteFrame(Date.now() - quick.playing.startedAt, quick.playing.rate,
+                                                      noteLook.moving ? noteLook.moving.fps : 20, noteMotion.frameCount)
+          }
+          onPlayingThisChanged: noteLook.keepUp()
+
+          Item {
+            id: noteLookFace
+            anchors.fill: parent
+            visible: !quick.rounded
+
+            Image {
+              anchors.fill: parent
+              visible: noteMotion.status !== Image.Ready
+              fillMode: Image.PreserveAspectCrop
+              asynchronous: true
+              source: noteLook.media ? (quick.urlOf(quick.stillOf("videoNote", noteLook.media)) || Model.miniUrl(noteLook.media.mini)) : ""
+            }
+            AnimatedImage {
+              id: noteMotion
+              anchors.fill: parent
+              fillMode: Image.PreserveAspectCrop
+              asynchronous: true
+              cache: false   // every frame of a minute of video would otherwise stay in memory
+              source: noteLook.visible && noteLook.moving && noteLook.moving.path ? Model.fileUrl(noteLook.moving.path) : ""
+              playing: noteLook.visible && status === Image.Ready
+              speed: noteLook.playingThis && quick.playing.rate > 0 ? quick.playing.rate : 1
+              onStatusChanged: noteLook.keepUp()
+            }
+          }
+          Rectangle {
+            id: noteLookMask
+            anchors.fill: parent
+            radius: width / 2
+            visible: false
+            layer.enabled: true
+          }
+          MultiEffect {
+            anchors.fill: parent
+            visible: quick.rounded
+            source: noteLookFace
+            maskEnabled: true
+            maskSource: noteLookMask
+            maskThresholdMin: 0.5
+            maskSpreadAtMin: 1.0
+          }
+          Rectangle {
+            anchors.fill: parent
+            radius: quick.rounded ? width / 2 : Style.cornerRadius
+            color: "transparent"
+            border.width: 1
+            border.color: Qt.rgba(quick.text.r, quick.text.g, quick.text.b, 0.16)
           }
         }
 
