@@ -73,6 +73,13 @@ Item {
     onTriggered: if (!daemon.running) daemon.running = true
   }
 
+  // Omagram in the app launcher: Omarchy's launcher lists desktop entries, not plugins, so each start
+  // checks ~/.local/share/applications/omagram.desktop and rewrites it only when it is out of date.
+  Process {
+    command: [service.python, service.binDir + "omagram", "--desktop-entry"]
+    running: true
+  }
+
   // ---------------------------------------------------------------- the connection
 
   OmagramClient {

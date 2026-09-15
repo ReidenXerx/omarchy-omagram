@@ -1,9 +1,10 @@
 #!/usr/bin/python3
 """Open Omagram's window, or focus it if it is already open.
 
-  omagram             open or focus the window (starting the service if needed)
-  omagram --chat <id> the same, opened at that chat
-  omagram --service   only make sure the background service is running
+  omagram                  open or focus the window (starting the service if needed)
+  omagram --chat <id>      the same, opened at that chat
+  omagram --service        only make sure the background service is running
+  omagram --desktop-entry  add or refresh Omagram's entry in the app launcher
 
 The window is its own Quickshell process with the app id "omagram", so Hyprland treats it
 like any application window: it tiles, sits on a workspace and matches window rules. It
@@ -16,6 +17,10 @@ that links them in:
     bin     -> <plugin>/bin
     Commons -> <Omarchy>/shell/Commons
     Ui      -> <Omarchy>/shell/Ui
+
+Omarchy's app launcher lists desktop entries and reads nothing from plugins, so the shell
+service runs `omagram --desktop-entry` whenever it starts:
+~/.local/share/applications/omagram.desktop then points at this copy of the plugin.
 """
 import json
 import os
@@ -32,6 +37,7 @@ sys.path.insert(0, str(BIN))
 import plugin_safety as safe  # noqa: E402
 
 PLUGIN = BIN.parent
+PLUGIN_ID = "reidenxerx.omagram"
 RUN = pathlib.Path(safe.runtime_dir()) / "omagram"
 SOCKET = RUN / "omagram.sock"
 APP_ROOT = RUN / "app"
@@ -44,6 +50,14 @@ SERVICE_WAIT = 10.0
 # machines without VA-API. A value set in your environment wins.
 MEDIA_ENV = {"QT_FFMPEG_DECODING_HW_DEVICE_TYPES": "vaapi,cuda", "QT_FFMPEG_ENCODING_HW_DEVICE_TYPES": "vaapi"}
 SHELL_QML = 'import Quickshell\nimport "App" as App\n\nShellRoot {\n  App.Main {}\n}\n'
+
+# The launcher entry. The plugin's path goes into it only when it is made of characters that need
+# no quoting in a desktop entry, as the menu installer does for menu commands.
+DESKTOP_FILE = "omagram.desktop"
+DESKTOP_MAX = 64 * 1024
+DESKTOP_MARK = "X-Omagram-Managed"
+DESKTOP_KEPT = ("NoDisplay", "Hidden")   # set to true by you, they stay when the entry is refreshed
+PLAIN_PATH = re.compile(r"/[A-Za-z0-9._+/-]+")
 
 
 def service_running():
@@ -129,6 +143,88 @@ def prepare_root():
     safe.write_file(APP_ROOT / "shell.qml", SHELL_QML, mode=0o600)
 
 
+def applications_dir():
+    """Your own desktop entries: $XDG_DATA_HOME/applications, by default ~/.local/share/applications."""
+    data = os.environ.get("XDG_DATA_HOME", "")
+    base = pathlib.Path(data) if data.startswith("/") else pathlib.Path(safe.home_dir()) / ".local" / "share"
+    return base / "applications"
+
+
+def desktop_entry(kept=()):
+    """The launcher entry for this copy of the plugin, or None when its launcher or icon is missing
+    or their path would need quoting. Telegram's naming rule holds: the word is shown only as
+    "Unofficial Telegram client" (the lower-case keyword is for search and never shown)."""
+    launcher, icon = PLUGIN / "bin" / "omagram", PLUGIN / "assets" / "omagram.svg"
+    if not (PLAIN_PATH.fullmatch(str(launcher)) and PLAIN_PATH.fullmatch(str(icon))):
+        return None
+    if not (launcher.is_file() and icon.is_file()):
+        return None
+    lines = [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Version=1.5",
+        "Name=Omagram",
+        "GenericName=Unofficial Telegram client",
+        "Comment=Chats, voice and round video messages in your Omarchy theme",
+        f"Exec=/usr/bin/python3 {launcher}",
+        f"TryExec={launcher}",
+        f"Icon={icon}",
+        "Terminal=false",
+        "Categories=Network;InstantMessaging;Chat;",
+        "Keywords=messages;chat;messenger;telegram;",
+        f"StartupWMClass={APP_ID}",
+    ]
+    lines += [f"{key}=true" for key in DESKTOP_KEPT if key in kept]
+    lines.append(f"{DESKTOP_MARK}={PLUGIN_ID}")
+    return "\n".join(lines) + "\n"
+
+
+def read_entry(blob):
+    """(written by Omagram, the keys you set to true that it keeps) for the file at the entry's path."""
+    try:
+        text = blob.decode("utf-8")
+    except UnicodeDecodeError:
+        return False, set()
+    group, ours, kept = "", False, set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            group = line
+            continue
+        key, sep, value = line.partition("=")
+        if group != "[Desktop Entry]" or not sep:
+            continue
+        key, value = key.strip(), value.strip()
+        if key == DESKTOP_MARK and value == PLUGIN_ID:
+            ours = True
+        elif key in DESKTOP_KEPT and value == "true":
+            kept.add(key)
+    return ours, kept
+
+
+def install_desktop_entry():
+    """Put Omagram into the app launcher. Writes only a missing or outdated entry of its own, never
+    over a file at that path that Omagram did not write, and keeps NoDisplay or Hidden when you set
+    them to take it off the launcher. Answers written, unchanged, foreign or skipped."""
+    path = applications_dir() / DESKTOP_FILE
+    try:
+        current = safe.read_file(path, DESKTOP_MAX)   # a symbolic link or a file not ours raises
+    except safe.TooLarge:
+        return "foreign"
+    kept = set()
+    if current is not None:
+        ours, kept = read_entry(current)
+        if not ours:
+            return "foreign"
+    wanted = desktop_entry(kept)
+    if wanted is None:
+        return "skipped"
+    if current == wanted.encode("utf-8"):
+        return "unchanged"
+    safe.write_file(path, wanted, mode=0o644)
+    return "written"
+
+
 def focus_existing():
     try:
         r = safe.run(["hyprctl", "-j", "clients"], timeout=4, max_output=4 * 1024 * 1024)
@@ -163,6 +259,9 @@ def request_open(chat_id):
 def main(argv):
     if argv[1:] == ["--service"]:
         return 0 if start_service() else 1
+    if argv[1:] == ["--desktop-entry"]:
+        print(f"omagram: launcher entry {install_desktop_entry()}", file=sys.stderr)
+        return 0
     chat_id = None
     if len(argv) == 3 and argv[1] == "--chat" and re.fullmatch(r"-?[0-9]{1,20}", argv[2]):
         chat_id = int(argv[2])

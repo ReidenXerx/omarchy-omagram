@@ -154,6 +154,9 @@ job count from your memory). Nothing is installed system-wide and nothing needs 
 the library ends up in `~/.local/share/omagram/lib/`. `omagram-build-tdlib --check` tells you
 whether a usable library is installed.
 
+Omagram shows up in the app launcher (Super + Space) by itself: when the shell starts it, it writes
+`~/.local/share/applications/omagram.desktop`, which opens this copy of the plugin.
+
 Optionally add Omagram to the Omarchy menu (Trigger → Omagram):
 
 ```bash
@@ -164,7 +167,8 @@ Optionally add Omagram to the Omarchy menu (Trigger → Omagram):
 
 1. Create your own API id at [my.telegram.org](https://my.telegram.org) → *API development
    tools*. Telegram requires every client to use its own id; Omagram does not ship one.
-2. Open Omagram — from the menu, by right-clicking the bar icon, or with
+2. Open Omagram — search for it in the app launcher (Super + Space), from the menu, by
+   right-clicking the bar icon, or with
    `/usr/bin/python3 ~/.config/omarchy/plugins/reidenxerx.omagram/bin/omagram`.
 3. Enter the API id and hash, then your phone number, the code Telegram sends you, and your
    two-step verification password if you have one. Or choose **Use a QR code instead** and scan
@@ -286,7 +290,8 @@ a video in your video player, `o` opens the chat in the window and `Esc` closes.
   the window starts it too if needed, and only one instance ever runs.
 - **`bin/omagram`** — opens or focuses the window, a separate Quickshell process with its own
   Hyprland class `omagram`, so it tiles and takes window rules like any application.
-  `omagram --chat <id>` opens it at a chat.
+  `omagram --chat <id>` opens it at a chat, and `omagram --desktop-entry` keeps its entry in the
+  app launcher up to date (the shell service runs it whenever it starts).
 - **`shell/`** — the parts that live inside Omarchy's shell: the service entry, the bar widget,
   and the quick view it shows in its panel and in the overlay.
 
@@ -297,6 +302,10 @@ a video in your video player, `o` opens the chat in the window and `Esc` closes.
   send, so your own messages play from them) and `~/.cache/omagram` (the
   TDLib build, unpacked animated stickers, and the small silent animations that round videos move
   with in the quick view). Omagram sends nothing anywhere except to Telegram.
+- **Omagram in the app launcher.** The shell writes `~/.local/share/applications/omagram.desktop`.
+  It rewrites that file only while it is Omagram's own (marked `X-Omagram-Managed`) and out of
+  date, never replaces a file there that it did not write, and keeps `NoDisplay=true` if you set
+  it to take Omagram off the launcher.
 - **Secrets are never in files, command lines or logs.** The API id, hash and database key
   move through `secret-tool` on stdin and stdout. TDLib's own log is off, because at higher
   verbosity it records message text.
@@ -325,6 +334,7 @@ python3 tests/daemon_test.py    # the service on a sandboxed socket with a fake 
 python3 tests/notify_test.py    # notifications with a fake bus
 python3 tests/media_test.py     # preparing voice and video messages
 python3 tests/settings_test.py  # settings and global shortcuts, with Hyprland faked
+python3 tests/install_test.py   # the menu entries, the window's runtime root, the launcher entry
 node tests/model-test.js        # the window's list, message and menu logic
 node tests/keymap-test.js       # shortcuts: parsing, matching, clashes
 ```
@@ -334,6 +344,7 @@ node tests/keymap-test.js       # shortcuts: parsing, matching, clashes
 ```bash
 bin/omagram-menu-install remove                 # if you added the menu entries
 omarchy plugin remove reidenxerx.omagram
+rm ~/.local/share/applications/omagram.desktop  # its entry in the app launcher
 rm -rf ~/.local/share/omagram ~/.cache/omagram  # the session, downloads and the TDLib build
 secret-tool clear service omagram               # the API id, hash and database key
 ```

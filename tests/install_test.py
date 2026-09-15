@@ -113,5 +113,117 @@ class BuildLog(Sandbox):
         self.assertTrue(data.endswith(b"x" * 700))
 
 
+class DesktopEntry(Sandbox):
+    """Omagram's entry in the app launcher: ~/.local/share/applications/omagram.desktop."""
+
+    def make_plugin(self, where):
+        (where / "bin").mkdir(parents=True)
+        (where / "assets").mkdir()
+        launcher = where / "bin" / "omagram"
+        launcher.write_text("#!/usr/bin/python3\n")
+        os.chmod(launcher, 0o755)
+        (where / "assets" / "omagram.svg").write_text("<svg/>\n")
+        return where
+
+    def setUp(self):
+        super().setUp()
+        self.launcher = load("omagram")
+        self.plugin = self.make_plugin(self.root / "plugins" / "reidenxerx.omagram")
+        self.apps = self.root / "share" / "applications"
+        self.entry = self.apps / "omagram.desktop"
+        self.patch(self.launcher, "PLUGIN", self.plugin)
+        self.patch(self.launcher, "applications_dir", lambda: self.apps)
+
+    def fields(self):
+        return dict(line.split("=", 1) for line in self.entry.read_text().splitlines() if "=" in line)
+
+    def test_the_entry_opens_this_copy_of_the_plugin(self):
+        self.assertEqual(self.launcher.install_desktop_entry(), "written")
+        fields = self.fields()
+        self.assertEqual(fields["Name"], "Omagram")
+        self.assertEqual(fields["Exec"], f"/usr/bin/python3 {self.plugin}/bin/omagram")
+        self.assertEqual(fields["TryExec"], f"{self.plugin}/bin/omagram")
+        self.assertEqual(fields["Icon"], f"{self.plugin}/assets/omagram.svg")
+        self.assertEqual(fields["StartupWMClass"], "omagram")
+        self.assertEqual(fields["X-Omagram-Managed"], "reidenxerx.omagram")
+        self.assertEqual(self.entry.stat().st_mode & 0o777, 0o644)
+
+    def test_telegram_is_named_only_as_an_unofficial_client(self):
+        self.launcher.install_desktop_entry()
+        fields = self.fields()
+        self.assertNotIn("Telegram", fields["Name"])
+        for key in ("GenericName", "Comment"):
+            self.assertEqual(fields[key].count("Telegram"), fields[key].count("Unofficial Telegram"), key)
+
+    def test_the_next_start_leaves_an_up_to_date_entry_alone(self):
+        self.launcher.install_desktop_entry()
+        before = self.entry.stat()
+        self.assertEqual(self.launcher.install_desktop_entry(), "unchanged")
+        after = self.entry.stat()
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+
+    def test_an_entry_for_an_older_copy_is_brought_up_to_date(self):
+        self.launcher.install_desktop_entry()
+        self.entry.write_text(self.entry.read_text().replace(str(self.plugin), "/old/place"))
+        self.assertEqual(self.launcher.install_desktop_entry(), "written")
+        self.assertNotIn("/old/place", self.entry.read_text())
+
+    def test_hiding_it_from_the_launcher_is_kept(self):
+        self.launcher.install_desktop_entry()
+        self.entry.write_text(self.entry.read_text().replace("[Desktop Entry]\n", "[Desktop Entry]\nNoDisplay = true\n"))
+        self.assertEqual(self.launcher.install_desktop_entry(), "written")
+        self.assertEqual(self.fields()["NoDisplay"], "true")
+        self.assertEqual(self.launcher.install_desktop_entry(), "unchanged")
+
+    def test_a_file_omagram_did_not_write_is_never_touched(self):
+        self.apps.mkdir(parents=True)
+        mine = "[Desktop Entry]\nType=Application\nName=Someone else\nExec=/usr/bin/true\n"
+        self.entry.write_text(mine)
+        self.assertEqual(self.launcher.install_desktop_entry(), "foreign")
+        self.assertEqual(self.entry.read_text(), mine)
+        # the mark counts only inside the [Desktop Entry] group
+        self.entry.write_text(mine + "[Desktop Action x]\nX-Omagram-Managed=reidenxerx.omagram\n")
+        self.assertEqual(self.launcher.install_desktop_entry(), "foreign")
+
+    def test_a_symlink_or_an_oversized_file_is_not_written_through(self):
+        self.apps.mkdir(parents=True)
+        target = self.root / "target"
+        target.write_text("keep")
+        self.entry.symlink_to(target)
+        with self.assertRaises(safe.UnsafeError):
+            self.launcher.install_desktop_entry()
+        self.assertEqual(target.read_text(), "keep")
+        self.entry.unlink()
+        huge = b"[Desktop Entry]\nX-Omagram-Managed=reidenxerx.omagram\n" + b"#" * self.launcher.DESKTOP_MAX
+        self.entry.write_bytes(huge)
+        self.assertEqual(self.launcher.install_desktop_entry(), "foreign")
+        self.assertEqual(self.entry.read_bytes(), huge)
+
+    def test_a_plugin_path_that_would_need_quoting_gets_no_entry(self):
+        odd = self.make_plugin(self.root / "with space" / "reidenxerx.omagram")
+        with mock.patch.object(self.launcher, "PLUGIN", odd):
+            self.assertEqual(self.launcher.install_desktop_entry(), "skipped")
+        self.assertFalse(self.entry.exists())
+
+    def test_the_applications_folder_follows_xdg_data_home(self):
+        fresh = load("omagram")
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "/somewhere/data"}):
+            self.assertEqual(fresh.applications_dir(), pathlib.Path("/somewhere/data/applications"))
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": "relative/data"}):
+            self.assertEqual(fresh.applications_dir(), pathlib.Path(safe.home_dir()) / ".local/share/applications")
+
+    def test_the_entry_passes_desktop_file_validate(self):
+        if not safe.has_tool("desktop-file-validate"):
+            self.skipTest("desktop-file-validate is not installed")
+        self.launcher.install_desktop_entry()
+        result = safe.run(["desktop-file-validate", str(self.entry)], timeout=10, max_output=65536)
+        report = result.text() + result.stderr.decode("utf-8", "replace")
+        self.assertTrue(result.ok, report)
+        self.assertNotIn("error", report.lower(), report)
+
+    def test_the_shell_service_refreshes_it_when_it_starts(self):
+        self.assertIn('service.binDir + "omagram", "--desktop-entry"]', (ROOT / "shell" / "Service.qml").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
