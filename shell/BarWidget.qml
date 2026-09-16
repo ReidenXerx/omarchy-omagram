@@ -1,11 +1,12 @@
 import QtQuick
+import Quickshell
 import qs.Commons
 import qs.Ui
 import "../app" as App
 
 // Omagram in the bar: its mark, with a dot while unmuted chats have unread messages.
 // Left click opens the quick panel (recent chats, reply without leaving what you are doing),
-// right click opens the window.
+// right click opens a menu: the window, notifications on or off, or quit.
 BarWidget {
   id: root
   moduleName: "reidenxerx.omagram"
@@ -56,6 +57,78 @@ BarWidget {
   onBarChanged: { findService(); injectPanel() }
   onSettingsChanged: injectPanel()
 
+  // The right-click menu. PopupCard is what the bar's own widgets use for one, so it sits
+  // where the tray's menu sits and closes when you click away.
+  property bool menuOpen: false
+
+  readonly property var menuEntries: [
+    { action: "open", label: "Open Omagram" },
+    { action: "quiet", label: root.omagram && root.omagram.quiet ? "Turn notifications on" : "Mute notifications" },
+    { action: "quit", label: "Quit" }
+  ]
+
+  function runMenu(action) {
+    root.menuOpen = false
+    if (!root.omagram) return
+    if (action === "open") root.omagram.openWindow()
+    else if (action === "quiet") root.omagram.setQuiet(!root.omagram.quiet)
+    else if (action === "quit") { root.close(); root.omagram.quit() }
+  }
+
+  PopupCard {
+    id: menu
+    anchorItem: button
+    owner: root
+    bar: root.bar
+    open: root.menuOpen && !!root.omagram
+    padding: Style.space(8)
+    contentWidth: menu.fittedContentWidth(Style.space(220))
+    contentHeight: menu.fittedContentHeight(menuColumn.implicitHeight)
+    onVisibleChanged: if (!visible) root.menuOpen = false
+
+    Column {
+      id: menuColumn
+      anchors.left: parent.left
+      anchors.right: parent.right
+      spacing: Style.space(2)
+
+      Repeater {
+        model: root.menuEntries
+
+        delegate: Rectangle {
+          id: entry
+          required property var modelData
+          width: parent.width
+          height: Style.space(30)
+          radius: Style.space(6)
+          color: entryHover.hovered ? Style.hoverFillFor(Color.popups.text, Color.accent) : "transparent"
+
+          HoverHandler { id: entryHover }
+
+          Text {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.leftMargin: Style.space(10)
+            anchors.rightMargin: Style.space(10)
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: entry.modelData.label
+            elide: Text.ElideRight
+            color: entry.modelData.action === "quit" ? Color.urgent : Color.popups.text
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+          }
+
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.runMenu(entry.modelData.action)
+          }
+        }
+      }
+    }
+  }
+
   Loader {
     id: panelLoader
     active: true
@@ -83,8 +156,13 @@ BarWidget {
     tooltipText: !root.ready ? "Omagram"
                : (root.unread > 0 ? "Omagram: " + root.unread + " unread" : "Omagram: no unread messages")
     onPressed: function (b) {
-      if (b === Qt.RightButton && root.omagram) root.omagram.openWindow()
-      else root.togglePanel()
+      if (b === Qt.RightButton) root.menuOpen = !root.menuOpen
+      else {
+        root.menuOpen = false
+        // Reaching for Omagram after quitting brings the service back.
+        if (root.omagram && root.omagram.stopped) root.omagram.stopped = false
+        root.togglePanel()
+      }
     }
 
     // A dot, like the bell's unread mark, drawn over the button so the glyph stays centred.

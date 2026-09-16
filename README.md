@@ -110,9 +110,13 @@
   so you can tell who wrote without looking and a busy day never rings in your ears; Settings picks
   what makes them (Drop, Pop or Knock, or none) and a person's info can play theirs or give them
   another. Not while Do Not Disturb is on.
-  Telegram's own mute settings and Omarchy's Do Not Disturb apply.
+  Telegram's own mute settings, Omarchy's Do Not Disturb and Omagram's own **Mute
+  notifications** (in the bar menu) all apply.
 - **In the bar** — Omagram's mark, with a dot while unmuted chats have unread messages. Left
-  click opens the quick view under it; right click opens the window.
+  click opens the quick view under it; right click opens a menu: **Open Omagram**, **Mute
+  notifications** (nothing pops up and nothing sounds until you turn it back on — the unread
+  dot carries on, and Telegram's own settings are untouched) and **Quit**, which closes the
+  window and lets the background service go until you reach for Omagram again.
 - **Quick view** — in the bar's panel, or as an overlay on a key: find a chat by typing, read its
   latest messages and answer without leaving what you are doing — in words, with files or a picture
   you copied (`Ctrl+V`, or `Ctrl+Shift+V` to send them as files; they wait above the message box and

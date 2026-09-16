@@ -23,6 +23,11 @@ Item {
   property var chats: []
   property real meId: 0
   property var shortcuts: ({})   // your shortcut choices; Keymap.js has the defaults
+  // Notifications and sounds held back from the bar menu. Telegram's own settings and the
+  // unread count are untouched: only what pops up and what sounds.
+  property bool quiet: false
+  // Stopped from the bar menu: the service is not asked for again until something wants it.
+  property bool stopped: false
   readonly property bool connected: client.connected
   readonly property bool ready: client.connected && service.auth.state === "ready"
   readonly property int unread: Model.unreadTotal(service.chats)
@@ -63,14 +68,14 @@ Item {
   Process {
     id: daemon
     command: [service.python, service.binDir + "omagramd", "--with-parent"]
-    running: true
-    onExited: restart.restart()
+    running: !service.stopped
+    onExited: if (!service.stopped) restart.restart()
   }
 
   Timer {
     id: restart
     interval: 30000
-    onTriggered: if (!daemon.running) daemon.running = true
+    onTriggered: if (!daemon.running && !service.stopped) daemon.running = true
   }
 
   // Omagram in the app launcher: Omarchy's launcher lists desktop entries, not plugins, so each start
@@ -91,6 +96,7 @@ Item {
       service.auth = result.auth || { state: "starting" }
       service.meId = result.meId || 0
       service.shortcuts = result.settings ? (result.settings.shortcuts || ({})) : ({})
+      service.quiet = !!(result.settings && result.settings.quiet)
       service.chats = Model.sortChats(result.chats || [])
     }
 
@@ -100,6 +106,7 @@ Item {
         if (e.auth.state !== "ready") service.chats = []
       } else if (name === "settings") {
         service.shortcuts = e.settings ? (e.settings.shortcuts || ({})) : ({})
+        service.quiet = !!(e.settings && e.settings.quiet)
       } else if (name === "me") {
         service.meId = e.meId || 0
       } else if (name === "chat") {
@@ -137,7 +144,19 @@ Item {
 
   // ---------------------------------------------------------------- the window
 
+  function setQuiet(quiet) {
+    client.request("settings.quiet", { quiet: quiet === true }, function () {})
+  }
+
+  // Quit from the bar menu: the window is asked to close, then the service is let go. It
+  // comes back when Omagram is opened again, which starts it the way the launcher does.
+  function quit() {
+    client.request("app.quit", {}, function () {})
+    service.stopped = true
+  }
+
   function openWindow() {
+    service.stopped = false
     Quickshell.execDetached([service.python, service.binDir + "omagram"])
   }
 

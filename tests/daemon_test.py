@@ -1981,12 +1981,42 @@ class Settings(Harness):
         self.addCleanup(patch.stop)
         self.conn = self.connect()
 
+    def test_quiet_holds_notifications_and_sounds_back(self):
+        self.assertIs(self.daemon.do_not_disturb(), False)
+        other = self.connect()
+        answer = self.request(self.conn, 1, "settings.quiet", quiet=True)
+        self.assertTrue(answer["ok"], answer)
+        self.assertIs(answer["result"]["settings"]["quiet"], True)
+        self.assertIs(self.daemon.do_not_disturb(), True)          # what the sounds ask
+        self.assertIs(json.loads(self.d.prefs.SETTINGS.read_text())["quiet"], True)
+        event = self.read(other, lambda v: v.get("event") == "settings")
+        self.assertIs(event["settings"]["quiet"], True)
+
+        shown = []
+        self.daemon.notifier.show = lambda *a, **k: shown.append(a) or True
+        self.daemon.on_notification_group({"chat_id": 7, "total_count": 1, "added_notifications": [
+            {"id": 1, "type": {"@type": "notificationTypeNewMessage", "message": {}}}]})
+        self.assertEqual(shown, [], "nothing pops up while quiet")
+
+        self.assertTrue(self.request(self.conn, 2, "settings.set", settings={"shortcuts": {}})["ok"])
+        self.assertIs(json.loads(self.d.prefs.SETTINGS.read_text())["quiet"], True, "the shortcuts page leaves it alone")
+        self.assertTrue(self.request(self.conn, 3, "settings.quiet", quiet=False)["ok"])
+        self.assertIs(self.daemon.do_not_disturb(), False)
+        for rid, value in ((4, "maybe"), (5, 1), (6, None)):
+            self.assertFalse(self.request(self.conn, rid, "settings.quiet", quiet=value)["ok"], value)
+
+    def test_quit_tells_the_window_to_close(self):
+        other = self.connect()
+        answer = self.request(self.conn, 1, "app.quit")
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual(self.read(other, lambda v: v.get("event") == "quit")["event"], "quit")
+
     def test_settings_come_with_hello_and_are_saved_and_shared(self):
         hello = self.request(self.conn, 1, "hello")["result"]
         self.assertEqual(hello["settings"], {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1,
                                              "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0},
                                              "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}},
-                                             "sounds": {"style": "drop", "variants": {}}})
+                                             "sounds": {"style": "drop", "variants": {}}, "quiet": False})
         self.assertEqual(hello["globalStatus"]["global.quickReply"], "off")
         other = self.connect()
         answer = self.request(self.conn, 2, "settings.set", settings={"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}})

@@ -64,7 +64,8 @@ BINDS_MAX = 4 * 1024 * 1024
 
 def empty():
     return {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1, "autoDownload": dict(DOWNLOADS_DEFAULT),
-            "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}, "sounds": {"style": SOUND_DEFAULT, "variants": {}}}
+            "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}, "sounds": {"style": SOUND_DEFAULT, "variants": {}},
+            "quiet": False}
 
 
 # ---------------------------------------------------------------- key combinations for Hyprland
@@ -179,6 +180,11 @@ def check(value, strict=True):
         bad("reactionsSeen is true or false")
     else:
         out["reactionsSeen"] = reactions_seen
+    quiet = value.get("quiet", False)   # notifications and sounds held back, from the bar menu
+    if not isinstance(quiet, bool):
+        bad("quiet is true or false")
+    else:
+        out["quiet"] = quiet
     emoji = value.get("emoji", {})   # the emoji panel: the skin tone (0 none, 1-5) and what you use most
     if not isinstance(emoji, dict):
         bad("emoji must be an object")

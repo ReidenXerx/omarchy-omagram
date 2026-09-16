@@ -2,11 +2,15 @@
   "schemaVersion": 1,
   "id": "reidenxerx.omagram",
   "name": "Omagram",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "ReidenXerx",
   "license": "MIT",
   "description": "An unofficial Telegram client that lives in your Omarchy desktop: reply from the bar with voice, round video or stickers, know who wrote by a sound of their own, act on notifications. Keyboard-first, in your theme. Built on TDLib; not affiliated with Telegram.",
-  "kinds": ["service", "bar-widget", "overlay"],
+  "kinds": [
+    "service",
+    "bar-widget",
+    "overlay"
+  ],
   "keepLoaded": true,
   "entryPoints": {
     "service": "shell/Service.qml",
@@ -17,7 +21,14 @@
     "displayName": "Omagram",
     "description": "Unread dot and the quick view: reply, record and listen from the bar (unofficial Telegram client)",
     "category": "Communication",
-    "aliases": ["omagram", "messages", "chat", "messenger", "telegram", "reply"],
+    "aliases": [
+      "omagram",
+      "messages",
+      "chat",
+      "messenger",
+      "telegram",
+      "reply"
+    ],
     "allowMultiple": false,
     "defaultSection": "right"
   }

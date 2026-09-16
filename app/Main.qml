@@ -336,6 +336,8 @@ Scope {
   }
 
   function onEvent(name, e) {
+    // Quit, from Omagram's menu in the bar: the window closes with the service.
+    if (name === "quit") { Qt.quit(); return }
     if (name === "connection") { omagram.connection = e.state || ""; return }
     if (name === "auth") {
       omagram.auth = e.auth
