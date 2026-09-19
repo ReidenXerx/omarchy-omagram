@@ -65,9 +65,36 @@ Item {
 
   // With --with-parent it ends with the shell. If a copy started by the window already holds
   // the lock this one exits at once, and trying again later takes over when that copy ends.
+  // A child process starts with whatever the shell was started with, and the shell is
+  // long-lived, so LD_PRELOAD, PYTHONPATH and PYTHONHOME would all reach an interpreter
+  // this plugin then trusts. Both helpers are handed an explicit environment instead, and
+  // python runs isolated on top of it (-I, which is -E, -P and -s together — both scripts
+  // put their own directory on sys.path themselves, so nothing depends on -P's default).
+  //
+  // What is passed is what they actually use: the runtime directory holds the socket, the
+  // display and bus variables are what xdg-open needs to open a link somebody sent you,
+  // and PYTHONIOENCODING is not optional when the messages are in any alphabet at all.
+  function envWith(names, extra) {
+    const env = { "PATH": "/usr/bin:/bin", "PYTHONIOENCODING": "utf-8" }
+    for (const name of names) {
+      const value = Quickshell.env(name)
+      if (value) env[name] = value
+    }
+    for (const key in extra) if (extra[key]) env[key] = extra[key]
+    return env
+  }
+
+  readonly property var daemonEnv: service.envWith([
+    "HOME", "LANG", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+    "HYPRLAND_INSTANCE_SIGNATURE", "WAYLAND_DISPLAY", "DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP", "OMARCHY_PATH",
+  ], {})
+
   Process {
     id: daemon
-    command: [service.python, service.binDir + "omagramd", "--with-parent"]
+    clearEnvironment: true
+    environment: service.daemonEnv
+    command: [service.python, "-I", service.binDir + "omagramd", "--with-parent"]
     running: !service.stopped
     onExited: if (!service.stopped) restart.restart()
   }
@@ -81,7 +108,9 @@ Item {
   // Omagram in the app launcher: Omarchy's launcher lists desktop entries, not plugins, so each start
   // checks ~/.local/share/applications/omagram.desktop and rewrites it only when it is out of date.
   Process {
-    command: [service.python, service.binDir + "omagram", "--desktop-entry"]
+    clearEnvironment: true
+    environment: service.daemonEnv
+    command: [service.python, "-I", service.binDir + "omagram", "--desktop-entry"]
     running: true
   }
 
