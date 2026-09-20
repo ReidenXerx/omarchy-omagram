@@ -85,7 +85,7 @@ def fetch():
         if not r.ok:
             return False
     head = safe.run(["git", "-C", str(SOURCE), "rev-parse", "HEAD"], timeout=30, max_output=4096)
-    if head.ok and head.text().strip() == TDLIB_COMMIT:
+    if head.ok and head.text().strip() == TDLIB_COMMIT and (SOURCE / "CMakeLists.txt").is_file():
         return True
     r = run_logged(["git", "-C", str(SOURCE), "fetch", "--depth", "1", "origin", TDLIB_COMMIT], GIT_TIMEOUT)
     if not r.ok:
