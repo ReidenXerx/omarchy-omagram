@@ -86,6 +86,7 @@ Item {
 
   readonly property var daemonEnv: service.envWith([
     "HOME", "LANG", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+    "ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy",
     "HYPRLAND_INSTANCE_SIGNATURE", "WAYLAND_DISPLAY", "DISPLAY",
     "DBUS_SESSION_BUS_ADDRESS", "XDG_CURRENT_DESKTOP", "OMARCHY_PATH",
   ], {})
