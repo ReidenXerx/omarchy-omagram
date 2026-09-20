@@ -17,6 +17,7 @@ Item {
   property var view
   property var app
   property var messages: []
+  property bool motionEnabled: true
 
   // Rows and `messages` change a step apart; in between a row keeps the message it showed, so
   // nothing evaluates against a missing one.
@@ -200,6 +201,7 @@ Item {
         maxWidth: bubble.inner
         spoiler: !!row.content.spoiler
         revealed: row.revealed
+        motionEnabled: row.motionEnabled
         onRevealRequested: row.view.reveal(row.message.id)
       }
 
@@ -221,6 +223,7 @@ Item {
             maxWidth: albumFlow.cell
             spoiler: !!modelData.content.spoiler
             revealed: !!row.view.revealed[modelData.id]
+            motionEnabled: row.motionEnabled
             onRevealRequested: row.view.reveal(modelData.id)
           }
         }
@@ -323,7 +326,7 @@ Item {
         color: Qt.rgba(row.app.foreground.r, row.app.foreground.g, row.app.foreground.b, 0.05)
 
         function fetch() {
-          if (preview.photoFile && !preview.photoUrl && !preview.photoFile.active) row.app.download(preview.photoFile.id, 1)
+          if (preview.photoFile && !preview.photoUrl && !preview.photoFile.active) row.app.download(preview.photoFile.fileId, 1)
         }
         Component.onCompleted: fetch()
         onPhotoFileChanged: fetch()

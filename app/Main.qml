@@ -142,8 +142,29 @@ Scope {
   property int mainPosition: 0
   property string listKey: "main"
   property var loadedLists: ({})
+  property var pendingChatUpdates: []
   readonly property var tabs: Model.listTabs(omagram.folders, omagram.mainPosition)
   readonly property var listChats: Model.chatsIn(omagram.chats, omagram.listKey)
+
+  // TDLib initializes and changes a chat through several separate events. Updating the array for
+  // each one rebuilds every derived list and its delegates; fold one frame's burst together.
+  function queueChatUpdate(chat) {
+    if (!chat || typeof chat.id !== "number") return
+    omagram.pendingChatUpdates.push(chat)
+    if (!chatFlush.running) chatFlush.start()
+  }
+
+  function flushChatUpdates() {
+    var pending = omagram.pendingChatUpdates
+    omagram.pendingChatUpdates = []
+    if (pending.length) omagram.chats = Model.mergeKnownChats(omagram.chats, pending)
+  }
+
+  Timer {
+    id: chatFlush
+    interval: 16
+    onTriggered: omagram.flushChatUpdates()
+  }
 
   // Whether you are looking at Omagram: the focused window's app id is ours. The service keeps
   // the chat you are reading out of desktop notifications, and new messages count as read only
@@ -161,28 +182,17 @@ Scope {
     if (screen.item && screen.item.focusComposer) Qt.callLater(function () { screen.item.focusComposer() })
   }
 
-  property var files: ({})
-  property int filesRevision: 0
+  FileStore { id: fileStore }
   property var lottieCache: ({})
 
   // A file's latest known state: from a download answer or a progress event if there has
   // been one, otherwise as its message described it.
   function fileState(file) {
-    omagram.filesRevision
-    if (!file) return null
-    return omagram.files[file.id] || file
+    return fileStore.state(file)
   }
 
   function setFile(view) {
-    if (!view || !view.id) return
-    if (!omagram.files[view.id] && Object.keys(omagram.files).length >= 4000) {
-      // Bounded: only downloads still running are kept; the rest come back from their messages.
-      var kept = {}
-      for (var id in omagram.files) if (omagram.files[id].active) kept[id] = omagram.files[id]
-      omagram.files = kept
-    }
-    omagram.files[view.id] = view
-    omagram.filesRevision++
+    fileStore.update(view)
   }
 
   function download(fileId, priority) {
@@ -208,7 +218,6 @@ Scope {
   // be drawn still (a WebP sticker, or the still thumbnail of an animated one).
   function customEmojiImages(ids) {
     omagram.customEmojiRevision
-    omagram.filesRevision
     var images = {}
     for (var i = 0; i < ids.length; i++) {
       var still = Model.stillStickerFile(omagram.customEmoji[ids[i]])
@@ -342,6 +351,8 @@ Scope {
     if (name === "auth") {
       omagram.auth = e.auth
       if (e.auth.state !== "ready") {
+        chatFlush.stop()
+        omagram.pendingChatUpdates = []
         omagram.chats = []
         omagram.messages = ({})
         omagram.activeStories = ({})
@@ -361,7 +372,7 @@ Scope {
     } else if (name === "me") {
       omagram.meId = e.meId || 0
     } else if (name === "chat") {
-      omagram.chats = Model.upsertKnown(omagram.chats, e.chat)
+      omagram.queueChatUpdate(e.chat)
     } else if (name === "message") {
       var m = e.message
       if (m.sendAt) {   // scheduled: part of no history until it goes out
@@ -522,8 +533,7 @@ Scope {
 
   // After the cache is cleared no downloaded path is valid any more: files and stickers load again.
   function clearFileStates() {
-    omagram.files = ({})
-    omagram.filesRevision++
+    fileStore.clear()
     omagram.lottieCache = ({})
   }
 
