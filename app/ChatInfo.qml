@@ -473,7 +473,7 @@ FocusScope {
           width: gridView.cellWidth
           height: gridView.cellHeight
 
-          Component.onCompleted: if (cell.picture && !cell.picture.path && !cell.picture.active) info.app.download(cell.picture.id, 1)
+          Component.onCompleted: if (cell.picture && !cell.picture.path && !cell.picture.active) info.app.download(cell.picture.fileId, 1)
 
           Rectangle {
             anchors.fill: parent

@@ -110,6 +110,44 @@ class FakeKeyring:
         return {"@type": "setTdlibParameters", "api_id": api_id, "api_hash": api_hash, "database_encryption_key": key}
 
 
+class SystemProxy(unittest.TestCase):
+    """The standard desktop proxy environment becomes TDLib's startup proxy."""
+
+    def setUp(self):
+        self.d = load_daemon()
+
+    def test_all_proxy_socks5_takes_precedence_and_decodes_credentials(self):
+        proxy = self.d.system_proxy({
+            "https_proxy": "http://web.example:3128",
+            "ALL_PROXY": "socks5://a%40b:p%2Fq@127.0.0.1:7890",
+        })
+        self.assertEqual(proxy, {
+            "@type": "proxy", "server": "127.0.0.1", "port": 7890,
+            "type": {"@type": "proxyTypeSocks5", "username": "a@b", "password": "p/q"},
+        })
+
+    def test_invalid_or_unsupported_proxy_settings_are_ignored(self):
+        for value in ("", "ftp://127.0.0.1:21", "socks5://bad host:1080", "http://127.0.0.1", "not a url"):
+            with self.subTest(value=value):
+                self.assertIsNone(self.d.system_proxy({"ALL_PROXY": value}))
+
+    def test_daemon_enables_system_proxy_before_activating_tdlib(self):
+        fake = FakeTd()
+        with mock.patch.dict(os.environ, {"ALL_PROXY": "socks5://127.0.0.1:7890"}, clear=True):
+            daemon = self.d.Daemon(open_client=lambda: fake)
+            fake.daemon = daemon
+            daemon.start_td()
+        daemon.stopping = True
+        daemon.closed.set()
+        self.assertEqual(fake.sent[:2], [
+            {"@type": "addProxy", "proxy": {
+                "@type": "proxy", "server": "127.0.0.1", "port": 7890,
+                "type": {"@type": "proxyTypeSocks5", "username": "", "password": ""},
+            }, "enable": True, "comment": "System proxy", "@extra": 1},
+            {"@type": "getOption", "name": "version", "@extra": 2},
+        ])
+
+
 class Harness(unittest.TestCase):
     """A running service on a sandboxed socket, and helpers; no tests of its own."""
 

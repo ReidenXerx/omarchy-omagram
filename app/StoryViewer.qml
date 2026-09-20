@@ -51,7 +51,7 @@ FocusScope {
 
   visible: viewer.chatId !== 0
   onVisibleChanged: if (visible) forceActiveFocus()
-  onFileChanged: if (viewer.file && !viewer.url && !viewer.file.active) viewer.app.download(viewer.file.id, 32)
+  onFileChanged: if (viewer.file && !viewer.url && !viewer.file.active) viewer.app.download(viewer.file.fileId, 32)
 
   function show(chatId, storyId) {
     viewer.leave()

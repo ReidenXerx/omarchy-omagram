@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, readRequests, hexOf, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, noteFrame, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError, autoDownload, downloadText, nextDownloadRule, scopeText, previewsText, folderSummary, newFolder, folderProblem, movedFolders, moreMenu, diceMenu, parseLocation, locationText, pollProblem, parseDay, composerLink, autoDeleteText, nextAutoDelete, autoDeleteMenu, autoDeleteSeconds, parseProxyAddress, isProxyLink, proxyLinkUrl, proxySteps, proxyStepProblem, proxyText, connectionText, colorLuminance, colorContrast, mixColors, readableColor, bestTextColor, inkOnFill, soundStyleText, nextSoundStyle }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, mergeKnownChats: typeof mergeKnownChats === 'function' ? mergeKnownChats : null, inViewport: typeof inViewport === 'function' ? inViewport : null, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, readRequests, hexOf, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, noteFrame, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError, autoDownload, downloadText, nextDownloadRule, scopeText, previewsText, folderSummary, newFolder, folderProblem, movedFolders, moreMenu, diceMenu, parseLocation, locationText, pollProblem, parseDay, composerLink, autoDeleteText, nextAutoDelete, autoDeleteMenu, autoDeleteSeconds, parseProxyAddress, isProxyLink, proxyLinkUrl, proxySteps, proxyStepProblem, proxyText, connectionText, colorLuminance, colorContrast, mixColors, readableColor, bestTextColor, inkOnFill, soundStyleText, nextSoundStyle }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -65,6 +65,28 @@ test("upsert replaces, reorders and drops chats that left the list", () => {
   chats = M.upsertChat(chats, chat(1, 30, { lists: ["archive"] }))
   eq(chats, [])
   eq(M.upsertChat([chat(1, 1)], "junk"), [chat(1, 1)])
+})
+
+test("a burst of chat updates is merged once with the newest update winning", () => {
+  assert.strictEqual(typeof M.mergeKnownChats, "function", "mergeKnownChats is missing")
+  const existing = [chat(1, 30), chat(2, 20, { title: "Old" }), chat(3, 10)]
+  const merged = M.mergeKnownChats(existing, [chat(2, 25, { title: "First" }), chat(4, 5),
+                                                chat(2, 40, { title: "Newest" }), null])
+  eq(merged.map(c => [c.id, c.title]), [[1, "Chat 1"], [3, "Chat 3"], [4, "Chat 4"], [2, "Newest"]])
+
+  const full = Array.from({ length: M.CHATS_MAX }, (_, i) => chat(i + 1, i + 1))
+  const capped = M.mergeKnownChats(full, [chat(M.CHATS_MAX + 1, 1)])
+  assert.strictEqual(capped.length, M.CHATS_MAX)
+  assert.strictEqual(capped[0].id, 2, "the oldest known chat leaves at the existing limit")
+  assert.strictEqual(capped[capped.length - 1].id, M.CHATS_MAX + 1)
+})
+
+test("viewport activity includes a small preload margin and excludes distant rows", () => {
+  assert.strictEqual(typeof M.inViewport, "function", "inViewport is missing")
+  assert.strictEqual(M.inViewport(90, 20, 100, 200, 16), true, "row overlaps the top preload margin")
+  assert.strictEqual(M.inViewport(284, 20, 100, 200, 16), true, "row overlaps the bottom preload margin")
+  assert.strictEqual(M.inViewport(40, 20, 100, 200, 16), false, "row is well above the viewport")
+  assert.strictEqual(M.inViewport(330, 20, 100, 200, 16), false, "row is well below the viewport")
 })
 
 test("filter, find and unread total", () => {

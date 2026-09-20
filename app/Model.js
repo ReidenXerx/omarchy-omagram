@@ -82,6 +82,40 @@ function upsertKnown(chats, chat) {
   return out.length > CHATS_MAX ? out.slice(out.length - CHATS_MAX) : out
 }
 
+// Apply a burst of chat updates with the same result as upserting them one by one, but copy the
+// known-chat list only once. TDLib sends several fields of many chats as separate startup updates.
+function mergeKnownChats(chats, updates) {
+  var incoming = toList(updates)
+  if (!incoming.length) return chats
+  var latest = {}
+  var lastAt = {}
+  for (var i = 0; i < incoming.length; i++) {
+    var chat = incoming[i]
+    if (!isObject(chat) || typeof chat.id !== "number") continue
+    latest[chat.id] = chat
+    lastAt[chat.id] = i
+  }
+  var out = toList(chats).filter(function (chat) {
+    return isObject(chat) && typeof chat.id === "number" && latest[chat.id] === undefined
+  })
+  for (var j = 0; j < incoming.length; j++) {
+    var update = incoming[j]
+    if (isObject(update) && typeof update.id === "number" && lastAt[update.id] === j) out.push(latest[update.id])
+  }
+  return out.length > CHATS_MAX ? out.slice(out.length - CHATS_MAX) : out
+}
+
+// ListView keeps a small cache of delegates outside its viewport. Heavy moving media should
+// preload near the edge, but distant cached rows must not keep decoders and video surfaces alive.
+function inViewport(y, height, contentY, viewportHeight, margin) {
+  var pad = Math.max(0, Number(margin) || 0)
+  var top = Number(contentY) || 0
+  var bottom = top + Math.max(0, Number(viewportHeight) || 0)
+  var rowTop = Number(y) || 0
+  var rowBottom = rowTop + Math.max(0, Number(height) || 0)
+  return rowBottom >= top - pad && rowTop <= bottom + pad
+}
+
 function chatsIn(chats, listKey) {
   var key = listKey || "main"
   return sortChats(toList(chats).filter(function (c) { return compareOrder(orderIn(c, key), "0") > 0 }), key)
@@ -1835,4 +1869,3 @@ function forwardTargets(chats, query, meId) {
   var own = function (c) { return c.kind === "private" && !!meId && c.userId === meId }
   return filterChats(every.filter(own).concat(every.filter(function (c) { return !own(c) })), query, meId).slice(0, 100)
 }
-

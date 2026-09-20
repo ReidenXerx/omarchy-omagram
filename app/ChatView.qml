@@ -1035,10 +1035,10 @@ FocusScope {
   function openFile(message) {
     var file = root.fileOf(message)
     if (!file) return
-    if (!file.path) { app.download(file.id, 32); root.flash("Downloading… open it again when it is done"); return }
+    if (!file.path) { app.download(file.fileId, 32); root.flash("Downloading… open it again when it is done"); return }
     var name = Model.saveName(message)
     var run = function () {
-      client.request("file.open", { fileId: file.id }, function (answer) { if (!answer.ok) root.flash(answer.error || "Could not open the file") })
+      client.request("file.open", { fileId: file.fileId }, function (answer) { if (!answer.ok) root.flash(answer.error || "Could not open the file") })
     }
     if (Model.riskyFile(name) || Model.riskyFile(file.path.split("/").pop()))
       root.prompt = { text: "“" + name + "” could run a program on this computer. Open it anyway?", action: "Open", run: run }
@@ -1048,8 +1048,8 @@ FocusScope {
   function saveFile(message) {
     var file = root.fileOf(message)
     if (!file) return
-    if (!file.path) { app.download(file.id, 32); root.flash("Downloading… save it again when it is done"); return }
-    client.request("file.save", { fileId: file.id, fileName: Model.saveName(message) }, function (answer) {
+    if (!file.path) { app.download(file.fileId, 32); root.flash("Downloading… save it again when it is done"); return }
+    client.request("file.save", { fileId: file.fileId, fileName: Model.saveName(message) }, function (answer) {
       if (answer.ok) root.flash("Saved to Downloads as " + String(answer.result.path).split("/").pop())
       else root.flash(answer.error || "Could not save the file")
     })
@@ -1863,7 +1863,12 @@ FocusScope {
         // newest message in view.
         onHeightChanged: if (root.stickToBottom) positionViewAtEnd()
         onAtYBeginningChanged: if (atYBeginning && count > 0 && moving) root.loadOlder()
-        onContentYChanged: if (contentY <= originY + Style.space(200) && count > 0 && (moving || activeFocus)) root.loadOlder()
+        onContentYChanged: {
+          // Manual contentY changes from WheelScroll can update atYEnd after its callback. Track
+          // the settled position here too, or a later fullscreen resize snaps the user to the end.
+          root.stickToBottom = atYEnd
+          if (contentY <= originY + Style.space(200) && count > 0 && (moving || activeFocus)) root.loadOlder()
+        }
 
         Keys.onPressed: function (event) {
           var keys = root.app.shortcuts
@@ -1924,6 +1929,8 @@ FocusScope {
           view: root
           app: root.app
           messages: root.messages
+          motionEnabled: root.app.windowFocused
+                         && Model.inViewport(y, height, messageList.contentY, messageList.height, Style.space(160))
         }
       }
 

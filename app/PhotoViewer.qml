@@ -28,7 +28,7 @@ FocusScope {
 
   visible: viewer.messageId > 0
   onVisibleChanged: if (visible) forceActiveFocus()
-  onFileChanged: if (viewer.file && !viewer.url && !viewer.file.active) app.download(viewer.file.id, 32)
+  onFileChanged: if (viewer.file && !viewer.url && !viewer.file.active) app.download(viewer.file.fileId, 32)
 
   function step(delta) {
     var next = viewer.index + delta

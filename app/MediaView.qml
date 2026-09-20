@@ -22,6 +22,9 @@ Item {
   property real stickerSize: Style.space(180)
   property bool still: false
   property bool interactive: true
+  // Cached ListView delegates keep their static preview, but release animated decoders and
+  // video surfaces until they are close to the visible viewport again.
+  property bool motionEnabled: true
   // Spoiler media stays covered, and does not play behind the cover, until you choose to see it.
   property bool spoiler: false
   property bool revealed: false
@@ -57,7 +60,7 @@ Item {
   implicitHeight: box.height
 
   function download(priority) {
-    if (file && !ready && !downloading) app.download(file.id, priority || 16)
+    if (file && !ready && !downloading) app.download(file.fileId, priority || 16)
   }
 
   function activate() {
@@ -78,7 +81,7 @@ Item {
   Component.onCompleted: {
     if (!media) return
     if (still && kind === "sticker" && info.format !== "webp") {
-      if (thumbFile && !thumbUrl && !thumbFile.active) app.download(thumbFile.id, 8)
+      if (thumbFile && !thumbUrl && !thumbFile.active) app.download(thumbFile.fileId, 8)
       return
     }
     if (Model.autoDownload(kind, file ? file.size : 0, app.autoDownloadRules)) download(kind === "sticker" ? 20 : 12)
@@ -200,15 +203,16 @@ Item {
       readonly property string format: view.info.format
 
       function fetch() {
-        if (format === "tgs" && !view.still && view.ready && lottie === "" && view.file && view.app)
+        if (format === "tgs" && view.motionEnabled && !view.still && view.ready && lottie === "" && view.file && view.app)
           // The answer is asynchronous: by the time it comes the message may have scrolled
           // away and this piece been destroyed.
-          view.app.lottiePath(view.file.id, function (path) { if (sticker) sticker.lottie = path })
+          view.app.lottiePath(view.file.fileId, function (path) { if (sticker) sticker.lottie = path })
       }
       Component.onCompleted: fetch()
       Connections {
         target: view
         function onReadyChanged() { sticker.fetch() }
+        function onMotionEnabledChanged() { sticker.fetch() }
       }
 
       Text {
@@ -240,7 +244,7 @@ Item {
       }
       Loader {
         anchors.fill: parent
-        active: format === "tgs" && sticker.lottie !== "" && !view.still
+        active: view.motionEnabled && format === "tgs" && sticker.lottie !== "" && !view.still
         sourceComponent: LottieAnimation {
           source: Model.fileUrl(sticker.lottie)
           autoPlay: true
@@ -249,7 +253,7 @@ Item {
       }
       Loader {
         anchors.fill: parent
-        active: format === "webm" && view.ready && !view.still
+        active: view.motionEnabled && format === "webm" && view.ready && !view.still
         sourceComponent: Video {
           source: view.url
           autoPlay: true
@@ -269,7 +273,7 @@ Item {
       Placeholder { visible: !view.ready }
       Loader {
         anchors.fill: parent
-        active: view.ready && !view.covered
+        active: view.motionEnabled && view.ready && !view.covered
         sourceComponent: Video {
           source: view.url
           autoPlay: true
@@ -313,7 +317,7 @@ Item {
       Loader {
         id: videoLoader
         anchors.fill: parent
-        active: videoItem.started && view.ready
+        active: view.motionEnabled && videoItem.started && view.ready
         sourceComponent: Video {
           source: view.url
           autoPlay: true
@@ -381,7 +385,7 @@ Item {
         Loader {
           id: noteVideo
           anchors.fill: parent
-          active: view.ready
+          active: view.motionEnabled && view.ready
           sourceComponent: Video {
             source: view.url
             autoPlay: true

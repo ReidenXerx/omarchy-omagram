@@ -367,7 +367,7 @@ FocusScope {
           anchors.margins: Style.space(4)
           clip: true
 
-          Component.onCompleted: if (gifCell.thumb && !gifCell.thumb.path && !gifCell.thumb.active) picker.app.download(gifCell.thumb.id, 1)
+          Component.onCompleted: if (gifCell.thumb && !gifCell.thumb.path && !gifCell.thumb.active) picker.app.download(gifCell.thumb.fileId, 1)
 
           Image {
             anchors.fill: parent

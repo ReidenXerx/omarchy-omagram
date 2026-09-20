@@ -28,7 +28,7 @@ Item {
   function fetch() {
     if (avatar.saved) return
     if (avatar.file && !avatar.url && !avatar.file.active && avatar.app && avatar.app.download)
-      avatar.app.download(avatar.file.id, 1)
+      avatar.app.download(avatar.file.fileId, 1)
   }
   Component.onCompleted: fetch()
   onFileChanged: fetch()
