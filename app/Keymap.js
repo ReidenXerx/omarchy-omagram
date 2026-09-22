@@ -174,6 +174,7 @@ var ACTIONS = [
 
   { id: "picker.down", label: "Next chat", keys: ["Down", "Ctrl+N"] },
   { id: "picker.up", label: "Previous chat", keys: ["Up", "Ctrl+P"] },
+  { id: "picker.toggle", label: "Tick this chat", keys: ["Tab", "Ctrl+Space"] },
   { id: "picker.pick", label: "Forward there", keys: ["Return", "Enter"] },
   { id: "picker.close", label: "Cancel", keys: ["Esc"] },
 

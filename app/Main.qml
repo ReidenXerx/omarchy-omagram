@@ -935,9 +935,29 @@ Scope {
         anchors.fill: parent
         app: omagram
         chats: omagram.chats
-        onPicked: function (chatId, title) {
-          service.request("message.forward", { chatId: chatId, fromChatId: forwardPicker.fromChatId, messageIds: forwardPicker.messageIds },
-                          function (answer) { chatView.flash(answer.ok ? "Forwarded to " + title : "Could not forward: " + (answer.error || "unknown error")) })
+        multiple: true
+        // One trip through the picker, however many places it goes. Telegram
+        // forwards per chat, so this is several requests; what the person gets
+        // told is one sentence about all of them, once they have all answered.
+        onPickedMany: function (ids, titles) {
+          var sent = 0, failed = 0, why = ""
+          for (var i = 0; i < ids.length; i++) {
+            service.request("message.forward",
+                            { chatId: ids[i], fromChatId: forwardPicker.fromChatId, messageIds: forwardPicker.messageIds },
+                            function (answer) {
+                              if (answer.ok) sent++
+                              else { failed++; why = answer.error || "unknown error" }
+                              if (sent + failed < ids.length) return
+                              if (!failed)
+                                chatView.flash(ids.length === 1 ? "Forwarded to " + titles[0]
+                                                                : "Forwarded to " + ids.length + " chats")
+                              else if (!sent)
+                                chatView.flash("Could not forward: " + why)
+                              else
+                                chatView.flash("Forwarded to " + sent + " of " + ids.length
+                                               + " \u2014 " + failed + " failed: " + why)
+                            })
+          }
           chatView.clearSelection()
           chatView.focusMessages()
         }

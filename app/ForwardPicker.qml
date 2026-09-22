@@ -22,7 +22,14 @@ FocusScope {
     return !picker.peopleOnly || (c.kind === "private" && !c.bot && c.userId !== picker.app.meId)
   })
 
+  // Forwarding the same thing to three people should be one trip through this
+  // window, not three. Ticking is opt-in, because this picker is also used for
+  // "choose a chat" jobs where more than one makes no sense.
+  property bool multiple: false
+  property var chosen: []          // chat ids, in the order they were ticked
+
   signal picked(real chatId, string title)
+  signal pickedMany(var ids, var titles)
   signal dismissed()
 
   visible: false
@@ -32,6 +39,7 @@ FocusScope {
     picker.fromChatId = fromChatId
     picker.messageIds = ids || []
     picker.cursor = 0
+    picker.chosen = []
     search.text = ""
     picker.visible = true
     search.forceActiveFocus()
@@ -43,11 +51,48 @@ FocusScope {
     picker.dismissed()
   }
 
-  function choose(index) {
+  function isChosen(id) {
+    for (var i = 0; i < picker.chosen.length; i++) if (picker.chosen[i] === id) return true
+    return false
+  }
+
+  function toggle(index) {
     var chat = picker.results[index]
-    if (!picker.visible || !chat) return
+    if (!picker.multiple || !chat) return
+    var next = []
+    var had = false
+    for (var i = 0; i < picker.chosen.length; i++) {
+      if (picker.chosen[i] === chat.id) had = true
+      else next.push(picker.chosen[i])
+    }
+    if (!had) next.push(chat.id)
+    picker.chosen = next
+  }
+
+  function titleOf(id) {
+    for (var i = 0; i < picker.chats.length; i++) {
+      if (picker.chats[i].id === id) return Model.chatTitle(picker.chats[i], picker.app.meId)
+    }
+    return ""
+  }
+
+  // Enter sends: to everything ticked, or -- when nothing is -- to the chat
+  // under the cursor, so the one-chat habit still costs a single keystroke.
+  function choose(index) {
+    if (!picker.visible) return
+    if (picker.multiple && picker.chosen.length) {
+      var ids = picker.chosen.slice()
+      var titles = []
+      for (var i = 0; i < ids.length; i++) titles.push(picker.titleOf(ids[i]))
+      picker.visible = false
+      picker.pickedMany(ids, titles)
+      return
+    }
+    var chat = picker.results[index]
+    if (!chat) return
     picker.visible = false
-    picker.picked(chat.id, Model.chatTitle(chat, picker.app.meId))
+    if (picker.multiple) picker.pickedMany([chat.id], [Model.chatTitle(chat, picker.app.meId)])
+    else picker.picked(chat.id, Model.chatTitle(chat, picker.app.meId))
   }
 
   function move(delta) {
@@ -89,7 +134,9 @@ FocusScope {
         Layout.fillWidth: true
         elide: Text.ElideRight
         text: picker.title !== "" ? picker.title
-            : "Forward " + (picker.messageIds.length === 1 ? "the message" : picker.messageIds.length + " messages") + " to…"
+            : picker.chosen.length
+              ? "Forward to " + picker.chosen.length + (picker.chosen.length === 1 ? " chat" : " chats")
+              : "Forward " + (picker.messageIds.length === 1 ? "the message" : picker.messageIds.length + " messages") + " to…"
         color: picker.app.foreground
         font.family: picker.app.fontFamily
         font.pixelSize: Style.font.title
@@ -126,6 +173,7 @@ FocusScope {
             function is(id) { return Keymap.matchesInText(keys, id, event) }
             if (is("picker.down")) picker.move(1)
             else if (is("picker.up")) picker.move(-1)
+            else if (is("picker.toggle") && picker.multiple) picker.toggle(picker.cursor)
             else if (is("picker.pick")) picker.choose(picker.cursor)
             else if (is("picker.close")) picker.dismiss()
             else return
@@ -170,6 +218,18 @@ FocusScope {
             anchors.rightMargin: Style.space(8)
             spacing: Style.space(10)
 
+            // Only while ticking, and only where it says something: a column of
+            // empty boxes down the side of every chat is noise, not information.
+            Text {
+              textFormat: Text.PlainText
+              visible: picker.multiple && picker.isChosen(target.modelData.id)
+              text: "\u2713"
+              color: picker.app.accent
+              font.family: picker.app.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
             Avatar {
               app: picker.app
               chat: target.modelData
@@ -192,7 +252,7 @@ FocusScope {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: picker.choose(target.index)
+            onClicked: picker.multiple ? picker.toggle(target.index) : picker.choose(target.index)
           }
         }
 
