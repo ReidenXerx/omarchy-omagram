@@ -95,6 +95,7 @@ var ACTIONS = [
   { id: "messages.open", label: "Download or open media", keys: ["Return", "Enter", "O"] },
   { id: "messages.play", label: "Play or pause", keys: ["Space"] },
   { id: "messages.reply", label: "Reply", keys: ["R"] },
+  { id: "messages.react", label: "React, to everything selected", keys: ["Shift+R"] },
   { id: "messages.edit", label: "Edit your message", keys: ["E"] },
   { id: "messages.copy", label: "Copy the text", keys: ["Y"] },
   { id: "messages.delete", label: "Delete (press twice)", keys: ["D", "Del"] },

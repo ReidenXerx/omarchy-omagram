@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "reidenxerx.omagram",
   "name": "Omagram",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "ReidenXerx",
   "license": "MIT",
   "description": "An unofficial Telegram client that lives in your Omarchy desktop: reply from the bar with voice, round video or stickers, know who wrote by a sound of their own, act on notifications. Keyboard-first, in your theme. Built on TDLib; not affiliated with Telegram.",

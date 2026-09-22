@@ -34,7 +34,8 @@ FocusScope {
   property bool stickToBottom: true
   property bool stickersOpen: false
   property bool emojiOpen: false             // the emoji panel, in the stickers' place
-  property var reactionTarget: null          // the message the emoji panel finds a reaction for
+  property var reactionTargets: []           // the messages the emoji panel finds a reaction for
+  property int reactionToken: 0              // which "which reactions?" answer the panel is still waiting on
   onStickersOpenChanged: if (stickersOpen) root.emojiOpen = false
   onEmojiOpenChanged: if (emojiOpen) root.stickersOpen = false
 
@@ -183,7 +184,7 @@ FocusScope {
     root.stickToBottom = true
     root.stickersOpen = false
     root.emojiOpen = false
-    root.reactionTarget = null
+    root.forgetReactions()
     root.pinnedMessage = null
     root.lastTypingMs = 0
     root.translations = ({})
@@ -1020,6 +1021,7 @@ FocusScope {
 
   function runSelection(action) {
     if (action === "forward") root.forwardSelection()
+    else if (action === "react") root.reactToSelection()
     else if (action === "copy") root.copy(null)
     else if (action === "delete") root.deleteSelection()
     else root.clearSelection()
@@ -1235,32 +1237,84 @@ FocusScope {
       root.closeEmoji()
       return
     }
-    root.reactionTarget = null
+    root.forgetReactions()
     root.emojiOpen = true
     Qt.callLater(function () { emojiPanel.open() })
   }
 
   function closeEmoji() {
     root.emojiOpen = false
-    root.reactionTarget = null
+    root.forgetReactions()
     root.focusComposer()
   }
 
-  // Every reaction the message may get, found by name: from its menu.
-  function openReactionPicker(message) {
-    if (!message || !root.chat) return
-    var id = message.id
-    root.reactionTarget = message
-    client.request("reactions.available", { chatId: message.chatId, messageId: id, all: true }, function (answer) {
-      if (!root.reactionTarget || root.reactionTarget.id !== id) return
+  // Every reaction the messages may get, found by name: from a message's menu, or from
+  // Shift+R over a selection. Telegram is asked about the first of them -- a chat's reactions
+  // are the chat's, and where a single message narrows them, reacting simply reports how many
+  // it took rather than hiding a reaction the rest would have accepted.
+  function openReactionPicker(messages) {
+    var targets = root.reactionList(messages)
+    if (!targets.length || !root.chat) return
+    var token = ++root.reactionToken
+    root.reactionTargets = targets
+    var first = targets[0]
+    client.request("reactions.available", { chatId: first.chatId, messageId: first.id, all: true }, function (answer) {
+      if (root.reactionToken !== token) return   // you moved on to another message, or closed it
       if (!answer.ok) {
-        root.reactionTarget = null
+        root.reactionTargets = []
         root.flash(answer.error || "Telegram did not say which reactions it takes")
         return
       }
       root.emojiOpen = true
       Qt.callLater(function () { emojiPanel.openReactions(answer.result.emoji || []) })
     })
+  }
+
+  // Nothing is being reacted to any more, and no answer still on its way may say otherwise.
+  function forgetReactions() {
+    root.reactionTargets = []
+    root.reactionToken++
+  }
+
+  // One message, a list of them, or nothing, as a list.
+  function reactionList(messages) {
+    if (!messages) return []
+    return Array.isArray(messages) ? messages.filter(function (m) { return !!m }) : [messages]
+  }
+
+  // The reaction picker over what you have selected, or over the message at the cursor.
+  function reactToSelection() {
+    if (root.scheduledOpen) return
+    root.openReactionPicker(root.selecting ? Model.selectedMessages(root.messages, root.selection)
+                                           : root.selectedMessage)
+  }
+
+  // One emoji across however many messages. Whether it goes on or comes off is decided once for
+  // the whole group, so a selection cannot end up half reacted to by its own toggle; Telegram
+  // still refuses individual messages, and what it took is reported as a single line rather than
+  // one failure per message.
+  function reactToAll(messages, emoji) {
+    var targets = root.reactionList(messages).slice(0, 100)
+    if (!targets.length || !emoji) return
+    var adding = Model.reactionAdds(targets, emoji)
+    var many = targets.length > 1
+    var done = 0
+    var failed = 0
+    var refusal = ""
+    var finish = function () {
+      if (done + failed < targets.length) return
+      if (!failed) { if (many) root.flash((adding ? "Reacted to " : "Took the reaction off ") + targets.length + " messages") }
+      else if (!done) root.flash(refusal || "Could not react")
+      else root.flash((adding ? "Reacted to " : "Took the reaction off ") + done + " of " + targets.length + ": " + (refusal || "Telegram refused the rest"))
+    }
+    for (var i = 0; i < targets.length; i++) {
+      client.request("reaction.set", { chatId: targets[i].chatId, messageId: targets[i].id, emoji: emoji, chosen: adding },
+                     function (answer) {
+                       if (answer.ok) done++
+                       else { failed++; refusal = refusal || answer.error || "" }
+                       finish()
+                     })
+    }
   }
 
   // Ctrl+V: files a file manager copied, or a copied picture, wait above the message box to be sent like attached ones;
@@ -1870,7 +1924,7 @@ FocusScope {
           var selected = root.selectedMessage
           function is(id) { return Keymap.matches(keys, id, event) }
           // A scheduled message cannot be replied to, forwarded, selected, pinned or linked yet.
-          if (root.scheduledOpen && ["messages.reply", "messages.forward", "messages.select", "messages.pin", "messages.link", "messages.thread"].some(is)) {
+          if (root.scheduledOpen && ["messages.reply", "messages.react", "messages.forward", "messages.select", "messages.pin", "messages.link", "messages.thread"].some(is)) {
             event.accepted = true
             return
           }
@@ -1884,6 +1938,7 @@ FocusScope {
             positionViewAtIndex(root.cursor, ListView.Contain)
             if (root.cursor < 5) root.loadOlder()
           } else if (is("messages.reply")) root.startReply(selected)
+          else if (is("messages.react")) root.reactToSelection()
           else if (is("messages.edit")) root.startEdit(selected ? root.captionHolder(selected) : null)
           else if (is("messages.copy")) root.copy(selected)
           else if (is("messages.delete")) root.askDelete(selected)
@@ -2070,6 +2125,7 @@ FocusScope {
 
         Repeater {
           model: [
+            { action: "react", label: "React", key: "messages.react" },
             { action: "forward", label: "Forward", key: "messages.forward" },
             { action: "copy", label: "Copy", key: "messages.copy" },
             { action: "delete", label: "Delete", key: "messages.delete" },
@@ -2197,11 +2253,11 @@ FocusScope {
         composer.cursorPosition = at + text.length
       }
       onReacted: function (emoji) {
-        var message = root.reactionTarget
-        root.reactionTarget = null
+        var targets = root.reactionTargets
+        root.forgetReactions()
         root.emojiOpen = false
         root.focusMessages()
-        root.react(message, emoji)
+        root.reactToAll(targets, emoji)
       }
       onClosed: root.closeEmoji()
       onReadyChanged: if (ready) root.updateSuggestions()

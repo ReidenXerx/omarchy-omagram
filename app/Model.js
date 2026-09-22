@@ -1302,6 +1302,20 @@ function reactionChosen(message, emoji) {
     && message.reactions.some(function (r) { return isObject(r) && r.emoji === emoji && r.chosen === true })
 }
 
+// The selected messages themselves, in the order they are shown.
+function selectedMessages(messages, selection) {
+  if (!isList(messages) || !isObject(selection)) return []
+  return messages.filter(function (m) { return isObject(m) && selection[m.id] === true })
+}
+
+// Reacting to several messages at once is one toggle over the whole group: the reaction comes
+// off only when every message already carries yours. A half-reacted selection finishes the job
+// instead of undoing it, which is what you meant by selecting them together.
+function reactionAdds(messages, emoji) {
+  if (!isList(messages) || !messages.length) return true
+  return !messages.every(function (m) { return reactionChosen(m, emoji) })
+}
+
 // Whether opening a file with its app could run code: no extension, or one that runs.
 function riskyFile(name) {
   var m = /\.([A-Za-z0-9]{1,12})$/.exec(String(name || "").trim())

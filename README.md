@@ -54,7 +54,8 @@
   description and invite link; its members; and everything shared in it: photos and videos,
   files, links, voice messages, music and GIFs. Leave a group, or clear or delete a chat, from it.
 - **Messages** — send, reply, edit, forward, pin, react and delete (for you or for everyone),
-  or select several and act on them at once. Read ticks, "typing…", last seen and the pinned
+  or select several and act on them at once: one reaction (`Shift+R`) goes on the whole selection,
+  and one forward can go to several chats at once rather than one at a time. Read ticks, "typing…", last seen and the pinned
   message above the chat, with read state kept in sync with your other devices. Right-click a
   message (or press `m`) for everything Telegram allows on it: translation, who reacted to it, and
   in a group who has seen yours. Send without sound (one message, or everything in a chat set to silent sending with `Ctrl+Shift+B`, which the message box
@@ -233,11 +234,12 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Enter` or `o` | download or open its media |
 | `Space` | play or pause |
 | `r` / `e` / `y` | reply / edit yours / copy |
+| `Shift+R` | react: find one by name, on the message or on everything selected |
 | `f` / `p` / `s` | forward / pin or unpin / save its file to Downloads |
 | `Shift+Y` | copy a link to the message |
 | `c` | the post's comments, or the replies to the message |
 | `.` | voice and video messages at 1×, 1.5× or 2× |
-| `x` | select or unselect (so does Ctrl+click); `f`, `y` and `d` then act on everything selected |
+| `x` | select or unselect (so does Ctrl+click); `Shift+R`, `f`, `y` and `d` then act on everything selected |
 | `m`, `Menu` or `Shift+F10` | the message's menu (so does a right click) |
 | `d` or `Delete` | delete (press again to confirm) |
 | `Esc` or `i` | clear the selection, or back to the composer |
@@ -265,7 +267,8 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 **Menus and questions** — in a menu `↑` `↓` or `j` `k` choose, `Enter` picks, `Esc` closes, and
 `1`–`8` pick a quick reaction. When the bar above the message box asks something (deleting,
 joining a group, opening a file that could run a program), `Enter` answers yes and `Esc` no. In
-the forward dialog, type to find a chat, `↑` `↓` or `Ctrl+N` `Ctrl+P` choose and `Enter` forwards.
+the forward dialog, type to find a chat, `↑` `↓` or `Ctrl+N` `Ctrl+P` choose and `Enter` forwards;
+`Tab` or `Ctrl+Space` ticks as many chats as you like and `Enter` then forwards to all of them.
 
 **From anywhere** — pick keys for the quick view (as an overlay or in the bar's panel) and for
 opening Omagram in Settings → *Shortcuts that work anywhere*. Omagram registers them with Hyprland
