@@ -250,8 +250,10 @@ Item {
         readonly property var emojiIds: Model.customEmojiIds(row.textSource.content.entities)
         visible: source !== "" && !row.cardKind
         width: Math.min(implicitWidth, bubble.inner)
-        text: visible ? Model.richText(source, row.textSource.content.entities, row.revealed, row.codeBackground,
-                                       body.emojiIds.length ? row.app.customEmojiImages(body.emojiIds) : null, row.linkHex) : ""
+        text: !visible ? ""
+            : row.textSource.content.html ? Model.richMessageHtml(row.textSource.content.html, row.codeBackground, row.linkHex)
+            : Model.richText(source, row.textSource.content.entities, row.revealed, row.codeBackground,
+                             body.emojiIds.length ? row.app.customEmojiImages(body.emojiIds) : null, row.linkHex)
         onEmojiIdsChanged: if (emojiIds.length) row.app.requestCustomEmoji(emojiIds)
         Component.onCompleted: if (emojiIds.length) row.app.requestCustomEmoji(emojiIds)
         textFormat: Text.RichText
