@@ -92,6 +92,8 @@ var ACTIONS = [
   { id: "messages.down", label: "Next message", keys: ["Down", "J"] },
   { id: "messages.up", label: "Previous message", keys: ["Up", "K"] },
   { id: "messages.last", label: "Last message", keys: ["End"] },
+  { id: "messages.pageDown", label: "Scroll down a screen", keys: ["PgDown"] },
+  { id: "messages.pageUp", label: "Scroll up a screen", keys: ["PgUp"] },
   { id: "messages.open", label: "Download or open media", keys: ["Return", "Enter", "O"] },
   { id: "messages.play", label: "Play or pause", keys: ["Space"] },
   { id: "messages.reply", label: "Reply", keys: ["R"] },
@@ -111,6 +113,8 @@ var ACTIONS = [
   { id: "messages.speed", label: "Voice and video messages at 1×, 1.5× or 2×", keys: ["."] },
 
   { id: "composer.send", label: "Send", keys: ["Return", "Enter"] },
+  { id: "composer.pageDown", label: "Scroll the messages down a screen", keys: ["PgDown"] },
+  { id: "composer.pageUp", label: "Scroll the messages up a screen", keys: ["PgUp"] },
   { id: "composer.newLine", label: "New line", keys: ["Shift+Return", "Shift+Enter"] },
   { id: "composer.pasteFiles", label: "Paste copied files or a picture, to send as files as they are", keys: ["Ctrl+Shift+V"] },
   { id: "composer.sendSilent", label: "Send without sound", keys: ["Ctrl+Shift+Return", "Ctrl+Shift+Enter"] },
