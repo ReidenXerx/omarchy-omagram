@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import "Model.js" as Model
 import "Keymap.js" as Keymap
 
@@ -18,21 +19,21 @@ Scope {
 
   // ---------------------------------------------------------------- theme
 
-  readonly property color background: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 1)
+  readonly property color background: Qt.rgba(Commons.Color.menu.background.r, Commons.Color.menu.background.g, Commons.Color.menu.background.b, 1)
   // Messages are read here for hours, not glanced at in a menu: of the theme's text colours, the one that
   // stands out most from the ground.
-  readonly property color foreground: omagram.ink(Model.bestTextColor(omagram.background, [Color.menu.text, Color.foreground]))
-  readonly property color border: Color.menu.border
+  readonly property color foreground: omagram.ink(Model.bestTextColor(omagram.background, [Commons.Color.menu.text, Commons.Color.foreground]))
+  readonly property color border: Commons.Color.menu.border
   // The accent marks things (a selection, a stripe, a badge). As text -- a link, "typing…" -- it is moved
   // toward the text colour until it reads at 4.5:1, and a count on an accent badge takes whatever reads on it.
-  readonly property color accent: Color.accent
-  readonly property color accentText: omagram.ink(Model.readableColor(Color.accent, omagram.background, omagram.foreground, 4.5))
-  readonly property color onAccent: omagram.ink(Model.inkOnFill(Color.accent, [omagram.foreground, omagram.background], 4.5))
-  readonly property color muted: omagram.ink(Model.readableColor(Color.muted, omagram.background, omagram.foreground, 4.5))
+  readonly property color accent: Commons.Color.accent
+  readonly property color accentText: omagram.ink(Model.readableColor(Commons.Color.accent, omagram.background, omagram.foreground, 4.5))
+  readonly property color onAccent: omagram.ink(Model.inkOnFill(Commons.Color.accent, [omagram.foreground, omagram.background], 4.5))
+  readonly property color muted: omagram.ink(Model.readableColor(Commons.Color.muted, omagram.background, omagram.foreground, 4.5))
 
   function ink(c) { return Qt.rgba(c.r, c.g, c.b, 1) }
-  readonly property color urgent: Color.urgent
-  readonly property color selected: Color.menu.selectedBackground
+  readonly property color urgent: Commons.Color.urgent
+  readonly property color selected: Commons.Color.menu.selectedBackground
   readonly property string fontFamily: Style.font.menuFamily
   readonly property string glyphFamily: Style.font.family
 

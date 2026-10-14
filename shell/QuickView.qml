@@ -3,6 +3,7 @@ import QtQuick.Effects
 import QtQuick.Layouts
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "../app"
 import "../app/Model.js" as Model
@@ -27,16 +28,16 @@ Item {
   property bool compact: false
   property bool opened: false
 
-  property color background: Color.menu.background
-  property color foreground: Color.menu.text
-  property color accent: Color.accent
-  property color urgent: Color.urgent
-  property color selected: Color.menu.selectedBackground
+  property color background: Commons.Color.menu.background
+  property color foreground: Commons.Color.menu.text
+  property color accent: Commons.Color.accent
+  property color urgent: Commons.Color.urgent
+  property color selected: Commons.Color.menu.selectedBackground
   property string fontFamily: Style.font.menuFamily
 
   // Text that reads on this ground, as in the window: the theme's text colour that stands out more, and the
   // accent moved toward it until it reads.
-  readonly property color text: quick.ink(Model.bestTextColor(quick.background, [quick.foreground, Color.foreground]))
+  readonly property color text: quick.ink(Model.bestTextColor(quick.background, [quick.foreground, Commons.Color.foreground]))
   readonly property color muted: Qt.rgba(quick.text.r, quick.text.g, quick.text.b, 0.62)
   readonly property color accentText: quick.ink(Model.readableColor(quick.accent, quick.background, quick.text, 4.5))
   readonly property color onAccent: quick.ink(Model.inkOnFill(quick.accent, [quick.text, quick.background], 4.5))

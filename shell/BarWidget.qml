@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "../app" as App
 
@@ -101,7 +102,7 @@ BarWidget {
           width: parent.width
           height: Style.space(30)
           radius: Style.space(6)
-          color: entryHover.hovered ? Style.hoverFillFor(Color.popups.text, Color.accent) : "transparent"
+          color: entryHover.hovered ? Style.hoverFillFor(Commons.Color.popups.text, Commons.Color.accent) : "transparent"
 
           HoverHandler { id: entryHover }
 
@@ -114,7 +115,7 @@ BarWidget {
             textFormat: Text.PlainText
             text: entry.modelData.label
             elide: Text.ElideRight
-            color: entry.modelData.action === "quit" ? Color.urgent : Color.popups.text
+            color: entry.modelData.action === "quit" ? Commons.Color.urgent : Commons.Color.popups.text
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.body
           }
@@ -143,7 +144,7 @@ BarWidget {
     bar: root.bar
     // Omagram's own mark, the Ring (app/RingMark.qml), in the bar's text colour like every status glyph --
     // not Telegram's paper plane, which the API terms keep for Telegram itself.
-    foreground: root.bar ? root.bar.barForeground : Color.foreground
+    foreground: root.bar ? root.bar.barForeground : Commons.Color.foreground
     iconComponent: Component {
       Item {
         App.RingMark {
@@ -171,7 +172,7 @@ BarWidget {
       width: Style.space(6)
       height: width
       radius: width / 2
-      color: Color.accent
+      color: Commons.Color.accent
       anchors.right: parent.right
       anchors.top: parent.top
       anchors.rightMargin: Style.space(3)

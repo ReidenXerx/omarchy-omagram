@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Quick switch and reply, summoned with a key: the quick view (QuickView.qml) in the middle of the screen, the
@@ -20,7 +21,7 @@ Item {
   property bool opened: false
 
   readonly property string pluginId: (manifest && manifest.id) || "reidenxerx.omagram"
-  readonly property var borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(2)))
+  readonly property var borderSpec: Border.surfaceSpec("menu", "border", Commons.Color.menu.border, Math.max(1, Style.space(2)))
 
   // The shell hands `service` over when this overlay loads, which can be before the plugin's service entry
   // exists; look it up again until it is there.
@@ -91,7 +92,7 @@ Item {
       height: Math.min(Style.space(620), surface.height - Style.space(96))
       anchors.centerIn: parent
       radius: Style.cornerRadius
-      color: Color.menu.background
+      color: Commons.Color.menu.background
       borderSpec: overlay.borderSpec
       padding: Style.spacing.panelPadding
 

@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // The bar's panel: the quick view (QuickView.qml), compact, under Omagram's bar icon. The chats first; choosing
@@ -44,9 +45,9 @@ Panel {
       compact: true
       service: root.omagram
       opened: root.opened
-      background: Color.popups.background
+      background: Commons.Color.popups.background
       foreground: root.barForeground
-      selected: Style.hoverFillFor(root.barForeground, Color.accent)
+      selected: Style.hoverFillFor(root.barForeground, Commons.Color.accent)
       onDismissRequested: root.close()
       onTabRequested: function (direction) { root.switchPanel(direction) }
       onFocusReturned: panel.beginFocusPrime()   // the full-screen view had the keyboard: take it back
