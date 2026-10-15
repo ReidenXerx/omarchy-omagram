@@ -177,7 +177,6 @@ Item {
       quick.reply(id)
       if (id === last && s.quickDraft) {
         composer.text = s.quickDraft
-        composer.cursorPosition = composer.text.length
       }
     } else {
       Qt.callLater(function () { search.forceActiveFocus() })
@@ -712,22 +711,23 @@ Item {
         Layout.fillWidth: true
         implicitHeight: Style.space(34)
 
-        TextInput {
+        // Typed keys only: Qt's own text fields would read every new clipboard entry into the shell unbounded.
+        KeyField {
           id: search
           anchors.left: parent.left
           anchors.top: parent.top
           anchors.bottom: parent.bottom
           anchors.right: openOmagram.left
           anchors.rightMargin: Style.space(8)
-          verticalAlignment: TextInput.AlignVCenter
           color: quick.text
-          selectionColor: quick.selected
+          placeholderColor: quick.muted
+          placeholderText: quick.ready ? "Find a chat" : quick.unavailableText
+          maximumLength: 100
           font.family: quick.fontFamily
           font.pixelSize: Style.font.body
-          clip: true
           onTextChanged: quick.query = text
 
-          Keys.onPressed: function (event) {
+          keyFilter: function (event) {
             function is(id) { return Keymap.matchesInText(quick.keys, id, event) }
             if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) quick.tabRequested(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1)
             else if (is("quick.down")) quick.move(1)
@@ -745,16 +745,6 @@ Item {
             }
             else return
             event.accepted = true
-          }
-
-          Text {
-            anchors.fill: parent
-            verticalAlignment: Text.AlignVCenter
-            visible: search.text === ""
-            text: quick.ready ? "Find a chat" : quick.unavailableText
-            textFormat: Text.PlainText
-            color: quick.muted
-            font: search.font
           }
         }
 
@@ -1745,22 +1735,25 @@ Item {
         border.width: 1
         border.color: composer.activeFocus ? quick.accent : Qt.rgba(quick.text.r, quick.text.g, quick.text.b, 0.2)
 
-        TextEdit {
+        // Typed keys only: Qt's own text fields would read every new clipboard entry into the shell unbounded. A paste
+        // goes through quick.paste, which takes copied files or, failing those, a bounded read of the text.
+        KeyField {
           id: composer
           anchors.left: parent.left
           anchors.right: tools.visible ? tools.left : parent.right
           anchors.top: parent.top
           anchors.bottom: parent.bottom
           anchors.margins: Style.space(8)
-          wrapMode: TextEdit.Wrap
-          textFormat: TextEdit.PlainText
+          multiline: true
+          maximumLength: 4096
           color: quick.text
-          selectionColor: quick.selected
+          placeholderColor: quick.muted
+          placeholderText: quick.recordingHere ? "Recording…" : quick.sending ? "Sending…" : (!quick.replyChatId ? "Choose a chat to answer" : quick.attachments.length ? "A caption, if you like" : "Message")
           font.family: quick.fontFamily
           font.pixelSize: Style.font.bodySmall
           readOnly: quick.sending || quick.recordingHere
 
-          Keys.onPressed: function (event) {
+          keyFilter: function (event) {
             function is(id) { return Keymap.matchesInText(quick.keys, id, event) }
             if (quick.recordingHere) {
               if (is("quickMessage.send")) quick.stopRecording(true)
@@ -1781,16 +1774,6 @@ Item {
             else if (is("quickMessage.stickers")) quick.openStickers()
             else return
             event.accepted = true
-          }
-
-          Text {
-            anchors.fill: parent
-            visible: composer.text === ""
-            text: quick.recordingHere ? "Recording…" : quick.sending ? "Sending…" : (!quick.replyChatId ? "Choose a chat to answer" : quick.attachments.length ? "A caption, if you like" : "Message")
-            textFormat: Text.PlainText
-            color: quick.muted
-            elide: Text.ElideRight
-            font: composer.font
           }
         }
 
