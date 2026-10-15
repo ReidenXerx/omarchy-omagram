@@ -150,7 +150,33 @@ def applications_dir():
     return base / "applications"
 
 
-def desktop_entry(kept=()):
+ICON_NAME = "omagram"
+ICON_MAX = 256 * 1024
+
+
+def icons_dir():
+    """Your own icon theme's folder for scalable app icons, beside the applications folder:
+    $XDG_DATA_HOME/icons/hicolor/scalable/apps."""
+    return applications_dir().parent / "icons" / "hicolor" / "scalable" / "apps"
+
+
+def install_icon():
+    """Copy Omagram's icon into your icon theme, so the launcher entry can name it ("omagram")
+    rather than give a file path, which apps that look icons up by theme name (the overview, some
+    launchers) do not show. True when the theme holds this copy of it."""
+    try:
+        data = safe.read_file(PLUGIN / "assets" / "omagram.svg", ICON_MAX)
+        if data is None:
+            return False
+        path = icons_dir() / f"{ICON_NAME}.svg"
+        if safe.read_file(path, ICON_MAX) != data:   # a symbolic link or a file not ours raises
+            safe.write_file(path, data, mode=0o644)
+        return True
+    except (OSError, safe.TooLarge, safe.UnsafeError):
+        return False
+
+
+def desktop_entry(kept=(), themed_icon=False):
     """The launcher entry for this copy of the plugin, or None when its launcher or icon is missing
     or their path would need quoting. Telegram's naming rule holds: the word is shown only as
     "Unofficial Telegram client" (the lower-case keyword is for search and never shown)."""
@@ -168,7 +194,7 @@ def desktop_entry(kept=()):
         "Comment=Chats, voice and round video messages in your Omarchy theme",
         f"Exec=/usr/bin/python3 {launcher}",
         f"TryExec={launcher}",
-        f"Icon={icon}",
+        f"Icon={ICON_NAME if themed_icon else icon}",
         "Terminal=false",
         "Categories=Network;InstantMessaging;Chat;",
         "Keywords=messages;chat;messenger;telegram;",
@@ -216,7 +242,7 @@ def install_desktop_entry():
         ours, kept = read_entry(current)
         if not ours:
             return "foreign"
-    wanted = desktop_entry(kept)
+    wanted = desktop_entry(kept, install_icon())
     if wanted is None:
         return "skipped"
     if current == wanted.encode("utf-8"):

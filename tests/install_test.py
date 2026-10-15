@@ -143,10 +143,29 @@ class DesktopEntry(Sandbox):
         self.assertEqual(fields["Name"], "Omagram")
         self.assertEqual(fields["Exec"], f"/usr/bin/python3 {self.plugin}/bin/omagram")
         self.assertEqual(fields["TryExec"], f"{self.plugin}/bin/omagram")
-        self.assertEqual(fields["Icon"], f"{self.plugin}/assets/omagram.svg")
+        self.assertEqual(fields["Icon"], "omagram")
         self.assertEqual(fields["StartupWMClass"], "omagram")
         self.assertEqual(fields["X-Omagram-Managed"], "reidenxerx.omagram")
         self.assertEqual(self.entry.stat().st_mode & 0o777, 0o644)
+
+    def test_the_icon_goes_into_your_icon_theme_by_name(self):
+        """Apps that look icons up by theme name (Aerial's overview, some launchers) show a path as
+        nothing, so the icon is copied into the user's own hicolor theme and named."""
+        self.assertEqual(self.launcher.install_desktop_entry(), "written")
+        icon = self.root / "share" / "icons" / "hicolor" / "scalable" / "apps" / "omagram.svg"
+        self.assertEqual(icon.read_text(), "<svg/>\n")
+        self.assertEqual(icon.stat().st_mode & 0o777, 0o644)
+        (self.plugin / "assets" / "omagram.svg").write_text("<svg>new</svg>\n")
+        self.launcher.install_desktop_entry()
+        self.assertEqual(icon.read_text(), "<svg>new</svg>\n", "an updated icon replaces the old copy")
+
+    def test_the_entry_falls_back_to_the_path_when_the_theme_cannot_hold_the_icon(self):
+        icons = self.root / "share" / "icons" / "hicolor" / "scalable" / "apps"
+        icons.mkdir(parents=True)
+        (icons / "omagram.svg").symlink_to(self.root / "elsewhere.svg")
+        self.assertEqual(self.launcher.install_desktop_entry(), "written")
+        self.assertEqual(self.fields()["Icon"], f"{self.plugin}/assets/omagram.svg")
+        self.assertFalse((self.root / "elsewhere.svg").exists(), "never written through a link")
 
     def test_telegram_is_named_only_as_an_unofficial_client(self):
         self.launcher.install_desktop_entry()
