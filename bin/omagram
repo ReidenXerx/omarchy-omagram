@@ -242,9 +242,9 @@ def install_desktop_entry():
         ours, kept = read_entry(current)
         if not ours:
             return "foreign"
+    if desktop_entry(kept) is None:
+        return "skipped"            # no entry to write, so no icon to put in the theme either
     wanted = desktop_entry(kept, install_icon())
-    if wanted is None:
-        return "skipped"
     if current == wanted.encode("utf-8"):
         return "unchanged"
     safe.write_file(path, wanted, mode=0o644)
