@@ -1386,12 +1386,13 @@ FocusScope {
   Timer { id: previewLater; interval: 700; onTriggered: root.lookUpLinkPreview() }
 
   function lookUpLinkPreview() {
-    var link = root.editingId || root.attachments.length ? "" : Model.composerLink(composer.text)
+    var secret = !!root.chat && root.chat.kind === "secret"   // a lookup would send the text to Telegram's servers
+    var link = root.editingId || root.attachments.length || secret ? "" : Model.composerLink(composer.text)
     if (link === root.linkPreviewLink) return
     root.linkPreviewLink = link
     root.linkPreview = null
     if (!link) { root.linkPreviewMode = "below"; return }
-    client.request("message.linkPreview", { text: composer.text.slice(0, 8192) }, function (answer) {
+    client.request("message.linkPreview", { chatId: root.chat.id, text: composer.text.slice(0, 8192) }, function (answer) {
       if (root.linkPreviewLink === link) root.linkPreview = answer.ok ? answer.result.preview : null
     })
   }

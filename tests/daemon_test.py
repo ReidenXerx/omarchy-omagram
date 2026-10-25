@@ -1776,6 +1776,20 @@ class Extras(Harness):
         q, _ = self.call(12, "message.reschedule", "editMessageSchedulingState", {"@type": "ok"}, chatId=500, messageId=77, sendAt=later + 60)
         self.assertEqual(q["scheduling_state"]["send_date"], later + 60)
 
+    def test_a_secret_chat_sends_no_text_to_telegram_for_a_link_preview(self):
+        before = self.sent_count("getLinkPreview")
+        answer = self.request(self.conn, 13, "message.linkPreview", chatId=-9, text="look example.com/a")
+        self.assertEqual((answer["ok"], answer["code"], self.sent_count("getLinkPreview")), (False, 404, before),
+                         "answered as TDLib answers a text with no link, without asking it")
+        for rid, where in enumerate(("below", "above", "none"), start=14):
+            q, _ = self.call(rid, "message.send", "sendMessage", {"@type": "message", "id": rid, "chat_id": -9}, chatId=-9,
+                             text="look example.com/a", linkPreview=where)
+            got = q["input_message_content"]["link_preview_options"]
+            self.assertEqual(got and (got["@type"], got["is_disabled"], got["show_above_text"]), ("linkPreviewOptions", True, False), where)
+        q, _ = self.call(17, "message.send", "sendMessage", {"@type": "message", "id": 17, "chat_id": 500}, chatId=500,
+                         text="look example.com/a")
+        self.assertIsNone(q["input_message_content"]["link_preview_options"], "a private chat is as before")
+
     def test_translation(self):
         q, r = self.call(20, "message.translate", "translateMessageText", {"@type": "formattedText", "text": "hello", "entities": []},
                          chatId=500, messageId=7, to="en")
@@ -2195,6 +2209,32 @@ class Notifications(Harness):
                 self.assertEqual((query["chat_id"], query["notification_settings"]["mute_for"]), (42, 3600))
             else:
                 self.assertEqual((query["message_id"], query["reaction_type"]["emoji"]), (60, "👍"))
+
+    def test_a_secret_chat_notifies_without_its_text_or_picture(self):
+        for update in (
+            {"@type": "updateSecretChat", "secret_chat": {"@type": "secretChat", "id": 9, "user_id": 7, "is_outbound": True,
+                                                          "state": {"@type": "secretChatStateReady"}}},
+            {"@type": "updateNewChat", "chat": {"@type": "chat", "id": -9, "title": "Ann", "type": {"@type": "chatTypeSecret", "secret_chat_id": 9, "user_id": 7},
+                                                "positions": [{"@type": "chatPosition", "list": {"@type": "chatListMain"}, "order": "8"}]}},
+        ):
+            self.td_event(dict(update, **{"@client_id": 1}))
+        self.settle()
+        photo = self.note(4, "")
+        photo["type"]["message"]["chat_id"] = -9
+        photo["type"]["message"]["content"] = {"@type": "messagePhoto", "caption": {"text": "look", "entities": []}, "photo": {
+            "@type": "photo", "minithumbnail": {"@type": "minithumbnail", "width": 40, "height": 30, "data": base64.b64encode(bytes((0xFF, 0xD8)) + b"a tiny jpeg").decode()},
+            "sizes": [{"@type": "photoSize", "type": "x", "width": 800, "height": 600, "photo": {
+                "@type": "file", "id": 55, "size": 1000, "local": {"@type": "localFile", "path": "", "is_downloading_completed": False}}}]}}
+        text = self.note(5, "the password is hunter2")
+        text["type"]["message"]["chat_id"] = -9
+        for note in (text, photo):
+            self.td_event(dict(self.group([note]), chat_id=-9))
+            self.settle()
+            self.assertEqual(self.bus.shown[-1], ("Ann", "New message"))
+            self.assertNotIn("image-path", self.bus.hints[-1])
+        self.td_event(self.group([self.note(6, "a group is as before")]))
+        self.settle()
+        self.assertEqual(self.bus.shown[-1], ("Friends", "Ann: a group is as before"))
 
     def test_each_person_has_a_sound_but_not_in_do_not_disturb_or_a_burst(self):
         def played():

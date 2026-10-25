@@ -827,7 +827,9 @@ class Daemon:
         title = chat["title"] if chat else ""
         if total > 1:
             title = f"{title} ({total})"
-        if message is None or kind.get("show_preview") is not True:
+        # A secret chat's text and picture stay out of notifications: they pass through the session bus and its history.
+        hidden = kind.get("show_preview") is not True or bool(chat and chat["kind"] == "secret")
+        if message is None or hidden:
             body = "New message"
         else:
             body = model.preview_text(message["content"])
@@ -837,7 +839,7 @@ class Daemon:
             if len(self.notified) >= 512 and chat_id not in self.notified:
                 self.notified.clear()
             self.notified[chat_id] = message["id"]
-        shown = message if kind.get("show_preview") is True else None
+        shown = None if hidden else message
         if self.notifier.show(chat_id, title, body, self.notification_picture(chat, shown)) and message is not None:
             self.play_person(self.sound_seed(chat, message))
 
@@ -3048,10 +3050,18 @@ class Daemon:
         where = args.get("linkPreview", "below")
         if where not in LINK_PREVIEWS:
             raise BadRequest("linkPreview is below, above or none")
+        if self.secret_target(args):   # looking a link up would hand the text to Telegram's servers
+            where = "none"
         if where == "below":
             return None
         return {"@type": "linkPreviewOptions", "is_disabled": where == "none", "url": "", "force_small_media": False,
                 "force_large_media": False, "show_above_text": where == "above"}
+
+    def secret_target(self, args):
+        """Whether the chat a message goes to is a secret chat: its text must stay off Telegram's servers."""
+        chat_id = args.get("chatId")
+        chat = self.state.chats.get(chat_id) if isinstance(chat_id, int) and not isinstance(chat_id, bool) else None
+        return bool(chat and chat["kind"] == "secret")
 
     def chat_silent(self, args):
         """Whether the chat a message goes to is set to silent sending: then it goes without sound unless the
@@ -3112,7 +3122,11 @@ class Daemon:
                                                  "link_preview_options": self.link_preview_options(args), "clear_draft": True}, args)
 
     def cmd_message_link_preview(self, client, rid, args):
-        """The preview Telegram shows for the first link in text being typed. TDLib answers 404 when there is none."""
+        """The preview Telegram shows for the first link in text being typed. TDLib answers 404 when there is none,
+        and so does this for a secret chat, without asking."""
+        if self.secret_target(args):
+            self.respond_error(client, rid, "no link preview", 404)
+            return
         text = self.typed_text(arg_str(args, "text", MARKDOWN_TEXT_MAX), TEXT_MAX, "a message")
         self.td_send({"@type": "getLinkPreview", "text": text, "link_preview_options": None}, client, rid,
                      lambda p: {"preview": model.link_preview(p, self.state.files_root)})

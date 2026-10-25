@@ -94,7 +94,9 @@
   sign-in screen takes a proxy link too, for where Telegram is blocked, and a proxy link in a chat
   asks before it is used.
 - **Secret chats** — start one from a person's info. Like every Telegram secret chat it lives on
-  this computer only; its info shows the encryption key to compare with the other device.
+  this computer only; its info shows the encryption key to compare with the other device. Its text
+  stays off Telegram's servers and out of notifications: no link previews, and a notification says
+  only "New message".
 - **Stories** — the stories of the people and channels you follow, above the chat list
   (`Ctrl+Shift+S`): photos and videos one after another. Watching one shows you among its
   viewers, as in any Telegram app. Posting stories needs an official app.
