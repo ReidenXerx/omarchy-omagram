@@ -563,6 +563,22 @@ FocusScope {
     root.revealed = next
   }
 
+  // PgUp / PgDn: move the message view by most of a screen; the cursor (if any) follows to what is now in the middle.
+  function pageScroll(dir) {
+    var list = messageList
+    if (!list || list.count === 0) return
+    var top = list.originY
+    var bottom = list.originY + Math.max(0, list.contentHeight - list.height)
+    var y = Math.max(top, Math.min(bottom, list.contentY + dir * list.height * 0.9))
+    list.contentY = y
+    root.stickToBottom = dir > 0 && y >= bottom - 1
+    if (root.cursor >= 0) {
+      var i = list.indexAt(list.width / 2, y + list.height / 2)
+      if (i >= 0) root.cursor = i
+    }
+    if (dir < 0 && y <= top + Style.space(200)) root.loadOlder()
+  }
+
   function stepFrom(index, delta) {
     var i = index + delta
     while (i > 0 && i < root.messages.length - 1 && Model.inAlbumAfterFirst(root.messages, i)) i += delta
@@ -1958,6 +1974,8 @@ FocusScope {
             }
           }
           else if (is("messages.toList")) root.toList()
+          else if (is("messages.pageDown")) root.pageScroll(1)
+          else if (is("messages.pageUp")) root.pageScroll(-1)
           else if (is("messages.last")) { root.cursor = root.messages.length - 1; root.stickToBottom = true; positionViewAtEnd() }
           else if (is("messages.menu")) root.openMenuAtCursor()
           else if (is("messages.forward")) {
@@ -2774,6 +2792,8 @@ FocusScope {
               else if (is("composer.spoiler")) root.wrapSelection("||", "||")
               else if (is("composer.link")) root.wrapLink()
               else if (is("composer.linkPreview")) root.cycleLinkPreview()
+              else if (is("composer.pageDown")) root.pageScroll(1)
+              else if (is("composer.pageUp")) root.pageScroll(-1)
               else if (is("composer.send")) root.send()
               else if (is("composer.newLine")) composer.insert(composer.cursorPosition, "\n")
               else if (is("composer.cancel")) {
