@@ -181,6 +181,18 @@ def content(value, files_root=""):
         if preview is not None:
             out["linkPreview"] = preview
         return out
+    if kind_name == "messageRichMessage":
+        # Rich Messages (tables, lists, headings, quotes). The one exception to "no markup here": omagram_rich
+        # escapes every network string and emits only a fixed Qt Rich Text subset; plain text still drives
+        # previews, notifications, copy and search.
+        import omagram_rich
+        plain, rich_html, is_full = omagram_rich.convert(c.get("message"))
+        out = {"kind": "text", "text": plain[:TEXT_MAX], "entities": []}
+        if rich_html:
+            out["html"] = rich_html
+        if not is_full:
+            out["richPartial"] = True
+        return out
     kind = CONTENT_KINDS.get(kind_name)
     if kind is None:
         kind = "service" if kind_name.startswith(SERVICE_PREFIXES) else "unsupported"

@@ -683,6 +683,17 @@ function customEmojiIds(entities) {
   return out
 }
 
+// A Rich Message's HTML is built and escaped by the daemon (omagram_rich.py); here it only gets the theme's colours.
+function richMessageHtml(html, codeBackground, linkColor) {
+  var s = String(html || "")
+  if (/^#[0-9a-fA-F]{6}$/.test(String(linkColor || "")))
+    s = s.replace(/<a href=/g, '<a style="color:' + linkColor + '; text-decoration:none" href=')
+  if (/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(String(codeBackground || "")))
+    s = s.replace(/<code>/g, '<code style="background-color:' + codeBackground + '">')
+         .replace(/<pre>/g, '<pre style="background-color:' + codeBackground + '">')
+  return s
+}
+
 function richText(text, entities, revealed, codeBackground, emojiImages, linkColor) {
   var s = String(text || "")
   // Rich Text takes a link's colour from the palette (Qt's blue), not from Text.linkColor, so it is written on the link.
