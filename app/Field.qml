@@ -29,6 +29,8 @@ FocusScope {
 
     Text {
       visible: field.label !== ""
+      width: parent.width
+      wrapMode: Text.WordWrap
       text: field.label
       textFormat: Text.PlainText
       color: field.app.muted

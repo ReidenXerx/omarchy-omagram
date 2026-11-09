@@ -284,7 +284,7 @@ FocusScope {
         spacing: Style.space(6)
 
         Repeater {
-          model: Model.infoActions(info.chat, info.app.meId)
+          model: Model.infoActions(info.chat, info.app.meId, !!info.chat && Model.isStealth(info.app.stealthChats, info.chat.id))
           delegate: Rectangle {
             id: action
             required property var modelData

@@ -8,7 +8,7 @@ const assert = require("assert")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app", "Model.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const box = {}
-vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, readRequests, hexOf, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, selectedMessages, reactionAdds, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, noteFrame, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError, autoDownload, downloadText, nextDownloadRule, scopeText, previewsText, folderSummary, newFolder, folderProblem, movedFolders, moreMenu, diceMenu, parseLocation, locationText, pollProblem, parseDay, composerLink, autoDeleteText, nextAutoDelete, autoDeleteMenu, autoDeleteSeconds, parseProxyAddress, isProxyLink, proxyLinkUrl, proxySteps, proxyStepProblem, proxyText, connectionText, colorLuminance, colorContrast, mixColors, readableColor, bestTextColor, inkOnFill, soundStyleText, nextSoundStyle }", box)
+vm.runInNewContext(source + "\nthis.M = { CHATS_MAX, MESSAGES_MAX, compareOrder, orderIn, pinnedIn, sortChats, upsertChat, upsertKnown, chatsIn, listTabs, findChat, indexOfChat, filterChats, unreadTotal, mergeMessages, replaceMessage, removeMessages, patchMessage, findMessage, oldestId, lastOwnEditable, incomingIds, readRequests, hexOf, contentLabel, previewOf, sameRun, sameDay, listTime, dayLabel, clock, initials, validApiId, validApiHash, cleanPhone, validCode, safeUrl, richText, statusText, withAction, activeActions, actionText, receipt, updatePoll, albumStart, inAlbumAfterFirst, latestKeyboard, MUTE_FOREVER, chatTitle, messageMenu, muteMenu, muteSeconds, chatMenu, hasUnread, stealthItem, isStealth, blockActions, albumIds, toggleSelection, selectedIds, selectionText, reactionChosen, selectedMessages, reactionAdds, riskyFile, saveName, forwardTargets, agoText, sessionTitle, sessionDetail, storageText, memberCountText, infoSubtitle, infoDetails, infoActions, infoTabs, firstLink, sharedRow, memberDetail, sortContacts, usernameQuery, newChatRows, contactDetail, historyKey, isHistoryOf, mergeTopics, topicColor, topicLetter, customEmojiIds, stillStickerFile, secretStateText, schedulePresets, scheduleText, sendMenu, rescheduleMenu, sendChoice, scheduledOrder, scheduleDay, startsDay, dayHeading, storyChats, findStories, storiesUnread, firstStoryId, storyStep, listEdits, syncRows, rowMessage, NO_MESSAGE, markdownToggle, suggestToken, mentionText, commandText, matchCommands, attachmentKind, composerBlock, joinText, publicQuery, publicChatDetail, repliesText, playbackRate, noteFrame, nextSpeed, speedLabel, profileProblem, profileError, profileValue, profileChat, privacyText, nextPrivacy, ttlText, nextTtl, passwordText, blockedText, passwordSteps, passwordStepProblem, passwordError, autoDownload, downloadText, nextDownloadRule, scopeText, previewsText, folderSummary, newFolder, folderProblem, movedFolders, moreMenu, diceMenu, parseLocation, locationText, pollProblem, parseDay, composerLink, autoDeleteText, nextAutoDelete, autoDeleteMenu, autoDeleteSeconds, parseProxyAddress, isProxyLink, proxyLinkUrl, proxySteps, proxyStepProblem, proxyText, connectionText, colorLuminance, colorContrast, mixColors, readableColor, bestTextColor, inkOnFill, soundStyleText, nextSoundStyle, inlineQuery, inlineTitle, inlineThumb, idList }", box)
 const M = box.M
 // A list as QML hands one to a delegate through modelData: an instance of Array that Array.isArray
 // does not recognise and concat does not spread. Made inside the context, whose Array is its own.
@@ -288,6 +288,13 @@ test("a message's menu offers only what Telegram allows", () => {
      ["reply", "copy", "translate", "link", "edit", "forward", "pin", "select", "deleteAll", "deleteMe"])
   eq(M.messageMenu(text, all, true).map(i => i.id).slice(1, 3), ["copy", "untranslate"])
   eq(M.messageMenu(Object.assign({}, text, { pinned: true }), { canPin: true }).map(i => i.id), ["copy", "translate", "unpin", "select"])
+  const failed = Object.assign({}, text, { outgoing: true, sending: "failed", retry: true })
+  eq(M.messageMenu(failed, null).map(i => i.id).slice(0, 2), ["resend", "reply"], "a failed message offers to try again first")
+  eq(M.messageMenu(Object.assign({}, failed, { retry: false }), null).map(i => i.id).indexOf("resend"), -1, "only when Telegram allows it")
+  const poll = { id: 9, outgoing: true, content: { kind: "poll", poll: { closed: false, voted: false } } }
+  assert.ok(M.messageMenu(poll, {}).some(i => i.id === "stopPoll"), "your own open poll can be stopped")
+  assert.ok(!M.messageMenu(Object.assign({}, poll, { outgoing: false }), {}).some(i => i.id === "stopPoll"))
+  assert.ok(!M.messageMenu({ id: 9, outgoing: true, content: { kind: "poll", poll: { closed: true } } }, {}).some(i => i.id === "stopPoll"))
   eq(M.messageMenu(Object.assign({}, text, { sendAt: 1789999999 }), all).map(i => i.id), ["sendNow", "reschedule", "edit", "copy", "deleteAll"],
      "a scheduled message")
   const photo = msg(6, { content: { kind: "photo", text: "", media: { file: { id: 3 } } } })
@@ -302,18 +309,54 @@ test("a message's menu offers only what Telegram allows", () => {
   eq(M.messageMenu(null, all), [])
 })
 
+test("inline bots in the composer", () => {
+  eq(M.inlineQuery("@gif cats"), { bot: "gif", query: "cats" })
+  eq(M.inlineQuery("@pic "), { bot: "pic", query: "" }, "the bot is asked as soon as its space is typed")
+  eq(M.inlineQuery("@gif cats\nand dogs"), { bot: "gif", query: "cats\nand dogs" })
+  assert.strictEqual(M.inlineQuery("@gif"), null, "no space yet: maybe a mention")
+  assert.strictEqual(M.inlineQuery("hi @gif cats"), null, "only at the start")
+  assert.strictEqual(M.inlineQuery("@ab x"), null, "usernames are 3 to 32 characters")
+  assert.strictEqual(M.inlineQuery("@bad-name x"), null)
+  assert.strictEqual(M.inlineQuery(null), null)
+  assert.strictEqual(M.inlineTitle({ kind: "gif" }), "GIF")
+  assert.strictEqual(M.inlineTitle({ kind: "article", title: "Weather" }), "Weather")
+  const file = { id: 5 }
+  eq(M.inlineThumb({ kind: "gif", media: { thumb: { file, format: "jpeg" }, mini: "x" } }), { file, mini: "x" })
+  eq(M.inlineThumb({ kind: "gif", media: { thumb: { file, format: "mpeg4" } } }).file, null, "an animated thumbnail is not a picture")
+  eq(M.inlineThumb({ kind: "photo", media: { file, width: 1, height: 1 } }).file, file)
+  eq(M.inlineThumb(null), { file: null, mini: null })
+})
+
 test("mute and chat menus", () => {
   eq(M.muteMenu({ muted: true }).map(i => i.id), ["unmute"])
   eq(M.muteMenu({ muted: false }).map(i => M.muteSeconds(i.id)), [3600, 28800, 172800, M.MUTE_FOREVER])
   assert.strictEqual(M.muteSeconds("unmute"), 0)
   for (const bad of ["mute:", "mute:-5", "mute:0", "mute:9999999999", "junk", null]) assert.strictEqual(M.muteSeconds(bad), -1, String(bad))
   const c = { id: 1, unread: 2, mentions: 0, muted: false, archived: false, positions: { main: { order: "5", pinned: true } } }
-  eq(M.chatMenu(c, "main", false).map(i => i.id), ["open", "info", "read", "unpin", "mute", "archive"])
-  eq(M.chatMenu(Object.assign({}, c, { unread: 0, muted: true, archived: true }), "main", true).map(i => i.id),
-     ["open", "info", "unread", "unmute", "unarchive"])
-  eq(M.chatMenu(Object.assign({}, c, { unread: 0, markedUnread: true }), "main", true).map(i => i.id), ["open", "info", "read", "mute", "archive"])
+  eq(M.chatMenu(c, "main", false).map(i => i.id), ["open", "info", "read", "stealth", "unpin", "mute", "archive"])
+  eq(M.chatMenu(Object.assign({}, c, { unread: 0, muted: true, archived: true }), "main", true, true).map(i => i.id),
+     ["open", "info", "unread", "unstealth", "unmute", "unarchive"])
+  eq(M.chatMenu(Object.assign({}, c, { unread: 0, markedUnread: true }), "main", true).map(i => i.id), ["open", "info", "read", "stealth", "mute", "archive"])
   eq(M.chatMenu(Object.assign({}, c, { kind: "private" }), "main", true).map(i => i.id),
-     ["open", "info", "read", "mute", "archive", "clear", "delete"])
+     ["open", "info", "read", "stealth", "mute", "archive", "clear", "delete"], "no one to block without a user")
+  const person = Object.assign({}, c, { kind: "private", userId: 7 })
+  eq(M.chatMenu(person, "main", true, false, 1).map(i => i.id),
+     ["open", "info", "read", "stealth", "mute", "archive", "block", "clear", "delete"])
+  eq(M.chatMenu(Object.assign({}, person, { blocked: true }), "main", true, false, 1).map(i => i.id).slice(-3), ["unblock", "clear", "delete"])
+  eq(M.chatMenu(person, "main", true, false, 7).map(i => i.id).indexOf("block"), -1, "Saved Messages: never block yourself")
+  assert.strictEqual(M.blockActions(Object.assign({}, person, { bot: true }), 1)[0].label, "Block the bot")
+  eq(M.blockActions({ kind: "group", userId: 0 }, 1), [])
+  assert.strictEqual(M.isStealth([5, 7], 7), true)
+  assert.strictEqual(M.isStealth([5], 7), false)
+  assert.strictEqual(M.isStealth(null, 7), false)
+  eq(M.idList([5, 7]), [5, 7])
+  eq(M.idList({ length: 2, 0: 5, 1: 7 }), [5, 7], "a Qt list from a signal is array-like, not an Array")
+  eq(M.idList([5, "x", null, 7]), [5, 7])
+  eq(M.idList(null), [])
+  eq(M.idList("57"), [])
+  assert.strictEqual(M.hasUnread({ unread: 0, mentions: 1 }), true)
+  assert.strictEqual(M.hasUnread({ unread: 0, mentions: 0 }), false)
+  assert.strictEqual(M.hasUnread({ unread: 0, mentions: 0, unreadReactions: 2 }), true, "unseen reactions count: marking read clears them")
   eq(M.chatMenu(Object.assign({}, c, { kind: "group", myStatus: "member" }), "main", true).map(i => i.id).slice(-1), ["leave"])
 })
 
@@ -333,16 +376,17 @@ test("a chat's info: subtitle, details, actions and tabs", () => {
      [["Username", "@ann", "https://t.me/ann"], ["Phone", "+380671234567", "+380671234567"], ["Bio", "hi", ""], ["Groups in common", "2", ""]])
   eq(M.infoDetails(channel, { description: "daily", inviteLink: "" }).map(d => d.label), ["Username", "About the channel"])
   eq(M.infoDetails(person, null), [])
-  eq(M.infoActions(person, 1).map(a => a.id), ["mute", "search", "secret", "hearSound", "otherSound", "clear", "delete"])
-  eq(M.infoActions(person, 7).map(a => a.id), ["mute", "search", "clear", "delete"], "no secret chat with yourself")
+  eq(M.infoActions(person, 1).map(a => a.id), ["mute", "search", "stealth", "secret", "hearSound", "otherSound", "block", "clear", "delete"])
+  eq(M.infoActions(person, 7).map(a => a.id), ["mute", "search", "stealth", "clear", "delete"], "no secret chat with yourself, no blocking yourself")
+  eq(M.infoActions(Object.assign({}, person, { unread: 3 }), 1, true).map(a => a.id).slice(0, 4), ["mute", "search", "read", "unstealth"])
   eq(M.infoActions({ id: -9, kind: "secret", userId: 7, secret: { state: "ready" } }, 1).map(a => a.id),
-     ["mute", "search", "endSecret", "clear", "delete"])
+     ["mute", "search", "stealth", "endSecret", "clear", "delete"])
   eq(M.infoDetails({ kind: "secret" }, { keyHash: "00010203 04050607" }).map(d => d.value), ["00010203 04050607"])
   assert.strictEqual(M.secretStateText({ secret: { state: "pending", outbound: true } }), "waiting for the other side to accept")
   assert.strictEqual(M.secretStateText({ secret: { state: "ready" } }), "end-to-end encrypted")
   assert.strictEqual(M.secretStateText({}), "")
-  eq(M.infoActions(group).map(a => [a.id, a.label]), [["mute", "Unmute"], ["search", "Search"], ["leave", "Leave group"]])
-  eq(M.infoActions(channel).map(a => a.id), ["mute", "search"], "nothing to leave once left")
+  eq(M.infoActions(group).map(a => [a.id, a.label]), [["mute", "Unmute"], ["search", "Search"], ["stealth", "Read in stealth"], ["leave", "Leave group"]])
+  eq(M.infoActions(channel).map(a => a.id), ["mute", "search", "stealth"], "nothing to leave once left")
   eq(M.infoTabs(group, { canGetMembers: true, memberCount: 3 }, null).map(t => t.key), ["members", "photos", "files", "links", "voice", "music", "gifs"])
   eq(M.infoTabs(group, { canGetMembers: true, memberCount: 3 }, { photos: 4, files: 0, links: 2, voice: 0, music: 0, gifs: 0 })
        .map(t => [t.key, t.count]), [["members", 3], ["photos", 4], ["links", 2]])
@@ -651,7 +695,7 @@ test("a link's preview while typing, and disappearing messages", () => {
   eq(M.autoDeleteMenu({ id: 5, kind: "private", autoDelete: 172800 }).map(i => i.label).slice(3), ["After 1 month", "After 2 days   ✓"])
   eq(M.autoDeleteMenu({ id: -5, kind: "secret", autoDelete: 0 }).map(i => i.label).slice(0, 2), ["Keep messages   ✓", "After 5 seconds once seen"])
   eq(["autoDelete:0", "autoDelete:604800", "autoDelete:-1", "mute:3600"].map(M.autoDeleteSeconds), [0, 604800, -1, -1])
-  eq(M.infoActions({ id: 5, kind: "private", userId: 5, canSetAutoDelete: true }, 1).map(a => a.id).slice(0, 4), ["mute", "search", "autoDelete", "secret"])
+  eq(M.infoActions({ id: 5, kind: "private", userId: 5, canSetAutoDelete: true }, 1).map(a => a.id).slice(0, 4), ["mute", "search", "stealth", "autoDelete"])
 })
 
 test("going to a date, and who reacted or has seen a message", () => {

@@ -2016,7 +2016,7 @@ class Settings(Harness):
         self.assertEqual(hello["settings"], {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1,
                                              "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0},
                                              "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}},
-                                             "sounds": {"style": "drop", "variants": {}}, "quiet": False})
+                                             "sounds": {"style": "drop", "variants": {}}, "quiet": False, "stealth": []})
         self.assertEqual(hello["globalStatus"]["global.quickReply"], "off")
         other = self.connect()
         answer = self.request(self.conn, 2, "settings.set", settings={"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}})
@@ -2291,6 +2291,327 @@ class Notifications(Harness):
             self.assertIsNone(self.window()[1])
         self.request(self.conn, 73, "ui.open", chatId=42)
         self.assertFalse(self.request(self.conn, 74, "ui.open", chatId="42")["ok"])
+
+
+class Batch(Harness):
+    """Stealth chats, request deadlines, resend, block, stop a poll, inline bots, and the failure log."""
+
+    def setUp(self):
+        super().setUp()
+        self.files = self.root / "files"
+        (self.files / "stickers").mkdir(parents=True, mode=0o700)
+        self.daemon.state.files_root = str(self.files)
+        self.conn = self.connect()
+        self.sign_in(self.conn)
+
+    file_event = MediaCommands.file_event
+
+    def stealth(self, *chats):
+        self.daemon.prefs = dict(self.daemon.prefs, stealth=list(chats))
+
+    def quiet_wait(self):
+        """A round trip through the loop: whatever was sent before it has been handled."""
+        self.assertTrue(self.request(self.conn, 9000, "hello")["ok"])
+
+    def test_stealth_setting_is_saved_shared_and_survives_other_writes(self):
+        other = self.connect()
+        r = self.request(self.conn, 1, "chat.setStealth", chatId=42, on=True)
+        self.assertEqual(r["result"], {"stealth": [42]})
+        event = self.read(other, lambda v: v.get("event") == "settings")
+        self.assertEqual(event["settings"]["stealth"], [42])
+        self.assertEqual(json.loads(self.d.prefs.SETTINGS.read_text())["stealth"], [42])
+        self.assertEqual(self.request(self.conn, 2, "chat.setStealth", chatId=-7, on=True)["result"], {"stealth": [42, -7]})
+        self.assertEqual(self.request(self.conn, 3, "chat.setStealth", chatId=42, on=True)["result"], {"stealth": [42, -7]})
+        r = self.request(self.conn, 4, "settings.set", settings={"shortcuts": {}})
+        self.assertEqual(r["result"]["settings"]["stealth"], [42, -7], "another settings write keeps it")
+        self.assertEqual(self.request(self.conn, 5, "chat.setStealth", chatId=42, on=False)["result"], {"stealth": [-7]})
+        for rid, bad in enumerate(({"chatId": 0, "on": True}, {"chatId": "1", "on": True}, {"chatId": 5, "on": 1}, {"chatId": 5}), start=6):
+            self.assertFalse(self.request(self.conn, rid, "chat.setStealth", **bad)["ok"], bad)
+
+    def test_stealth_chats_send_nothing_unless_forced(self):
+        self.stealth(42)
+        before = len(self.fake.sent)
+        for rid, cmd, args in ((10, "chat.read", {"messageIds": [9]}), (11, "chat.readMentions", {}), (12, "chat.readReactions", {})):
+            r = self.request(self.conn, rid, cmd, chatId=42, **args)
+            self.assertEqual((r["ok"], r["result"]), (True, {"stealth": True}), cmd)
+        r = self.request(self.conn, 13, "chat.action", chatId=42, action="typing")
+        self.assertEqual((r["ok"], r["result"]), (True, {"stealth": True}))
+        self.assertFalse(self.request(self.conn, 14, "chat.action", chatId=42, action="bogus")["ok"], "still validated")
+        self.assertFalse(self.request(self.conn, 15, "chat.read", chatId=42, messageIds=[9], force="yes")["ok"])
+        self.assertFalse(self.request(self.conn, 16, "chat.read", chatId=42, messageIds=[])["ok"])
+        self.quiet_wait()
+        self.assertEqual(self.fake.sent[before:], [], "TDLib heard nothing")
+        q, _ = self.call(17, "chat.read", "viewMessages", {"@type": "ok"}, chatId=42, messageIds=[9], force=True)
+        self.assertEqual(q["message_ids"], [9])
+        self.call(18, "chat.readMentions", "readAllChatMentions", {"@type": "ok"}, chatId=42, force=True)
+        self.call(19, "chat.readReactions", "readAllChatReactions", {"@type": "ok"}, chatId=42, force=True)
+
+    def test_other_chats_still_read_and_type(self):
+        self.stealth(42)
+        self.call(20, "chat.read", "viewMessages", {"@type": "ok"}, chatId=43, messageIds=[9])
+        self.call(21, "chat.action", "sendChatAction", {"@type": "ok"}, chatId=43, action="typing")
+        self.call(22, "chat.readMentions", "readAllChatMentions", {"@type": "ok"}, chatId=43)
+
+    def test_stealth_chats_do_not_see_reactions_or_listen(self):
+        self.td_event({"@type": "updateNewChat", "@client_id": 1, "chat": {
+            "@type": "chat", "id": 42, "title": "Friends", "type": {"@type": "chatTypeBasicGroup"}, "unread_reaction_count": 2}})
+        self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == 42)
+        self.stealth(42)
+        self.daemon.focused_chat = 42
+        before = len(self.fake.sent)
+        self.daemon.reactions_seen(42)
+        self.stealth()
+        self.daemon.reactions_seen(42)
+        self.assertEqual([q["@type"] for q in self.fake.sent[before:]], ["readAllChatReactions"], "only when not stealth")
+
+        class FakePlayer:
+            pid = 2 ** 22 + 123
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                pass
+        self.daemon.start_helper = lambda argv: FakePlayer()
+        voice = self.files / "voice" / "v.ogg"
+        voice.parent.mkdir(mode=0o700)
+        voice.write_bytes(b"OggS")
+        self.stealth(42)
+        self.send(self.conn, {"id": 30, "cmd": "media.play", "args": {"chatId": 42, "messageId": 7, "fileId": 9}})
+        self.td_event(self.file_event(self.last_query("downloadFile")["@extra"], 9, voice))
+        self.assertEqual(self.read(self.conn, lambda v: v.get("event") == "playing")["messageId"], 7, "it still plays")
+        self.assertTrue(self.read(self.conn, lambda v: v.get("id") == 30)["ok"])
+        self.assertNotIn("openMessageContent", self.fake.sent_types())
+
+    def test_explicit_mark_as_read_from_a_notification_is_allowed(self):
+        self.stealth(42)
+        self.daemon.notified[42] = 11
+        self.daemon.notification_button(42, "read")
+        self.assertEqual(self.last_query("viewMessages")["message_ids"], [11])
+
+    # ---------------------------------------------------------------- deadlines
+
+    def clock(self):
+        now = [1000.0]
+        self.daemon.pending.clear()   # what signing in asked for and nobody answered
+        self.daemon.deadlines.clear()
+        self.daemon.clock = lambda: now[0]
+        return now
+
+    def tick(self, now, seconds):
+        now[0] += seconds
+        self.daemon.wake()
+
+    def test_a_request_nobody_answers_times_out(self):
+        now = self.clock()
+        self.send(self.conn, {"id": 40, "cmd": "chat.info", "args": {"chatId": 42}})
+        query = self.last_query("getUserFullInfo") if "getUserFullInfo" in self.fake.sent_types() else None
+        self.send(self.conn, {"id": 41, "cmd": "message.link", "args": {"chatId": 42, "messageId": 7}})
+        link = self.last_query("getMessageLink")
+        self.tick(now, 59)
+        self.quiet_wait()
+        self.assertIn(link["@extra"], self.daemon.pending, "not yet")
+        self.tick(now, 2)
+        r = self.read(self.conn, lambda v: v.get("id") == 41)
+        self.assertEqual((r["ok"], r["error"]), (False, "Telegram did not answer in time"))
+        self.assertNotIn(link["@extra"], self.daemon.pending)
+        self.assertNotIn(link["@extra"], self.daemon.deadlines)
+        # The late answer is dropped without a word.
+        self.answer(link, {"@type": "messageLink", "link": "https://t.me/x/7", "is_public": True})
+        self.quiet_wait()
+        self.assertEqual(self.daemon.pending.get(link["@extra"]), None)
+        del query
+
+    def test_answered_requests_leave_no_deadline_and_slow_ones_wait_longer(self):
+        now = self.clock()
+        self.call(42, "message.link", "getMessageLink", {"@type": "messageLink", "link": "l", "is_public": False}, chatId=42, messageId=7)
+        self.assertEqual(self.daemon.deadlines, {})
+        before = self.sent_count("downloadFile")
+        self.send(self.conn, {"id": 43, "cmd": "media.play", "args": {"chatId": 42, "messageId": 7, "fileId": 9}})
+        query = self.next_query("downloadFile", before)
+        self.tick(now, 600)
+        self.quiet_wait()
+        self.assertIn(query["@extra"], self.daemon.pending, "a download we wait for outlasts the usual 60 seconds")
+        self.tick(now, 400)
+        self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 43)["error"], "Telegram did not answer in time")
+
+    def test_the_services_own_request_calls_failed_when_it_times_out(self):
+        now = self.clock()
+        heard, silent = [], []
+        self.daemon.td_send({"@type": "getMe"}, transform=lambda e: heard.append(("ok", e)), failed=lambda e: heard.append(("failed", e)))
+        self.daemon.td_send({"@type": "getMe"}, transform=lambda e: silent.append(e))
+        self.assertEqual(len(self.daemon.deadlines), 2)
+        self.tick(now, 61)
+        self.wait(lambda: heard)
+        self.assertEqual(heard, [("failed", {"@type": "error", "code": 0, "message": "Telegram did not answer in time"})])
+        self.assertEqual((self.daemon.pending, self.daemon.deadlines), ({}, {}))
+        self.daemon.td_send({"@type": "getMe"}, transform=lambda e: None, timeout=None)
+        self.assertEqual(self.daemon.deadlines, {}, "None waits as long as it takes")
+
+    def test_a_failing_failed_callback_does_not_stop_the_sweep(self):
+        now = self.clock()
+
+        def broken(_event):
+            raise RuntimeError("boom")
+        self.daemon.td_send({"@type": "getMe"}, transform=lambda e: None, failed=broken)
+        self.tick(now, 61)
+        self.wait(lambda: not self.daemon.pending)
+        self.quiet_wait()
+
+    def test_a_gone_client_is_not_written_to_and_its_deadline_goes(self):
+        now = self.clock()
+        other = self.connect()
+        self.send(other, {"id": 44, "cmd": "message.link", "args": {"chatId": 42, "messageId": 7}})
+        link = self.last_query("getMessageLink")
+        other.sock.close()
+        self.wait(lambda: link["@extra"] not in self.daemon.pending)
+        self.assertNotIn(link["@extra"], self.daemon.deadlines)
+        self.tick(now, 100)
+        self.quiet_wait()
+
+    # ---------------------------------------------------------------- resend
+
+    def test_resend_failed_messages(self):
+        q, r = self.call(50, "message.resend", "resendMessages",
+                         {"@type": "messages", "messages": [{"@type": "message", "id": 8, "chat_id": 42,
+                                                              "sending_state": {"@type": "messageSendingStatePending"},
+                                                              "content": {"@type": "messageText", "text": {"text": "hi"}}}, "junk"]},
+                         chatId=42, messageIds=[7])
+        self.assertEqual((q["chat_id"], q["message_ids"], q["quote"], q["paid_message_star_count"]), (42, [7], None, 0))
+        self.assertEqual([(m["id"], m["sending"]) for m in r["result"]["messages"]], [(8, "pending")])
+        for rid, bad in enumerate(({"messageIds": []}, {"messageIds": list(range(1, 102))}, {"messageIds": [0]}, {}), start=51):
+            self.assertFalse(self.request(self.conn, rid, "message.resend", chatId=42, **bad)["ok"], bad)
+
+    def test_deleting_a_failed_message_is_the_ordinary_delete(self):
+        q, r = self.call(55, "message.delete", "deleteMessages", {"@type": "ok"}, chatId=42, messageIds=[7])
+        self.assertEqual((q["message_ids"], q["revoke"], r["ok"]), ([7], True, True))
+
+    # ---------------------------------------------------------------- block, polls
+
+    def test_block_mirrors_unblock(self):
+        q, _ = self.call(60, "blocked.block", "setMessageSenderBlockList", {"@type": "ok"}, type="user", id=500)
+        self.assertEqual((q["sender_id"], q["block_list"]), ({"@type": "messageSenderUser", "user_id": 500}, {"@type": "blockListMain"}))
+        q, _ = self.call(61, "blocked.block", "setMessageSenderBlockList", {"@type": "ok"}, type="chat", id=-100)
+        self.assertEqual(q["sender_id"], {"@type": "messageSenderChat", "chat_id": -100})
+        q, _ = self.call(62, "blocked.unblock", "setMessageSenderBlockList", {"@type": "ok"}, type="user", id=500)
+        self.assertIsNone(q["block_list"])
+        for rid, bad in enumerate(({"type": "user", "id": -5}, {"type": "chat", "id": 5}, {"type": "x", "id": 5}, {"type": "user"}), start=63):
+            self.assertFalse(self.request(self.conn, rid, "blocked.block", **bad)["ok"], bad)
+
+    def test_chat_view_follows_the_block_list(self):
+        self.td_event({"@type": "updateNewChat", "@client_id": 1, "chat": {
+            "@type": "chat", "id": 700, "title": "Pest", "type": {"@type": "chatTypePrivate", "user_id": 700},
+            "block_list": {"@type": "blockListMain"}}})
+        self.assertIs(self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == 700)["chat"]["blocked"], True)
+        self.td_event({"@type": "updateChatBlockList", "@client_id": 1, "chat_id": 700, "block_list": None})
+        self.assertIs(self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == 700)["chat"]["blocked"], False)
+        self.td_event({"@type": "updateChatBlockList", "@client_id": 1, "chat_id": 700, "block_list": {"@type": "blockListMain"}})
+        self.assertIs(self.read(self.conn, lambda v: v.get("event") == "chat" and v["chat"]["id"] == 700)["chat"]["blocked"], True)
+
+    def test_stop_a_poll(self):
+        q, _ = self.call(70, "poll.stop", "stopPoll", {"@type": "ok"}, chatId=42, messageId=9)
+        self.assertEqual((q["chat_id"], q["message_id"], q["reply_markup"]), (42, 9, None))
+        self.assertFalse(self.request(self.conn, 71, "poll.stop", chatId=42, messageId=0)["ok"])
+
+    # ---------------------------------------------------------------- inline bots
+
+    def inline_photo(self, rid="p1"):
+        return {"@type": "inlineQueryResultPhoto", "id": rid, "title": "A photo", "description": "d", "photo": {
+            "@type": "photo", "sizes": [{"@type": "photoSize", "width": 90, "height": 60,
+                                         "photo": {"@type": "file", "id": 71, "size": 10, "local": {}}}]}}
+
+    def look_up_bot(self, rid, username, user):
+        before = self.sent_count("searchPublicChat")
+        self.send(self.conn, {"id": rid, "cmd": "inline.query", "args": {"chatId": 500, "username": username, "query": "cats", "offset": ""}})
+        q = self.next_query("searchPublicChat", before)
+        self.assertEqual(q["username"], username)
+        before = self.sent_count("getUser")
+        self.answer(q, {"@type": "chat", "id": 900, "type": {"@type": "chatTypePrivate", "user_id": 900}})
+        q = self.next_query("getUser", before)
+        self.assertEqual(q["user_id"], 900)
+        self.answer(q, user)
+
+    def test_inline_query_and_send(self):
+        bot = {"@type": "user", "id": 900, "type": {"@type": "userTypeBot", "is_inline": True, "inline_query_placeholder": "Search pics"}}
+        self.look_up_bot(80, "PicBot", bot)
+        q = self.next_query("getInlineQueryResults", 0)
+        self.assertEqual((q["bot_user_id"], q["chat_id"], q["query"], q["offset"]), (900, 500, "cats", ""))
+        results = [self.inline_photo(), {"@type": "inlineQueryResultArticle", "id": "a1", "url": "https://x.example", "title": "T", "description": "D"},
+                   {"@type": "inlineQueryResultLocation", "id": "l1", "title": "Here", "location": {"@type": "location", "latitude": 1.5, "longitude": 2.5}},
+                   {"@type": "inlineQueryResultContact", "id": "c1", "contact": {"@type": "contact", "first_name": "Ann", "phone_number": "123"}},
+                   {"@type": "inlineQueryResultGame", "id": "g1", "game": {"title": "Chess", "description": "Play"}},
+                   {"@type": "inlineQueryResultPhoto", "id": "bad"}, {"@type": "inlineQueryResultMystery", "id": "m"}, "junk"]
+        self.answer(q, {"@type": "inlineQueryResults", "inline_query_id": "123456789", "next_offset": "25", "results": results})
+        r = self.read(self.conn, lambda v: v.get("id") == 80)["result"]
+        self.assertEqual((r["queryId"], r["nextOffset"], r["botUserId"], r["placeholder"]), ("123456789", "25", 900, "Search pics"))
+        self.assertEqual([(x["id"], x["kind"]) for x in r["results"]],
+                         [("p1", "photo"), ("a1", "article"), ("l1", "location"), ("c1", "contact"), ("g1", "game")])
+        photo, article, location, contact = r["results"][:4]
+        self.assertEqual((photo["title"], photo["media"]["file"]["id"], article["url"], article["description"]), ("A photo", 71, "https://x.example", "D"))
+        self.assertEqual((location["location"]["lat"], location["title"], contact["contact"]["name"]), (1.5, "Here", "Ann"))
+        # The bot is remembered, case aside.
+        lookups = self.sent_count("searchPublicChat")
+        q, _ = self.call(81, "inline.query", "getInlineQueryResults", {"@type": "inlineQueryResults", "inline_query_id": "5", "results": []},
+                         chatId=500, username="picbot", query="dogs", offset="25")
+        self.assertEqual((self.sent_count("searchPublicChat"), q["offset"]), (lookups, "25"))
+        q, r = self.call(82, "inline.send", "sendInlineQueryResultMessage", {"@type": "message", "id": 5, "chat_id": 500},
+                         chatId=500, queryId="123456789", resultId="p1", replyToMessageId=3)
+        self.assertEqual((q["query_id"], q["result_id"], q["hide_via_bot"], q["reply_to"]["message_id"], r["result"]["id"]),
+                         (123456789, "p1", False, 3, 5))
+
+    def test_inline_query_refuses_what_is_not_an_inline_bot(self):
+        self.look_up_bot(83, "plainbot", {"@type": "user", "id": 900, "type": {"@type": "userTypeBot", "is_inline": False}})
+        r = self.read(self.conn, lambda v: v.get("id") == 83)
+        self.assertEqual((r["ok"], r["error"]), (False, "@plainbot is not an inline bot"))
+        self.look_up_bot(84, "someone", {"@type": "user", "id": 900, "type": {"@type": "userTypeRegular"}})
+        self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 84)["error"], "@someone is not an inline bot")
+        before = self.sent_count("searchPublicChat")
+        self.send(self.conn, {"id": 85, "cmd": "inline.query", "args": {"chatId": 500, "username": "nobody", "query": "", "offset": ""}})
+        self.td_event({"@type": "error", "code": 400, "message": "USERNAME_NOT_OCCUPIED", "@client_id": 1,
+                       "@extra": self.next_query("searchPublicChat", before)["@extra"]})
+        self.assertEqual(self.read(self.conn, lambda v: v.get("id") == 85)["error"], "@nobody is not an inline bot")
+        self.assertEqual(self.daemon.inline_bots, {}, "a refusal is not remembered")
+
+    def test_inline_arguments_are_checked_and_the_bot_cache_is_bounded(self):
+        for rid, bad in enumerate((dict(username="a b"), dict(username="ab"), dict(username="x" * 33), dict(username="@pic"),
+                                   dict(username=5), dict(username="picbot", query="q" * 300), dict(username="picbot", offset="o" * 600),
+                                   dict(username="picbot", chatId="5")), start=86):
+            args = dict(chatId=500, query="", offset="")
+            args.update(bad)
+            self.assertFalse(self.request(self.conn, rid, "inline.query", **args)["ok"], bad)
+        for rid, bad in enumerate((dict(queryId="x"), dict(queryId="1" * 25), dict(resultId=""), dict(resultId="r" * 65), dict(queryId=5)), start=95):
+            args = dict(chatId=500, queryId="5", resultId="r")
+            args.update(bad)
+            self.assertFalse(self.request(self.conn, rid, "inline.send", **args)["ok"], bad)
+        self.daemon.inline_bots = {f"bot{i}": (i, "") for i in range(self.d.INLINE_BOTS_MAX)}
+        bot = {"@type": "user", "id": 900, "type": {"@type": "userTypeBot", "is_inline": True}}
+        self.look_up_bot(100, "newbot", bot)
+        self.next_query("getInlineQueryResults", 0)
+        self.assertEqual(len(self.daemon.inline_bots), self.d.INLINE_BOTS_MAX)
+        self.assertIn("newbot", self.daemon.inline_bots)
+        self.assertNotIn("bot0", self.daemon.inline_bots)
+
+    # ---------------------------------------------------------------- the failure log
+
+    def test_an_unexpected_failure_is_logged_not_sent(self):
+        import io
+        err = io.StringIO()
+        with mock.patch.object(self.d.sys, "stderr", err), mock.patch.object(self.daemon, "cmd_chat_pin", side_effect=RuntimeError("secret-detail")):
+            r = self.request(self.conn, 110, "chat.pin", chatId=42, pinned=True)
+        self.assertEqual((r["ok"], r["error"]), (False, "the request failed"))
+        self.assertNotIn("secret-detail", json.dumps(r))
+        self.assertIn("chat.pin failed", err.getvalue())
+        self.assertIn("RuntimeError", err.getvalue())
+
+    def test_a_failing_sign_in_command_logs_only_the_kind_of_error(self):
+        import io
+        err = io.StringIO()
+        with mock.patch.object(self.d.sys, "stderr", err), mock.patch.object(self.daemon, "cmd_auth_code", side_effect=RuntimeError("12345")):
+            self.assertFalse(self.request(self.conn, 111, "auth.code", code="12345")["ok"])
+        self.assertEqual(err.getvalue().strip(), "omagramd: auth.code failed: RuntimeError")
 
 
 class Startup(unittest.TestCase):

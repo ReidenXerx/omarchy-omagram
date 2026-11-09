@@ -110,6 +110,7 @@ Scope {
     omagram.playbackRate = Model.playbackRate(view.settings.playbackRate)
     omagram.autoDownloadRules = view.settings.autoDownload || null
     omagram.reactionsSeen = view.settings.reactionsSeen !== false
+    omagram.stealthChats = Model.idList(view.settings.stealth)
     omagram.emojiState = view.settings.emoji || ({ tone: 0, recents: ({}) })
     omagram.soundStyle = (view.settings.sounds || {}).style || "drop"
   }
@@ -117,6 +118,8 @@ Scope {
   // What downloads by itself as it comes on screen (Model.autoDownload); kept in the settings.
   property var autoDownloadRules: null
   property bool reactionsSeen: true        // reactions to your messages count as seen when the chat opens
+  // Chats read in stealth: the service marks nothing read in them and sends no "typing…" until you mark them read yourself.
+  property var stealthChats: []
   property var emojiState: ({ tone: 0, recents: ({}) })   // the skin tone, and the emoji you use most
   property string soundStyle: "drop"       // what makes each person's notification sound, or "off"
 
@@ -507,12 +510,40 @@ Scope {
     if (chat) omagram.muteChat(chatId, chat.muted ? 0 : Model.MUTE_FOREVER)
   }
 
+  // Marking a chat read is always asked for (the chat list, the header, the chat's info), so it reads a stealth chat too.
   function markChatRead(chatId) {
     var chat = Model.findChat(omagram.chats, chatId)
     if (!chat) return
-    if (chat.lastMessage && chat.lastMessage.id) omagram.markRead(chatId, [chat.lastMessage.id])
-    if (chat.mentions > 0) service.request("chat.readMentions", { chatId: chatId })
+    if (chat.lastMessage && chat.lastMessage.id) omagram.markRead(chatId, [chat.lastMessage.id], 0, false, true)
+    if (chat.mentions > 0) service.request("chat.readMentions", { chatId: chatId, force: true })
+    if (chat.unreadReactions > 0) service.request("chat.readReactions", { chatId: chatId, force: true })
     if (chat.markedUnread) service.request("chat.markUnread", { chatId: chatId, unread: false })
+  }
+
+  function isStealth(chatId) { return Model.isStealth(omagram.stealthChats, chatId) }
+
+  function setStealth(chatId, on) {
+    service.request("chat.setStealth", { chatId: chatId, on: on }, function (answer) {
+      if (answer.ok) omagram.stealthChats = Model.idList(answer.result.stealth)
+      omagram.tell(!answer.ok ? (answer.error || "Could not change stealth for this chat")
+                   : on ? "Reading in stealth: nothing here is marked read, and no one sees you typing, until you mark it read"
+                        : "Stealth is off: reading this chat marks it read again")
+    })
+  }
+
+  // Blocks or unblocks the person a private chat is with.
+  function setBlocked(chatId, block) {
+    var chat = Model.findChat(omagram.chats, chatId)
+    if (!chat || !chat.userId) return
+    service.request(block ? "blocked.block" : "blocked.unblock", { type: "user", id: chat.userId }, function (answer) {
+      omagram.tell(!answer.ok ? (answer.error || (block ? "Could not block them" : "Could not unblock them"))
+                   : block ? "Blocked: they can no longer message or call you" : "Unblocked")
+    })
+  }
+
+  // A line at the bottom of the window, wherever it is asked for.
+  function tell(text) {
+    if (screen.item && screen.item.notify) screen.item.notify(text)
   }
 
   function markChatUnread(chatId) {
@@ -662,10 +693,12 @@ Scope {
     omagram.markRead(chat.id, Model.incomingIds(omagram.messages[omagram.openKey] || [], 100), topic ? topic.id : 0, thread)
   }
 
-  function markRead(chatId, ids, topicId, thread) {
+  // `force` reads a stealth chat as well: only for reading asked for, never for messages just seen.
+  function markRead(chatId, ids, topicId, thread, force) {
     if (!ids.length) return
     var args = { chatId: chatId, messageIds: ids }
     if (topicId) args[thread ? "threadId" : "topicId"] = topicId
+    if (force === true) args.force = true
     service.request("chat.read", args)
   }
 
@@ -677,7 +710,8 @@ Scope {
     color: omagram.background
     implicitWidth: 1100
     implicitHeight: 760
-    minimumSize: Qt.size(640, 480)
+    // Narrow enough to tile beside other windows: below 620 the window shows one pane at a time.
+    minimumSize: Qt.size(360, 480)
     visible: true
 
     // Closing the window ends this process; the service keeps the session.
@@ -826,18 +860,18 @@ Scope {
       // A menu or the forward dialog has the keyboard: the window's shortcuts wait.
       readonly property bool modal: chatView.modalOpen || chatList.modalOpen || forwardPicker.visible || newChat.visible
 
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.search"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.focusSearch() }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.search"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: { mainScope.listInFront = true; chatList.focusSearch() } }
       Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.previousChat"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.step(-1) }
       Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.nextChat"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.step(1) }
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusList"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.focusList() }
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusMessages"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatView.focusMessages() }
-      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusComposer"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatView.focusComposer() }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusList"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: mainScope.showList() }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusMessages"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: { if (omagram.openChat) mainScope.listInFront = false; chatView.focusMessages() } }
+      Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.focusComposer"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: { if (omagram.openChat) mainScope.listInFront = false; chatView.focusComposer() } }
       Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.nextTab"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.tabStep(1) }
       Shortcut { sequences: Keymap.keysFor(omagram.shortcuts, "window.previousTab"); enabled: !omagram.settingsOpen && !mainScope.modal; onActivated: chatList.tabStep(-1) }
       Shortcut {
         sequences: Keymap.keysFor(omagram.shortcuts, "window.searchInChat")
         enabled: !!omagram.openChat && !omagram.settingsOpen && !mainScope.modal
-        onActivated: chatList.searchInChat(omagram.openChatId, omagram.openChat ? omagram.openChat.title : "")
+        onActivated: { mainScope.listInFront = true; chatList.searchInChat(omagram.openChatId, omagram.openChat ? omagram.openChat.title : "") }
       }
       Shortcut {
         sequences: Keymap.keysFor(omagram.shortcuts, "window.newChat")
@@ -864,17 +898,60 @@ Scope {
         onDeclined: function (callId) { omagram.declineCall(callId) }
       }
 
-      RowLayout {
+      // Why nothing is arriving: the service is gone (it is being restarted), or Telegram is out of reach.
+      // Shown only once the trouble has lasted two seconds, so a short reconnect does not flash it.
+      Rectangle {
+        id: connectionBar
+        readonly property string problem: !service.connected ? "Reconnecting to Omagram's service…"
+            : (["network", "proxy", "connecting", "updating"].indexOf(omagram.connection) >= 0 ? Model.connectionText(omagram.connection) : "")
+        property bool shown: false
+        onProblemChanged: { if (!problem) shown = false; else if (!shown) showLater.restart() }
+        Timer { id: showLater; interval: 2000; onTriggered: connectionBar.shown = connectionBar.problem !== "" }
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: callBar.bottom
+        visible: shown && problem !== ""
+        height: visible ? Style.space(28) : 0
+        color: Qt.rgba(omagram.foreground.r, omagram.foreground.g, omagram.foreground.b, 0.06)
+
+        Text {
+          anchors.centerIn: parent
+          width: parent.width - Style.space(24)
+          horizontalAlignment: Text.AlignHCenter
+          elide: Text.ElideRight
+          text: connectionBar.problem
+          textFormat: Text.PlainText
+          color: omagram.muted
+          font.family: omagram.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      // Too narrow for the chat list beside a readable chat: one of them at a time, the chat
+      // with a back button to the list. Opening a chat brings the chat forward; going back to the
+      // list (the back button, its shortcut, search) brings the list forward.
+      readonly property bool onePane: width < 620
+      property bool listInFront: true
+      function showList() { mainScope.listInFront = true; chatList.focusList() }
+
+      Connections {
+        target: omagram
+        function onOpenChatIdChanged() { if (omagram.openChatId) mainScope.listInFront = false }
+      }
+
+      RowLayout {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: connectionBar.bottom
         anchors.bottom: parent.bottom
         spacing: 0
 
         ChatList {
           id: chatList
           app: omagram
-          Layout.preferredWidth: Math.max(280, Math.min(380, mainScope.width * 0.32))
+          visible: !mainScope.onePane || mainScope.listInFront || !omagram.openChat
+          Layout.preferredWidth: mainScope.onePane ? -1 : Math.max(280, Math.min(380, mainScope.width * 0.32))
+          Layout.fillWidth: mainScope.onePane
           Layout.fillHeight: true
           chats: omagram.listChats
           allChats: omagram.chats
@@ -885,7 +962,7 @@ Scope {
           stories: omagram.storyChats
           onStoriesRequested: function (chatId) { omagram.openStories(chatId) }
           onListSelected: function (key) { omagram.selectList(key) }
-          onMessageActivated: function (chatId, messageId) { omagram.openChatAt(chatId, messageId) }
+          onMessageActivated: function (chatId, messageId) { mainScope.listInFront = false; omagram.openChatAt(chatId, messageId) }
           onPinRequested: function (chatId) { omagram.togglePin(chatId) }
           onArchiveRequested: function (chatId) { omagram.toggleArchive(chatId) }
           onSettingsRequested: omagram.settingsOpen = true
@@ -901,12 +978,17 @@ Scope {
           onClearRequested: function (chatId, removeFromList) { chatView.askClearChat(Model.findChat(omagram.chats, chatId), removeFromList) }
           onActivated: function (chatId) {
             omagram.openChatById(chatId, false)
+            mainScope.listInFront = false
             chatView.focusComposer()
           }
-          onToChat: chatView.focusComposer()
+          onToChat: {
+            if (omagram.openChat) mainScope.listInFront = false
+            chatView.focusComposer()
+          }
         }
 
         Rectangle {
+          visible: !mainScope.onePane
           Layout.preferredWidth: 1
           Layout.fillHeight: true
           color: omagram.border
@@ -917,6 +999,8 @@ Scope {
           id: chatView
           app: omagram
           client: service
+          visible: !chatList.visible || !mainScope.onePane
+          listButton: mainScope.onePane
           Layout.fillWidth: true
           Layout.fillHeight: true
           chat: omagram.openChat
@@ -924,10 +1008,10 @@ Scope {
           nowMs: omagram.nowMs
           onLoadOlder: if (omagram.openChatId && !chatView.scheduledOpen) omagram.loadHistory(omagram.openChatId, Model.oldestId(omagram.messagesFor(omagram.openChatId)))
           blocked: forwardPicker.visible || chatList.modalOpen || newChat.visible
-          onSearchRequested: function (text) { chatList.searchFor(text) }
-          onSearchInChatRequested: chatList.searchInChat(omagram.openChatId, Model.chatTitle(omagram.openChat, omagram.meId))
+          onSearchRequested: function (text) { mainScope.listInFront = true; chatList.searchFor(text) }
+          onSearchInChatRequested: { mainScope.listInFront = true; chatList.searchInChat(omagram.openChatId, Model.chatTitle(omagram.openChat, omagram.meId)) }
           onForwardRequested: function (fromChatId, messageIds) { forwardPicker.open(fromChatId, messageIds) }
-          onToList: chatList.focusList()
+          onToList: mainScope.showList()
         }
       }
 

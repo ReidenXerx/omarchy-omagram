@@ -10,6 +10,7 @@ produced here (offsets in UTF-16 code units, as TDLib gives them and as QML stri
 TEXT_MAX = 16 * 1024
 PREVIEW_MAX = 200
 TITLE_MAX = 256
+SEND_ERROR_MAX = 200   # why a message failed to send, as far as the window shows it
 NAME_MAX = 128
 URL_MAX = 2048
 ENTITIES_MAX = 512
@@ -267,6 +268,11 @@ def location_view(c):
         return None
     return {"lat": lat, "lon": lon, "title": _str(venue.get("title"), TITLE_MAX) if venue else "",
             "address": _str(venue.get("address"), TITLE_MAX) if venue else ""}
+
+
+def _blocked(block_list):
+    """Blocked from messaging: on the main block list. (The stories list only hides their stories.)"""
+    return _obj(block_list).get("@type") == "blockListMain"
 
 
 def contact_view(value):
@@ -834,6 +840,69 @@ def media_for(kind, c, files_root):
     return None
 
 
+INLINE_RESULT_ID_MAX = 64
+INLINE_MEDIA = {   # inlineQueryResult type -> (kind the window gets, the field holding the object, media_for's kind)
+    "inlineQueryResultPhoto": ("photo", "photo", "photo"),
+    "inlineQueryResultAnimation": ("gif", "animation", "gif"),
+    "inlineQueryResultSticker": ("sticker", "sticker", "sticker"),
+    "inlineQueryResultVideo": ("video", "video", "video"),
+    "inlineQueryResultAudio": ("audio", "audio", "audio"),
+    "inlineQueryResultVoiceNote": ("voice", "voice_note", "voice"),
+    "inlineQueryResultDocument": ("document", "document", "file"),
+}
+
+
+def inline_result_view(value, files_root):
+    """One result of an inline bot as the window shows it: {id, kind, title, description} and, for media, `media`
+    (the same view a message carries, so the window draws it the same way). None for a kind we do not know, or
+    media that cannot be shown. The id is what inline.send needs."""
+    r = _obj(value)
+    t, result_id = r.get("@type"), _str(r.get("id"), INLINE_RESULT_ID_MAX)
+    if not result_id or not isinstance(t, str) or not t.startswith("inlineQueryResult"):
+        return None
+    out = {"id": result_id, "kind": "", "title": _str(r.get("title"), TITLE_MAX),
+           "description": _str(r.get("description"), PREVIEW_MAX)}
+    if t in INLINE_MEDIA:
+        kind, field, media_kind = INLINE_MEDIA[t]
+        view = media_for(media_kind, {field: r.get(field)}, files_root)
+        if view is None:
+            return None
+        out["kind"], out["media"] = kind, view
+        if kind == "audio":
+            audio = _obj(r.get("audio"))
+            out["title"] = _str(audio.get("title"), TITLE_MAX)
+            out["description"] = _str(audio.get("performer"), PREVIEW_MAX)
+    elif t == "inlineQueryResultArticle":
+        out["kind"] = "article"
+        out["url"] = _str(r.get("url"), URL_MAX)
+        out["thumb"] = thumbnail(r.get("thumbnail"), files_root)
+    elif t in ("inlineQueryResultLocation", "inlineQueryResultVenue"):
+        out["kind"] = "location" if t.endswith("Location") else "venue"
+        place = location_view({"location": r.get("location")} if out["kind"] == "location" else {"venue": r.get("venue")})
+        if place is None:
+            return None
+        out["location"] = place
+        out["title"] = out["title"] or place["title"]
+        out["description"] = out["description"] or place["address"]
+        out["thumb"] = thumbnail(r.get("thumbnail"), files_root)
+    elif t == "inlineQueryResultContact":
+        person = contact_view(r.get("contact"))
+        if person is None:
+            return None
+        out["kind"], out["contact"], out["title"] = "contact", person, person["name"]
+        out["description"] = person["phone"]
+        out["thumb"] = thumbnail(r.get("thumbnail"), files_root)
+    elif t == "inlineQueryResultGame":
+        game = _obj(r.get("game"), "game")
+        out["kind"] = "game"
+        out["title"] = _str(game.get("title"), TITLE_MAX)
+        out["description"] = _str(game.get("description"), PREVIEW_MAX)
+        out["media"] = media_for("photo", {"photo": game.get("photo")}, files_root)
+    else:
+        return None
+    return out
+
+
 def preview_text(summary):
     kind, text = summary.get("kind"), summary.get("text", "")
     if kind in ("text", "emoji") or (kind == "service" and text):
@@ -927,7 +996,9 @@ class State:
         if not m:
             return None
         sender, name = self.sender(m.get("sender_id"))
-        sending = _obj(m.get("sending_state")).get("@type")
+        state = _obj(m.get("sending_state"))
+        sending = state.get("@type")
+        failed = sending == "messageSendingStateFailed"
         body = content(m.get("content"), self.files_root)
         if body["kind"] == "service":
             body["text"] = self.service_text(_obj(m.get("content")), sender, name, _int(m.get("chat_id")))
@@ -943,6 +1014,9 @@ class State:
             "sender": sender,
             "senderName": name,
             "sending": {"messageSendingStatePending": "pending", "messageSendingStateFailed": "failed"}.get(sending),
+            # A message that did not go: whether message.resend can try again, and why it failed.
+            "retry": failed and state.get("can_retry") is True,
+            "sendError": _str(_obj(state.get("error")).get("message"), SEND_ERROR_MAX) if failed else "",
             "replyTo": None,
             "content": body,
             "forward": self.forward_view(m.get("forward_info")),
@@ -1147,6 +1221,7 @@ class State:
             "lastMessage": chat["lastMessage"],
             "draft": chat["draft"],
             "markedUnread": chat["markedUnread"],
+            "blocked": chat.get("blocked", False),   # the chat's person is on your blocked list
             # The other person's status and whether they are a bot, for a private chat.
             "status": self.users.get(chat["userId"], {}).get("status") if chat["userId"] else None,
             "bot": self.users.get(chat["userId"], {}).get("bot", False) if chat["userId"] else False,
@@ -1205,6 +1280,7 @@ class State:
             "secretChatId": _int(kind_obj.get("secret_chat_id")),
             "hasScheduled": c.get("has_scheduled_messages") is True,
             "markedUnread": c.get("is_marked_as_unread") is True,
+            "blocked": _blocked(c.get("block_list")),
             "unread": max(0, _int(c.get("unread_count"))),
             "mentions": max(0, _int(c.get("unread_mention_count"))),
             "reactions": max(0, _int(c.get("unread_reaction_count"))),
@@ -1293,6 +1369,13 @@ class State:
         if not chat:
             return []
         chat["mentions"] = max(0, _int(u.get("unread_mention_count")))
+        return self._chat_event(chat["id"])
+
+    def _on_updateChatBlockList(self, u):
+        chat = self._chat(_int(u.get("chat_id")))
+        if not chat:
+            return []
+        chat["blocked"] = _blocked(u.get("block_list"))
         return self._chat_event(chat["id"])
 
     def _on_updateChatDefaultDisableNotification(self, u):

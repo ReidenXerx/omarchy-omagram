@@ -35,6 +35,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.parse
 import zlib
 
@@ -61,6 +62,10 @@ TEXT_MAX = 4096
 MARKDOWN_TEXT_MAX = 2 * TEXT_MAX    # as typed, markers included: TEXT_MAX applies once they are read
 IDS_MAX = 100
 CLOSE_TIMEOUT = 5.0
+PENDING_TIMEOUT = 60.0     # seconds TDLib may take to answer a request before we stop waiting for it
+SLOW_TIMEOUT = 180.0       # ... for what really waits on the network: signing in, uploads, proxy tests, big deletes
+DOWNLOAD_TIMEOUT = 900.0   # ... for a download we wait to finish, and for clearing the cache
+TIMED_OUT = "Telegram did not answer in time"
 
 LOTTIE = pathlib.Path(safe.home_dir()) / ".cache/omagram/lottie"
 NOTIFY_IMAGES = pathlib.Path(safe.home_dir()) / ".cache/omagram/notify"   # pictures handed to notifications
@@ -288,6 +293,9 @@ TRANSLATE_TO = re.compile(r"[a-z]{2,3}(-[A-Za-z0-9]{2,8})?")
 GIF_BOT = "gif"                          # the inline bot Telegram's own apps search GIFs with
 CUSTOM_EMOJI_MAX = 200
 INT64_ID = re.compile(r"-?[0-9]{1,19}")
+BOT_USERNAME = re.compile(r"[A-Za-z0-9_]{3,32}")
+INLINE_BOTS_MAX = 64                     # bot usernames remembered with their user ids
+INLINE_RESULTS_MAX = 50
 
 
 def file_kind(path, size, as_media):
@@ -531,11 +539,14 @@ class Daemon:
         self.global_status = {action: "off" for action in prefs.GLOBALS}
         self.children = {}   # detached helpers still running: pid -> what to do if they fail
         self.gif_bot_id = 0  # the @gif inline bot, once looked up
+        self.inline_bots = {}  # lower-case username -> the inline bot's user id, as checked (bounded, oldest out first)
+        self.clock = time.monotonic   # what request deadlines are measured by (tests set their own)
         self.state = model.State(td.MEDIA_ROOTS)
         self.td = None
         self.auth = {"state": "starting"}
         self.clients = {}
         self.pending = {}
+        self.deadlines = {}   # extra -> when to stop waiting for it; a request with none waits as long as it takes
         self.next_extra = 1
         self.events = queue.Queue(maxsize=EVENTS_MAX)
         self.stopping = False
@@ -647,6 +658,7 @@ class Daemon:
             self.run_tasks()
             self.notifier.pump()
             self.reap_children()
+            self.sweep_pending()
         self.shutdown()
 
     def shutdown(self):
@@ -683,7 +695,9 @@ class Daemon:
 
     # ---------------------------------------------------------------- TDLib
 
-    def td_send(self, query, client=None, rid=None, transform=None, failed=None):
+    def td_send(self, query, client=None, rid=None, transform=None, failed=None, timeout=PENDING_TIMEOUT):
+        """Sends to TDLib. A request someone waits on (a client, or a transform) is dropped, and they are told,
+        if TDLib has not answered in `timeout` seconds (None: never); a late answer is then ignored."""
         if self.td is None:
             if client is not None:
                 self.respond_error(client, rid, "Telegram is not available")
@@ -694,9 +708,32 @@ class Daemon:
         # handed to the transform instead of a socket.
         if client is not None or transform is not None:
             self.pending[extra] = (client, rid, transform, failed)
+            if timeout is not None:
+                self.deadlines[extra] = self.clock() + timeout
         query = dict(query)
         query["@extra"] = extra
         self.td.send(query)
+
+    def sweep_pending(self):
+        """Gives up on requests TDLib never answered: a client hears an error, the service's own request
+        goes to its `failed` (as an error answer would), and the entry goes, so it cannot pile up."""
+        if not self.deadlines:
+            return
+        now = self.clock()
+        for extra in [e for e, due in self.deadlines.items() if due <= now]:
+            del self.deadlines[extra]
+            entry = self.pending.pop(extra, None)
+            if entry is None:
+                continue
+            client, rid, _transform, failed = entry
+            if client is not None:
+                if client.sock.fileno() in self.clients:
+                    self.respond_error(client, rid, TIMED_OUT)
+            elif failed is not None:
+                try:
+                    failed({"@type": "error", "code": 0, "message": TIMED_OUT})
+                except Exception:   # the same promise as for an error answer
+                    pass
 
     def process_events(self):
         while True:
@@ -712,6 +749,7 @@ class Daemon:
         extra = event.get("@extra")
         if isinstance(extra, int) and extra in self.pending:
             client, rid, transform, failed = self.pending.pop(extra)
+            self.deadlines.pop(extra, None)
             if client is None:
                 # The service's own request (often the first step of a command): an error goes to
                 # `failed`, so whoever is waiting still hears back.
@@ -764,7 +802,8 @@ class Daemon:
         """The chats with active stories in the main list arrive as updates, a page per call."""
         if page < STORY_PAGES:
             self.td_send({"@type": "loadActiveStories", "story_list": {"@type": "storyListMain"}},
-                         transform=lambda _event: self.load_stories(page + 1), failed=lambda _event=None: None)
+                         transform=lambda _event: self.load_stories(page + 1), failed=lambda _event=None: None,
+                         timeout=SLOW_TIMEOUT)
 
     def on_auth(self, value):
         kind = model._obj(value).get("@type")
@@ -1124,6 +1163,7 @@ class Daemon:
                 pass
         for extra in [e for e, entry in self.pending.items() if entry[0] is client]:
             del self.pending[extra]
+            self.deadlines.pop(extra, None)
         client.sock.close()
 
     def on_socket(self, client, mask):
@@ -1223,8 +1263,20 @@ class Daemon:
             getattr(self, name)(client, rid, args)
         except BadRequest as e:
             self.respond_error(client, rid, str(e))
-        except Exception:   # one bad request must never take the service, and the session, down
+        except Exception as e:   # one bad request must never take the service, and the session, down
+            self.log_failure(cmd, e)
             self.respond_error(client, rid, "the request failed")
+
+    def log_failure(self, cmd, error):
+        """The journal gets what went wrong (the client only hears "the request failed"). Sign-in and password
+        commands log the kind of error alone: a message or a traceback line could carry what was typed."""
+        try:
+            if cmd.split(".")[0] in ("auth", "password", "credentials"):
+                print(f"omagramd: {cmd} failed: {type(error).__name__}", file=sys.stderr, flush=True)
+            else:
+                print(f"omagramd: {cmd} failed:\n{traceback.format_exc(limit=12)}".rstrip(), file=sys.stderr, flush=True)
+        except (OSError, ValueError):   # a closed stderr must not turn a failed request into a dead service
+            pass
 
     def cmd_hello(self, client, rid, args):
         target = None
@@ -1393,10 +1445,22 @@ class Daemon:
         self.td_send({"@type": "setPollAnswer", "chat_id": arg_int(args, "chatId"), "message_id": arg_int(args, "messageId", 1),
                       "option_ids": options}, client, rid)
 
+    def stealthy(self, chat_id):
+        """A chat read in secret (settings: stealth): nothing the window does by itself may tell anyone."""
+        return chat_id in self.prefs.get("stealth", ())
+
+    def cmd_poll_stop(self, client, rid, args):
+        """Closes a poll of yours for good: nobody can vote after this."""
+        self.td_send({"@type": "stopPoll", "chat_id": arg_int(args, "chatId"), "message_id": arg_int(args, "messageId", 1),
+                      "reply_markup": None}, client, rid)
+
     def cmd_chat_action(self, client, rid, args):
         action = args.get("action")
         if action not in SEND_ACTIONS:
             raise BadRequest("that is not a chat action")
+        if self.stealthy(arg_int(args, "chatId")):   # "typing..." would give a reader away
+            self.respond(client, rid, {"stealth": True})
+            return
         self.td_send({"@type": "sendChatAction", "chat_id": arg_int(args, "chatId"), "topic_id": self.topic_of(args),
                       "business_connection_id": "", "action": {"@type": SEND_ACTIONS[action]}}, client, rid)
 
@@ -1462,6 +1526,9 @@ class Daemon:
 
     def cmd_chat_read_reactions(self, client, rid, args):
         topic = self.topic_of(args)
+        if self.stealth_skips(args):
+            self.respond(client, rid, {"stealth": True})
+            return
         if topic is None:
             self.td_send({"@type": "readAllChatReactions", "chat_id": arg_int(args, "chatId")}, client, rid)
         elif topic["@type"] == "messageTopicForum":
@@ -1511,6 +1578,9 @@ class Daemon:
 
     def cmd_chat_read_mentions(self, client, rid, args):
         topic = self.topic_of(args)
+        if self.stealth_skips(args):
+            self.respond(client, rid, {"stealth": True})
+            return
         if topic is None:
             self.td_send({"@type": "readAllChatMentions", "chat_id": arg_int(args, "chatId")}, client, rid)
         elif topic["@type"] == "messageTopicForum":
@@ -1859,7 +1929,7 @@ class Daemon:
         if not isinstance(remove, bool) or not isinstance(revoke, bool):
             raise BadRequest("removeFromList and revoke are true or false")
         self.td_send({"@type": "deleteChatHistory", "chat_id": arg_int(args, "chatId"), "remove_from_chat_list": remove,
-                      "revoke": revoke}, client, rid)
+                      "revoke": revoke}, client, rid, timeout=SLOW_TIMEOUT)
 
     def cmd_chat_mark_unread(self, client, rid, args):
         unread = args.get("unread")
@@ -1992,7 +2062,7 @@ class Daemon:
                 return
             self.td_send({"@type": "setProfilePhoto", "is_public": False,
                           "photo": {"@type": "inputChatPhotoStatic", "photo": {"@type": "inputFileLocal", "path": str(target)}}},
-                         transform=done, failed=refused)
+                         transform=done, failed=refused, timeout=SLOW_TIMEOUT)   # the upload
         self.background(lambda: media.prepare_profile_photo(source, target), converted)
 
     def cmd_profile_delete_photo(self, client, rid, args):
@@ -2053,15 +2123,20 @@ class Daemon:
         self.td_send({"@type": "getBlockedMessageSenders", "block_list": {"@type": "blockListMain"}, "offset": offset,
                       "limit": 100}, client, rid, senders)
 
-    def cmd_blocked_unblock(self, client, rid, args):
+    def blocked_sender(self, args):
         kind, sender_id = args.get("type"), arg_int(args, "id")
         if kind == "user" and sender_id > 0:
-            sender = {"@type": "messageSenderUser", "user_id": sender_id}
-        elif kind == "chat" and sender_id < 0:
-            sender = {"@type": "messageSenderChat", "chat_id": sender_id}
-        else:
-            raise BadRequest("a blocked sender is a user or a chat")
-        self.td_send({"@type": "setMessageSenderBlockList", "sender_id": sender, "block_list": None}, client, rid)
+            return {"@type": "messageSenderUser", "user_id": sender_id}
+        if kind == "chat" and sender_id < 0:
+            return {"@type": "messageSenderChat", "chat_id": sender_id}
+        raise BadRequest("a blocked sender is a user or a chat")
+
+    def cmd_blocked_unblock(self, client, rid, args):
+        self.td_send({"@type": "setMessageSenderBlockList", "sender_id": self.blocked_sender(args), "block_list": None}, client, rid)
+
+    def cmd_blocked_block(self, client, rid, args):
+        self.td_send({"@type": "setMessageSenderBlockList", "sender_id": self.blocked_sender(args),
+                      "block_list": {"@type": "blockListMain"}}, client, rid)
 
     def cmd_password_get(self, client, rid, args):
         self.td_send({"@type": "getPasswordState"}, client, rid, model.password_view)
@@ -2183,7 +2258,8 @@ class Daemon:
                 added = model._obj(raw, "addedProxy")
                 if model._int(added.get("id")) == proxy_id:
                     self.td_send({"@type": "pingProxy", "proxy": added.get("proxy")}, client, rid,
-                                 lambda answer: {"seconds": max(0.0, float(answer.get("seconds") or 0))})
+                                 lambda answer: {"seconds": max(0.0, float(answer.get("seconds") or 0))},
+                                 timeout=SLOW_TIMEOUT)
                     return
             self.respond_error(client, rid, "There is no such proxy")
         self.td_send({"@type": "getProxies"}, transform=listed,
@@ -2302,7 +2378,7 @@ class Daemon:
             return {"remaining": max(0, model._int(event.get("size")))}
         self.td_send({"@type": "optimizeStorage", "size": 0, "ttl": 0, "count": 0, "immunity_delay": 0, "file_types": [],
                       "chat_ids": [], "exclude_chat_ids": [], "return_deleted_file_statistics": False, "chat_limit": 0},
-                     client, rid, cleared)
+                     client, rid, cleared, timeout=DOWNLOAD_TIMEOUT)
 
     # ---------------------------------------------------------------- forum topics
 
@@ -2421,7 +2497,7 @@ class Daemon:
 
         def search(bot_id):
             self.td_send({"@type": "getInlineQueryResults", "bot_user_id": bot_id, "chat_id": chat_id, "user_location": None,
-                          "query": query, "offset": offset}, client, rid, results)
+                          "query": query, "offset": offset}, client, rid, results, timeout=SLOW_TIMEOUT)   # the bot answers
 
         def unavailable(_event=None):
             self.respond_error(client, rid, "GIF search is not available")
@@ -2456,6 +2532,66 @@ class Daemon:
                      "width": arg_int(args, "width", 0, 10000, 0), "height": arg_int(args, "height", 0, 10000, 0)}
         self.send_content(client, rid, chat_id, {"@type": "inputMessageAnimation", "animation": animation, "caption": None,
                                                  "show_caption_above_media": False, "has_spoiler": False}, args)
+
+    def cmd_inline_query(self, client, rid, args):
+        """Results from any inline bot (@name query), the way Telegram's apps show them: GIFs, stickers, articles...
+        The bot is looked up by username and must be an inline one; the answer's ids go to inline.send."""
+        chat_id = arg_int(args, "chatId")
+        username = args.get("username")
+        if not isinstance(username, str) or not BOT_USERNAME.fullmatch(username):
+            raise BadRequest("username is a bot's name without the @")
+        query = arg_str(args, "query", QUERY_MAX, 0)
+        offset = args.get("offset", "")
+        if not isinstance(offset, str) or len(offset) > OFFSET_MAX:
+            raise BadRequest("offset is the text a previous search returned")
+        key = username.lower()
+
+        def not_inline(_event=None):
+            self.respond_error(client, rid, f"@{username} is not an inline bot")
+
+        def search(bot_id, placeholder):
+            def results(event):
+                found = (model.inline_result_view(r, self.state.files_root)
+                         for r in model._list(event.get("results"), INLINE_RESULTS_MAX))
+                return {"queryId": str(model._int(event.get("inline_query_id"))),
+                        "nextOffset": model._str(event.get("next_offset"), OFFSET_MAX), "botUserId": bot_id,
+                        "placeholder": placeholder, "results": [v for v in found if v is not None]}
+            self.td_send({"@type": "getInlineQueryResults", "bot_user_id": bot_id, "chat_id": chat_id, "user_location": None,
+                          "query": query, "offset": offset}, client, rid, results, timeout=SLOW_TIMEOUT)
+
+        def checked(user):
+            kind = model._obj(user.get("type"))
+            bot_id = model._int(user.get("id"))
+            if kind.get("@type") != "userTypeBot" or kind.get("is_inline") is not True or bot_id <= 0:
+                not_inline()
+                return
+            placeholder = model._str(kind.get("inline_query_placeholder"), 128)
+            if len(self.inline_bots) >= INLINE_BOTS_MAX:
+                self.inline_bots.pop(next(iter(self.inline_bots)))
+            self.inline_bots[key] = (bot_id, placeholder)
+            search(bot_id, placeholder)
+
+        def found_bot(chat):
+            user_id = model._int(model._obj(chat.get("type")).get("user_id"))
+            if user_id <= 0:
+                not_inline()
+                return
+            self.td_send({"@type": "getUser", "user_id": user_id}, transform=checked, failed=not_inline)
+
+        if key in self.inline_bots:
+            search(*self.inline_bots[key])
+        else:
+            self.td_send({"@type": "searchPublicChat", "username": username}, transform=found_bot, failed=not_inline)
+
+    def cmd_inline_send(self, client, rid, args):
+        """Sends one result of inline.query (its queryId and the result's id) to a chat, shown as sent via the bot."""
+        query_id, result_id = args.get("queryId"), args.get("resultId")
+        if (not isinstance(query_id, str) or not INT64_ID.fullmatch(query_id) or not -2 ** 63 <= int(query_id) < 2 ** 63
+                or not isinstance(result_id, str) or not 0 < len(result_id) <= 64):
+            raise BadRequest("queryId and resultId come from inline.query")
+        self.td_send({"@type": "sendInlineQueryResultMessage", "chat_id": arg_int(args, "chatId"), "topic_id": self.topic_of(args),
+                      "reply_to": self.reply_to(args), "options": self.send_options(args), "query_id": int(query_id),
+                      "result_id": result_id, "hide_via_bot": False}, client, rid, self.state.message)
 
     def cmd_custom_emoji(self, client, rid, args):
         """The stickers custom emoji are drawn with, by their ids (as text: they are int64)."""
@@ -2667,12 +2803,13 @@ class Daemon:
             started = int(time.time() * 1000)
             self.player = {"proc": proc, "fileId": file_id, "chatId": chat_id, "messageId": message_id, "startedAt": started,
                            "deadline": time.monotonic() + PLAY_TIMEOUT}
-            self.td_send({"@type": "openMessageContent", "chat_id": chat_id, "message_id": message_id})
+            if not self.stealthy(chat_id):   # playing is local; telling the sender "listened" is not
+                self.td_send({"@type": "openMessageContent", "chat_id": chat_id, "message_id": message_id})
             self.broadcast({"event": "playing", "fileId": file_id, "chatId": chat_id, "messageId": message_id,
                             "startedAt": started, "rate": rate})
             return {"startedAt": started}
         self.td_send({"@type": "downloadFile", "file_id": file_id, "priority": 32, "offset": 0, "limit": 0, "synchronous": True},
-                     client, rid, fetched)
+                     client, rid, fetched, timeout=DOWNLOAD_TIMEOUT)
 
     def cmd_media_stop(self, client, rid, args):
         self.stop_player()
@@ -2761,7 +2898,7 @@ class Daemon:
             self.background(lambda: media.make_note_animation(source), done)
             return DEFERRED
         self.td_send({"@type": "downloadFile", "file_id": file_id, "priority": 32, "offset": 0, "limit": 0, "synchronous": True},
-                     client, rid, fetched)
+                     client, rid, fetched, timeout=DOWNLOAD_TIMEOUT)
 
     # ---------------------------------------------------------------- settings
 
@@ -2782,7 +2919,7 @@ class Daemon:
     def cmd_settings_set(self, client, rid, args):
         settings = args.get("settings")
         if isinstance(settings, dict):   # the shortcuts page leaves the speed and the downloads as they are
-            settings = dict({k: self.prefs[k] for k in ("playbackRate", "autoDownload", "reactionsSeen", "emoji", "sounds", "quiet") if k in self.prefs}, **settings)
+            settings = dict({k: self.prefs[k] for k in ("playbackRate", "autoDownload", "reactionsSeen", "emoji", "sounds", "quiet", "stealth") if k in self.prefs}, **settings)
         try:
             new = prefs.check(settings)
         except ValueError as e:
@@ -2796,6 +2933,27 @@ class Daemon:
         if changed:
             self.apply_globals()
         self.respond(client, rid, self.settings_view())
+        self.broadcast(dict({"event": "settings"}, **self.settings_view()))
+
+    def cmd_chat_set_stealth(self, client, rid, args):
+        """Reads a chat in secret, or stops: while it is on, opening the chat does not mark it read, show you as
+        typing or tell anyone a voice message was heard."""
+        chat_id, on = arg_int(args, "chatId"), args.get("on")
+        if chat_id == 0 or not isinstance(on, bool):
+            raise BadRequest("chatId is a chat and on is true or false")
+        chats = [c for c in self.prefs.get("stealth", []) if c != chat_id or on]
+        if on and chat_id not in chats:
+            chats.append(chat_id)
+        try:
+            new = prefs.check(dict(self.prefs, stealth=chats))
+        except ValueError as e:
+            raise BadRequest(str(e))
+        try:
+            prefs.save(new)
+        except (safe.UnsafeError, OSError):
+            raise BadRequest("the settings could not be saved")
+        self.prefs = new
+        self.respond(client, rid, {"stealth": new["stealth"]})
         self.broadcast(dict({"event": "settings"}, **self.settings_view()))
 
     def cmd_settings_playback(self, client, rid, args):
@@ -2938,7 +3096,7 @@ class Daemon:
         once: nothing waits for you to scroll up to it."""
         chat = self.state.chats.get(chat_id)
         if (chat_id and chat_id == self.focused_chat and chat and chat.get("reactions", 0) > 0
-                and self.prefs.get("reactionsSeen", True)):
+                and self.prefs.get("reactionsSeen", True) and not self.stealthy(chat_id)):
             self.td_send({"@type": "readAllChatReactions", "chat_id": chat_id})
 
     def cmd_ui_open(self, client, rid, args):
@@ -2964,22 +3122,22 @@ class Daemon:
         if not PHONE.fullmatch(phone):
             raise BadRequest("that does not look like a phone number")
         self.td_send({"@type": "setAuthenticationPhoneNumber", "phone_number": re.sub(r"[ ()-]", "", phone),
-                      "settings": None}, client, rid)
+                      "settings": None}, client, rid, timeout=SLOW_TIMEOUT)
 
     def cmd_auth_code(self, client, rid, args):
         code = arg_str(args, "code", 10, 3)
         if not CODE.fullmatch(code):
             raise BadRequest("the code is digits only")
-        self.td_send({"@type": "checkAuthenticationCode", "code": code}, client, rid)
+        self.td_send({"@type": "checkAuthenticationCode", "code": code}, client, rid, timeout=SLOW_TIMEOUT)
 
     def cmd_auth_password(self, client, rid, args):
-        self.td_send({"@type": "checkAuthenticationPassword", "password": arg_str(args, "password", 512)}, client, rid)
+        self.td_send({"@type": "checkAuthenticationPassword", "password": arg_str(args, "password", 512)}, client, rid, timeout=SLOW_TIMEOUT)
 
     def cmd_auth_qr(self, client, rid, args):
-        self.td_send({"@type": "requestQrCodeAuthentication", "other_user_ids": []}, client, rid)
+        self.td_send({"@type": "requestQrCodeAuthentication", "other_user_ids": []}, client, rid, timeout=SLOW_TIMEOUT)
 
     def cmd_auth_logout(self, client, rid, args):
-        self.td_send({"@type": "logOut"}, client, rid)
+        self.td_send({"@type": "logOut"}, client, rid, timeout=SLOW_TIMEOUT)
 
     def cmd_chats_load(self, client, rid, args):
         limit = arg_int(args, "limit", 1, 500, 100)
@@ -2988,7 +3146,7 @@ class Daemon:
         def done(event):
             return {"list": key, "done": False}
         # TDLib answers 404 once the whole list is loaded.
-        self.td_send({"@type": "loadChats", "chat_list": chat_list, "limit": limit}, client, rid, done)
+        self.td_send({"@type": "loadChats", "chat_list": chat_list, "limit": limit}, client, rid, done, timeout=SLOW_TIMEOUT)
 
     def cmd_chat_list(self, client, rid, args):
         key, _ = arg_list(args)
@@ -3017,13 +3175,25 @@ class Daemon:
     def cmd_chat_close(self, client, rid, args):
         self.td_send({"@type": "closeChat", "chat_id": arg_int(args, "chatId")}, client, rid)
 
+    def stealth_skips(self, args):
+        """True when a read of this chat must not go to Telegram: it is a stealth chat and the request does not
+        carry force (the window's explicit "mark as read" does). `force` must be true or false."""
+        force = args.get("force", False)
+        if not isinstance(force, bool):
+            raise BadRequest("force is true or false")
+        return not force and self.stealthy(arg_int(args, "chatId"))
+
     def cmd_chat_read(self, client, rid, args):
         topic = self.topic_of(args)
+        ids = arg_ids(args, "messageIds")
+        if self.stealth_skips(args):
+            self.respond(client, rid, {"stealth": True})
+            return
         source = ("messageSourceChatHistory" if topic is None
                   else "messageSourceForumTopicHistory" if topic["@type"] == "messageTopicForum"
                   else "messageSourceMessageThreadHistory")
         self.td_send({"@type": "viewMessages", "chat_id": arg_int(args, "chatId"),
-                      "message_ids": arg_ids(args, "messageIds"), "source": {"@type": source},
+                      "message_ids": ids, "source": {"@type": source},
                       "force_read": True}, client, rid)
 
     def reply_to(self, args):
@@ -3352,6 +3522,14 @@ class Daemon:
         self.td_send({"@type": "getMessage", "chat_id": arg_int(args, "chatId"), "message_id": arg_int(args, "messageId", 1)},
                      client, rid, markdown)
 
+    def cmd_message_resend(self, client, rid, args):
+        """Tries again to send messages that failed (their view says retry); they come back as sent or pending."""
+        def sent(event):
+            found = (self.state.message(m) for m in model._list(event.get("messages"), IDS_MAX))
+            return {"messages": [m for m in found if m]}
+        self.td_send({"@type": "resendMessages", "chat_id": arg_int(args, "chatId"), "message_ids": arg_ids(args, "messageIds"),
+                      "quote": None, "paid_message_star_count": 0}, client, rid, sent)
+
     def cmd_message_delete(self, client, rid, args):
         revoke = args.get("revoke", True)
         if not isinstance(revoke, bool):
@@ -3417,7 +3595,12 @@ COMMANDS = {
     "reactions.available": ("cmd_reactions_available", True),
     "button.callback": ("cmd_button_callback", True),
     "poll.vote": ("cmd_poll_vote", True),
+    "poll.stop": ("cmd_poll_stop", True),
+    "inline.query": ("cmd_inline_query", True),
+    "inline.send": ("cmd_inline_send", True),
     "chat.action": ("cmd_chat_action", True),
+    "message.resend": ("cmd_message_resend", True),
+    "chat.setStealth": ("cmd_chat_set_stealth", True),
     "chat.draft": ("cmd_chat_draft", True),
     "chat.mute": ("cmd_chat_mute", True),
     "chat.nextMention": ("cmd_chat_next_mention", True),
@@ -3457,6 +3640,7 @@ COMMANDS = {
     "privacy.set": ("cmd_privacy_set", True),
     "blocked.list": ("cmd_blocked_list", True),
     "blocked.unblock": ("cmd_blocked_unblock", True),
+    "blocked.block": ("cmd_blocked_block", True),
     "password.get": ("cmd_password_get", True),
     "password.set": ("cmd_password_set", True),
     "password.checkEmailCode": ("cmd_password_check_email_code", True),

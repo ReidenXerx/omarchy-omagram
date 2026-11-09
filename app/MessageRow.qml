@@ -100,7 +100,8 @@ Item {
   Rectangle {
     id: bubble
     visible: !row.service && !row.hiddenInAlbum
-    readonly property real maxWidth: Math.min(row.width * 0.72, Style.space(640))
+    // Bubbles take more of a narrow chat, where 72% would leave short lines.
+    readonly property real maxWidth: Math.min(row.width * (row.width < Style.space(620) ? 0.88 : 0.72), Style.space(640))
     readonly property real inner: maxWidth - Style.space(24)
     y: row.height - height
     x: row.message.outgoing ? row.width - width - Style.space(18) : Style.space(18)

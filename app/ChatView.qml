@@ -45,6 +45,11 @@ FocusScope {
 
   signal loadOlder()
   signal toList()
+  // Set by the window when it is too narrow for the chat list beside the chat: the header then
+  // has a back button to the list, and the chat's info covers the chat instead of sitting beside it.
+  property bool listButton: false
+  // Too narrow for key hints beside every label: buttons show the label alone (the hints stay in tooltips and Settings).
+  readonly property bool compact: root.width < Style.space(640)
   signal searchRequested(string text)
 
   // What the messages need from here: which spoilers you opened, poll answers being chosen,
@@ -64,7 +69,7 @@ FocusScope {
   property var menuReactions: []
   property bool menuToComposer: false
   readonly property bool modalOpen: messageMenu.visible || muteMenu.visible || sendMenu.visible || rescheduleMenu.visible
-                                    || moreMenu.visible || diceMenu.visible || peoplePicker.visible || pollComposer.visible || peopleList.visible || autoDeleteMenu.visible
+                                    || moreMenu.visible || diceMenu.visible || composerOverflowMenu.visible || peoplePicker.visible || pollComposer.visible || peopleList.visible || autoDeleteMenu.visible
   readonly property var people: peopleList    // who reacted or has seen a message, for checks from outside
   readonly property var emoji: emojiPanel
   readonly property var polls: pollComposer   // the poll being made, for checks from outside
@@ -190,6 +195,8 @@ FocusScope {
     root.translations = ({})
     root.botCommands = null
     root.suggestions = []
+    root.clearInline()
+    root.inlineDismissed = ""
     root.attachments = []
     root.joiningChatId = 0
     root.locationOpen = false
@@ -229,6 +236,20 @@ FocusScope {
 
   property bool locationOpen: false
   readonly property var typedLocation: root.locationOpen ? Model.parseLocation(locationField.text) : null
+
+  // The composer's text box never gets narrower than this; buttons move into the overflow menu instead.
+  readonly property real composerMinText: Style.space(160)
+  // Which composer buttons stay out longest as the window narrows, first to last.
+  readonly property var composerKeep: ["voice", "attach", "emoji", "stickers", "video", "more", "later", "silent"]
+
+  // The composer buttons that did not fit, as a menu above the overflow button.
+  function openComposerOverflow(item) {
+    if (!root.chat || !root.canWrite) return
+    root.composerOverflowAnchor = item
+    var at = item.mapToItem(root, 0, 0)
+    composerOverflowMenu.open(at.x, at.y - Style.space(4))
+  }
+  property Item composerOverflowAnchor: null
 
   function openMoreMenu(item) {
     if (!root.chat || !root.canWrite) return
@@ -420,6 +441,8 @@ FocusScope {
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.jumpToDate"); enabled: root.shortcutsOn; onActivated: root.openDateBar() }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.autoDelete"); enabled: root.shortcutsOn; onActivated: root.openAutoDeleteMenu() }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.silent"); enabled: root.shortcutsOn; onActivated: root.toggleSilent() }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.stealth"); enabled: root.shortcutsOn && !!root.chat; onActivated: app.setStealth(root.chat.id, !app.isStealth(root.chat.id)) }
+  Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.markRead"); enabled: root.shortcutsOn && !!root.chat; onActivated: app.markChatRead(root.chat.id) }
   Shortcut { sequences: Keymap.keysFor(app.shortcuts, "window.mute"); enabled: root.shortcutsOn; onActivated: app.toggleMute(root.chat.id) }
   Shortcut {
     sequences: Keymap.keysFor(app.shortcuts, "window.pinnedMessage")
@@ -785,11 +808,38 @@ FocusScope {
     else if (id === "open") root.openFile(message)
     else if (id === "save") root.saveFile(message)
     else if (id === "retract") root.retractVote(message)
+    else if (id === "resend") root.resend(message)
+    else if (id === "stopPoll") root.askStopPoll(message)
     else if (id === "deleteAll" || id === "deleteMe") root.confirmDelete(Model.albumIds(root.messages, message), id === "deleteAll")
     else if (id === "translate") root.translate(root.captionHolder(message))
     else if (id === "untranslate") root.untranslate(root.captionHolder(message))
     else if (id === "sendNow") root.reschedule(message, 0)
     else if (id === "reschedule") root.openRescheduleMenu(message)
+  }
+
+  // A message that failed to send goes again; Telegram answers with it as a new message.
+  function resend(message) {
+    if (!message || !root.chat) return
+    // An album goes as a whole, but only its parts that failed and may go again.
+    var ids = Model.albumIds(root.messages, message).filter(function (id) {
+      var m = Model.findMessage(root.messages, id)
+      return m && m.sending === "failed" && m.retry === true
+    })
+    if (!ids.length) ids = [message.id]
+    client.request("message.resend", { chatId: message.chatId, messageIds: ids }, function (answer) {
+      if (!answer.ok) root.flash(answer.error || "Could not send it again")
+    })
+  }
+
+  function askStopPoll(message) {
+    if (!message) return
+    var chatId = message.chatId, messageId = message.id
+    root.prompt = { text: "Stop the poll? No one can vote after this, and everyone sees the final results.", action: "Stop the poll",
+                    run: function () {
+                      client.request("poll.stop", { chatId: chatId, messageId: messageId }, function (answer) {
+                        root.flash(answer.ok ? "The poll is closed" : (answer.error || "Could not stop the poll"))
+                      })
+                    } }
   }
 
   function favoriteSticker(message) {
@@ -1150,6 +1200,10 @@ FocusScope {
   function infoAction(id) {
     if (!root.chat) return
     if (id === "mute") app.toggleMute(root.chat.id)
+    else if (id === "read") app.markChatRead(root.chat.id)
+    else if (id === "stealth" || id === "unstealth") app.setStealth(root.chat.id, id === "stealth")
+    else if (id === "unblock") app.setBlocked(root.chat.id, false)
+    else if (id === "block") root.askBlock(root.chat)
     else if (id === "search") root.searchInChatRequested()
     else if (id === "leave") root.askLeaveChat(root.chat)
     else if (id === "clear" || id === "delete") root.askClearChat(root.chat, id === "delete")
@@ -1195,6 +1249,13 @@ FocusScope {
                       client.request("chat.leave", { chatId: chatId }, function (answer) { if (!answer.ok) root.flash(answer.error || "Could not leave") })
                       root.infoOpen = false
                     } }
+  }
+
+  function askBlock(chat) {
+    if (!chat) return
+    var chatId = chat.id
+    root.prompt = { text: "Block “" + Model.chatTitle(chat, app.meId) + "”? They will no longer be able to message or call you.",
+                    action: "Block", run: function () { app.setBlocked(chatId, true) } }
   }
 
   // Your copy only: the other side keeps theirs, as when you clear a chat in any Telegram app.
@@ -1364,6 +1425,7 @@ FocusScope {
 
   function composerEdited() {
     suggestLater.restart()
+    inlineLater.restart()
     previewLater.restart()
     if (root.settingText || !root.chat) return
     draftTimer.restart()
@@ -1531,6 +1593,101 @@ FocusScope {
     if (r.wrapped && hadText) composer.cursorPosition = r.end + 2
   }
 
+  // ---------------------------------------------------------------- inline bots
+
+  // "@bot query" at the start of the composer: the bot's results, picked like a suggestion and sent at once.
+  property string inlineBot: ""            // the bot asked, without @; "" when the composer is not an inline query
+  property string inlineText: ""           // what it was asked
+  property var inlineResults: []
+  property string inlineQueryId: ""
+  property string inlineNext: ""           // where more results start, "" when there are no more
+  property string inlinePlaceholder: ""    // the bot's own hint while nothing is typed after its name
+  property string inlineError: ""
+  property bool inlineLoading: false
+  property int inlineCursor: 0
+  property int inlineSerial: 0
+  property string inlineDismissed: ""      // closed with Esc: stays closed until the text changes
+  readonly property bool inlineOpen: root.inlineBot !== "" && !root.editingId
+                                     && composer.text !== root.inlineDismissed
+                                     && (root.inlineResults.length > 0 || root.inlineLoading || root.inlineError !== "" || root.inlinePlaceholder !== "")
+
+  Timer { id: inlineLater; interval: 400; onTriggered: root.askInline(false) }
+
+  function clearInline() {
+    root.inlineSerial++
+    root.inlineBot = ""
+    root.inlineText = ""
+    root.inlineResults = []
+    root.inlineQueryId = ""
+    root.inlineNext = ""
+    root.inlinePlaceholder = ""
+    root.inlineError = ""
+    root.inlineLoading = false
+    root.inlineCursor = 0
+  }
+
+  // `more`: the next page of the same query, as the list nears its end.
+  function askInline(more) {
+    var q = root.chat && !root.editingId && !root.attachments.length ? Model.inlineQuery(composer.text) : null
+    if (!q) { if (root.inlineBot) root.clearInline(); return }
+    if (more && (!root.inlineNext || root.inlineLoading)) return
+    if (!more && q.bot === root.inlineBot && q.query === root.inlineText && root.inlineQueryId) return
+    if (q.bot !== root.inlineBot) root.inlinePlaceholder = ""
+    var serial = ++root.inlineSerial
+    var chatId = root.chat.id
+    root.inlineBot = q.bot
+    root.inlineText = q.query
+    root.inlineLoading = true
+    root.inlineError = ""
+    client.request("inline.query", { chatId: chatId, username: q.bot, query: q.query, offset: more ? root.inlineNext : "" }, function (answer) {
+      if (serial !== root.inlineSerial || !root.chat || root.chat.id !== chatId) return
+      root.inlineLoading = false
+      if (!answer.ok) {
+        // Not an inline bot (or no such user): a mention after all, so nothing is shown.
+        root.inlineResults = []
+        root.inlineError = /not an inline bot|not found|USERNAME/i.test(answer.error || "") ? "" : (answer.error || "The bot did not answer")
+        return
+      }
+      var r = answer.result
+      root.inlineQueryId = r.queryId || ""
+      root.inlineNext = r.nextOffset || ""
+      root.inlinePlaceholder = r.placeholder || ""
+      root.inlineResults = more ? root.inlineResults.concat(r.results || []) : (r.results || [])
+      if (!more) root.inlineCursor = 0
+    })
+  }
+
+  function sendInline(index) {
+    var item = root.inlineResults[index]
+    if (!item || !root.chat || !root.inlineQueryId) return
+    var args = root.target({ chatId: root.chat.id, queryId: root.inlineQueryId, resultId: item.id })
+    if (root.replyToId) args.replyToMessageId = root.replyToId
+    if (root.chat.silent) args.silent = true
+    client.request("inline.send", args, function (answer) {
+      if (!answer.ok) root.flash(answer.error || "Could not send it")
+    })
+    root.replyToId = 0
+    root.stickToBottom = true
+    root.setComposerText("")
+    root.clearInline()
+  }
+
+  // Up and Down move, Enter (or Tab) sends the result, Esc closes until the text changes.
+  function inlineKey(event) {
+    var keys = root.app.shortcuts
+    function is(id) { return Keymap.matchesInText(keys, id, event) }
+    if (!root.inlineResults.length && !is("suggest.close")) return false
+    if (is("suggest.next")) {
+      root.inlineCursor = Math.min(root.inlineResults.length - 1, root.inlineCursor + 1)
+      if (root.inlineCursor >= root.inlineResults.length - 3) root.askInline(true)
+    }
+    else if (is("suggest.previous")) root.inlineCursor = Math.max(0, root.inlineCursor - 1)
+    else if (is("suggest.pick") || is("suggest.send")) root.sendInline(root.inlineCursor)
+    else if (is("suggest.close")) root.inlineDismissed = composer.text
+    else return false
+    return true
+  }
+
   // ---------------------------------------------------------------- suggestions while typing
 
   // @someone in a group, and the /commands of the chat's bots, completing what is typed at the cursor.
@@ -1686,10 +1843,11 @@ FocusScope {
       Layout.preferredHeight: Style.space(56)
       color: "transparent"
 
-      // md-arrow-left U+F004D: from a topic back to the forum's topics, from scheduled messages to the chat
+      // md-arrow-left U+F004D: from a topic back to the forum's topics, from scheduled messages to the chat,
+      // and in a window too narrow for two columns, from the chat back to the chat list
       Item {
         id: backButton
-        readonly property bool shown: root.topicId > 0 || root.scheduledOpen
+        readonly property bool shown: root.topicId > 0 || root.scheduledOpen || root.listButton
         anchors.left: parent.left
         anchors.leftMargin: Style.space(8)
         anchors.verticalCenter: parent.verticalCenter
@@ -1710,13 +1868,17 @@ FocusScope {
           hoverEnabled: true
           cursorShape: Qt.PointingHandCursor
           onClicked: {
-            if (!root.scheduledOpen) { app.closeTopic(); return }
-            root.closeScheduled()
-            root.focusComposer()
+            if (root.scheduledOpen) {
+              root.closeScheduled()
+              root.focusComposer()
+            }
+            else if (root.topicId > 0) app.closeTopic()
+            else root.toList()
           }
           onContainsMouseChanged: if (containsMouse) root.flash(root.scheduledOpen ? "Back to the chat   " + Keymap.label(Keymap.keysFor(app.shortcuts, "messages.toComposer")[0] || "")
-                                                                : (root.threadOpen ? "Back to the message   " : "Back to the topics   ")
-                                                                  + Keymap.label(Keymap.keysFor(app.shortcuts, "window.topicList")[0] || ""))
+                                                                : root.topicId > 0 ? (root.threadOpen ? "Back to the message   " : "Back to the topics   ")
+                                                                                     + Keymap.label(Keymap.keysFor(app.shortcuts, "window.topicList")[0] || "")
+                                                                : "Back to the chats   " + Keymap.label(Keymap.keysFor(app.shortcuts, "messages.toList")[0] || ""))
         }
       }
 
@@ -1774,6 +1936,83 @@ FocusScope {
         anchors.right: parent.right
         anchors.rightMargin: Style.space(10)
         anchors.verticalCenter: parent.verticalCenter
+
+        // Stealth and marking read, side by side: read quietly, then let them know when you choose.
+        Rectangle {
+          id: readControls
+          readonly property bool stealth: !!root.chat && app.isStealth(root.chat.id)
+          readonly property bool unread: !!root.chat && Model.hasUnread(root.chat)
+          visible: !!root.chat && !root.scheduledOpen
+          anchors.verticalCenter: parent.verticalCenter
+          width: readRow.implicitWidth + Style.space(4)
+          height: Style.space(32)
+          radius: height / 2
+          color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.06)
+
+          Row {
+            id: readRow
+            anchors.centerIn: parent
+            spacing: Style.space(2)
+
+            // md-incognito U+F05F9: filled with the accent while stealth is on
+            Rectangle {
+              width: Style.space(root.compact ? 32 : 40)
+              height: Style.space(28)
+              radius: height / 2
+              color: readControls.stealth ? app.accent
+                   : (stealthArea.containsMouse ? Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.1) : "transparent")
+              Behavior on color { ColorAnimation { duration: 120 } }
+
+              Text {
+                anchors.centerIn: parent
+                text: String.fromCodePoint(0xF05F9)
+                color: readControls.stealth ? app.onAccent : (stealthArea.containsMouse ? app.foreground : app.muted)
+                font.family: app.glyphFamily
+                font.pixelSize: Style.font.title
+              }
+              MouseArea {
+                id: stealthArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: app.setStealth(root.chat.id, !readControls.stealth)
+                onContainsMouseChanged: if (containsMouse) root.flash((readControls.stealth
+                    ? "Stealth is on: nothing here is marked read and no one sees you typing. Click to turn it off   "
+                    : "Read in stealth: read without anyone knowing, until you mark it read   ")
+                    + Keymap.label(Keymap.keysFor(app.shortcuts, "window.stealth")[0] || ""))
+              }
+            }
+
+            // md-check-all U+F012D: bright while something is unread
+            Rectangle {
+              width: Style.space(root.compact ? 32 : 40)
+              height: Style.space(28)
+              radius: height / 2
+              color: readArea.containsMouse && readControls.unread ? Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.1) : "transparent"
+
+              Text {
+                anchors.centerIn: parent
+                text: String.fromCodePoint(0xF012D)
+                color: !readControls.unread ? app.muted : (readArea.containsMouse ? app.foreground : app.accentText)
+                opacity: readControls.unread ? 1 : 0.4
+                font.family: app.glyphFamily
+                font.pixelSize: Style.font.title
+              }
+              MouseArea {
+                id: readArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: readControls.unread ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: if (readControls.unread) app.markChatRead(root.chat.id)
+                onContainsMouseChanged: if (containsMouse) root.flash(readControls.unread
+                    ? "Mark everything here as read   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.markRead")[0] || "")
+                    : "Everything here is read")
+              }
+            }
+          }
+        }
+
+        Item { width: Style.space(6); height: 1; visible: readControls.visible }
 
         Repeater {
           // md-magnify U+F0349; md-bell-outline U+F009C, md-bell-off U+F009B; md-information-outline U+F02FD
@@ -1916,6 +2155,11 @@ FocusScope {
         // The message box growing or shrinking, or a bar above it coming and going, keeps the
         // newest message in view.
         onHeightChanged: if (root.stickToBottom) positionViewAtEnd()
+        // Photos, stickers and previews take their real height only once they load, after the jump to
+        // the end: the end moves down, so a chat opened at its newest message is kept there. Never while
+        // you are scrolling yourself.
+        onContentHeightChanged: if (root.stickToBottom && !moving && !dragging) Qt.callLater(messageList.keepAtEnd)
+        function keepAtEnd() { if (root.stickToBottom && !moving && !dragging) positionViewAtEnd() }
         onAtYBeginningChanged: if (atYBeginning && count > 0 && moving) root.loadOlder()
         onContentYChanged: if (contentY <= originY + Style.space(200) && count > 0 && (moving || activeFocus)) root.loadOlder()
 
@@ -1949,13 +2193,25 @@ FocusScope {
               else item.mediaItem.activate()
             }
           }
-          else if (is("messages.toComposer")) {
+          else if (is("messages.back")) {
+            // One step back at a time, the way the back arrow above the chat goes.
             if (root.selecting) root.clearSelection()
-            else {
+            else if (root.scheduledOpen) {
               root.closeScheduled()
               root.cursor = -1
               root.focusComposer()
             }
+            else if (root.topicId > 0) app.closeTopic()
+            else {
+              root.cursor = -1
+              root.toList()
+            }
+          }
+          else if (is("messages.toComposer")) {
+            if (root.selecting) root.clearSelection()
+            root.closeScheduled()
+            root.cursor = -1
+            root.focusComposer()
           }
           else if (is("messages.toList")) root.toList()
           else if (is("messages.last")) { root.cursor = root.messages.length - 1; root.stickToBottom = true; positionViewAtEnd() }
@@ -2066,8 +2322,8 @@ FocusScope {
 
         Repeater {
           model: root.prompt ? [
-            { accept: true, label: root.prompt.action + "   " + Keymap.label(Keymap.keysFor(app.shortcuts, "prompt.accept")[0] || "") },
-            { accept: false, label: "Cancel   " + Keymap.label(Keymap.keysFor(app.shortcuts, "prompt.cancel")[0] || "") }
+            { accept: true, label: root.prompt.action + (root.compact ? "" : "   " + Keymap.label(Keymap.keysFor(app.shortcuts, "prompt.accept")[0] || "")) },
+            { accept: false, label: "Cancel" + (root.compact ? "" : "   " + Keymap.label(Keymap.keysFor(app.shortcuts, "prompt.cancel")[0] || "")) }
           ] : []
           delegate: Rectangle {
             id: promptAnswer
@@ -2110,6 +2366,9 @@ FocusScope {
         anchors.left: parent.left
         anchors.leftMargin: Style.space(18)
         anchors.verticalCenter: parent.verticalCenter
+        anchors.right: selectionRow.left
+        anchors.rightMargin: Style.space(8)
+        elide: Text.ElideRight
         text: Model.selectedIds(root.messages, root.selection).length + " selected"
         color: app.foreground
         font.family: app.fontFamily
@@ -2118,6 +2377,7 @@ FocusScope {
       }
 
       Row {
+        id: selectionRow
         anchors.right: parent.right
         anchors.rightMargin: Style.space(10)
         anchors.verticalCenter: parent.verticalCenter
@@ -2129,7 +2389,7 @@ FocusScope {
             { action: "forward", label: "Forward", key: "messages.forward" },
             { action: "copy", label: "Copy", key: "messages.copy" },
             { action: "delete", label: "Delete", key: "messages.delete" },
-            { action: "clear", label: "Cancel", key: "messages.toComposer" }
+            { action: "clear", label: "Cancel", key: "messages.back" }
           ]
           delegate: Rectangle {
             id: selectionAction
@@ -2141,7 +2401,8 @@ FocusScope {
             Text {
               id: selectionLabel
               anchors.centerIn: parent
-              text: selectionAction.modelData.label + "   " + Keymap.label(Keymap.keysFor(app.shortcuts, selectionAction.modelData.key)[0] || "")
+              text: selectionAction.modelData.label
+                    + (root.compact ? "" : "   " + Keymap.label(Keymap.keysFor(app.shortcuts, selectionAction.modelData.key)[0] || ""))
               color: selectionAction.modelData.action === "delete" ? app.urgent : app.foreground
               font.family: app.fontFamily
               font.pixelSize: Style.font.caption
@@ -2440,7 +2701,8 @@ FocusScope {
         anchors.right: parent.right
         anchors.rightMargin: Style.space(14)
         anchors.verticalCenter: parent.verticalCenter
-        width: Style.space(250)
+        // Leaves the thumbnails at least 60% of a narrow chat.
+        width: Math.min(Style.space(250), parent.width * 0.4)
         spacing: Style.space(4)
 
         // Photos and videos as themselves, or everything as files.
@@ -2484,11 +2746,137 @@ FocusScope {
       }
     }
 
+    // ------------------------------------------------ an inline bot's results
+    Rectangle {
+      Layout.fillWidth: true
+      Layout.preferredHeight: visible ? inlineColumn.implicitHeight + Style.space(10) : 0
+      visible: root.inlineOpen && !root.showTopics
+      color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.03)
+
+      Rectangle { width: parent.width; height: 1; color: app.border; opacity: 0.35 }
+
+      Column {
+        id: inlineColumn
+        x: Style.space(10)
+        y: Style.space(5)
+        width: parent.width - Style.space(20)
+        spacing: Style.space(2)
+
+        // Which bot, and its hint, an error, or that it is still looking.
+        Text {
+          width: parent.width
+          elide: Text.ElideRight
+          text: "@" + root.inlineBot + (root.inlineError ? "  ·  " + root.inlineError
+                : (root.inlineLoading && !root.inlineResults.length ? "  ·  looking…"
+                   : (!root.inlineResults.length && root.inlinePlaceholder ? "  ·  " + root.inlinePlaceholder
+                      : (!root.inlineResults.length ? "  ·  nothing found" : ""))))
+          textFormat: Text.PlainText
+          color: root.inlineError ? app.urgent : app.muted
+          font.family: app.fontFamily
+          font.pixelSize: Style.font.caption
+          leftPadding: Style.space(4)
+        }
+
+        ListView {
+          id: inlineList
+          width: parent.width
+          height: Math.min(5, count) * Style.space(52)
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          model: root.inlineResults
+          currentIndex: root.inlineCursor
+          onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
+          // Near the end: the next page.
+          onAtYEndChanged: if (atYEnd && count > 0) root.askInline(true)
+
+          delegate: Rectangle {
+            id: inlineRow
+            required property var modelData
+            required property int index
+            readonly property var picture: Model.inlineThumb(inlineRow.modelData)
+            readonly property var thumb: inlineRow.picture.file ? app.fileState(inlineRow.picture.file) : null
+            width: inlineList.width
+            height: Style.space(52)
+            radius: Style.cornerRadius
+            color: inlineRow.index === root.inlineCursor ? app.selected
+                 : (inlineArea.containsMouse ? Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.05) : "transparent")
+
+            Component.onCompleted: if (inlineRow.thumb && !inlineRow.thumb.path && !inlineRow.thumb.active) app.download(inlineRow.thumb.id, 1)
+
+            Rectangle {
+              id: inlinePicture
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              width: Style.space(42)
+              height: width
+              radius: Style.cornerRadius
+              clip: true
+              color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.06)
+
+              Image {
+                anchors.fill: parent
+                visible: inlineStill.status !== Image.Ready
+                source: Model.miniUrl(inlineRow.picture.mini)
+                fillMode: Image.PreserveAspectCrop
+              }
+              Image {
+                id: inlineStill
+                anchors.fill: parent
+                source: inlineRow.thumb && inlineRow.thumb.path ? Model.fileUrl(inlineRow.thumb.path) : ""
+                asynchronous: true
+                fillMode: Image.PreserveAspectCrop
+                sourceSize.width: 128
+              }
+            }
+
+            Column {
+              anchors.left: inlinePicture.right
+              anchors.leftMargin: Style.space(10)
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+
+              Text {
+                width: parent.width
+                elide: Text.ElideRight
+                text: Model.inlineTitle(inlineRow.modelData)
+                textFormat: Text.PlainText
+                color: app.foreground
+                font.family: app.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+              }
+              Text {
+                width: parent.width
+                visible: text !== ""
+                elide: Text.ElideRight
+                text: String(inlineRow.modelData.description || "")
+                textFormat: Text.PlainText
+                color: app.muted
+                font.family: app.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            MouseArea {
+              id: inlineArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.sendInline(inlineRow.index)
+            }
+          }
+        }
+      }
+    }
+
     // ------------------------------------------------ suggestions while typing
     Rectangle {
       Layout.fillWidth: true
       Layout.preferredHeight: visible ? suggestionList.height + Style.space(9) : 0
-      visible: root.suggestions.length > 0 && !root.showTopics
+      visible: root.suggestions.length > 0 && !root.showTopics && !root.inlineOpen
       color: Qt.rgba(app.foreground.r, app.foreground.g, app.foreground.b, 0.03)
 
       Rectangle { width: parent.width; height: 1; color: app.border; opacity: 0.35 }
@@ -2754,7 +3142,11 @@ FocusScope {
             Keys.onPressed: function (event) {
               var keys = root.app.shortcuts
               function is(id) { return Keymap.matchesInText(keys, id, event) }
-              // Suggestions, while they show, take the keys that move through them.
+              // An inline bot's results, then suggestions, while they show, take the keys that move through them.
+              if (root.inlineOpen && root.inlineKey(event)) {
+                event.accepted = true
+                return
+              }
               if (root.suggestions.length && root.suggestionKey(event)) {
                 event.accepted = true
                 return
@@ -2784,7 +3176,7 @@ FocusScope {
                 else if (root.replyToId) root.replyToId = 0
                 else if (root.attachments.length) root.attachments = []
                 else if (root.selecting) root.clearSelection()
-                else root.focusMessages()
+                else root.toList()
               }
               else if (is("composer.editLast") && composer.text === "") root.startEdit(Model.lastOwnEditable(root.messages))
               else if (is("composer.toMessages")) root.focusMessages()
@@ -2801,6 +3193,8 @@ FocusScope {
                     + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.send")[0] || "")
                     + (root.chat && root.chat.silent ? " to send without sound, " : " to send, ")
                     + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.newLine")[0] || "") + " for a new line"
+              width: composer.width
+              elide: Text.ElideRight
               color: app.muted
               opacity: 0.7
               font: composer.font
@@ -2810,6 +3204,8 @@ FocusScope {
       }
 
       // Attach, stickers, a video message, a voice message.
+      // In a narrow window the text box keeps at least `composerMinText`, and the buttons that no
+      // longer fit go behind a "more" button, least used first (see `composerKeep`).
       Row {
         id: composerButtons
         visible: !root.recordingVoice && !root.secretBlocked
@@ -2818,22 +3214,51 @@ FocusScope {
         anchors.verticalCenter: parent.verticalCenter
         spacing: 0
 
+        readonly property real buttonWidth: Style.space(38)
+        // Room for buttons: the composer's width less the box's margins and its smallest width.
+        readonly property real room: parent.width - Style.space(8) - Style.space(20) - root.composerMinText
+        readonly property int fits: Math.max(0, Math.floor(room / buttonWidth))
+        // Every button fits, or as many as fit next to the overflow button (always at least the microphone).
+        readonly property bool overflowing: fits < all.length
+        readonly property int keepCount: overflowing ? Math.max(1, fits - 1) : all.length
+        readonly property var hidden: all.filter(function (b) { return root.composerKeep.indexOf(b.action) >= keepCount })
+        // What is drawn: the kept buttons in their usual order, with the overflow button before the microphone.
+        readonly property var shown: {
+          var kept = all.filter(function (b) { return root.composerKeep.indexOf(b.action) < keepCount })
+          if (!overflowing) return kept
+          // md-dots-horizontal U+F01D8
+          var more = { glyph: String.fromCodePoint(0xF01D8), action: "overflow",
+                       hint: hidden.map(function (b) { return b.label }).join(", ") }
+          var voice = kept.length && kept[kept.length - 1].action === "voice" ? kept.length - 1 : kept.length
+          return kept.slice(0, voice).concat([more], kept.slice(voice))
+        }
+
+        // md-bell-sleep U+F00A0 (its outline U+F0A93), md-send-clock-outline U+F1164, md-emoticon-outline U+F01F2, md-paperclip U+F03E2,
+        // md-plus-circle-outline U+F0419, md-sticker-emoji U+F0785, md-video U+F0567, md-microphone U+F036C
+        // `label` names the button in the overflow menu.
+        readonly property var all: [
+          { glyph: String.fromCodePoint(root.chat && root.chat.silent ? 0xF00A0 : 0xF0A93), action: "silent",
+            label: root.chat && root.chat.silent ? "Turn silent sending off" : "Silent sending in this chat",
+            hint: (root.chat && root.chat.silent ? "Silent sending is on: messages here go without sound" : "Silent sending in this chat")
+                  + "   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.silent")[0] || "") },
+          { glyph: String.fromCodePoint(0xF1164), action: "later", label: "Send later",
+            hint: "Send later or without sound   " + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.later")[0] || "") },
+          { glyph: String.fromCodePoint(0xF01F2), action: "emoji", label: "Emoji",
+            hint: "Emoji   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.emoji")[0] || "") },
+          { glyph: String.fromCodePoint(0xF03E2), action: "attach", label: "Attach photos or files",
+            hint: "Attach photos or files   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.attach")[0] || "") },
+          { glyph: String.fromCodePoint(0xF0419), action: "more", label: "Poll, dice, contact or location",
+            hint: "A poll, dice, a contact card or a location   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.more")[0] || "") },
+          { glyph: String.fromCodePoint(0xF0785), action: "stickers", label: "Stickers",
+            hint: "Stickers   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.stickers")[0] || "") },
+          { glyph: String.fromCodePoint(0xF0567), action: "video", label: "Video message",
+            hint: "Video message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.videoNote")[0] || "") },
+          { glyph: String.fromCodePoint(0xF036C), action: "voice", label: "Voice message",
+            hint: "Voice message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.voice")[0] || "") }
+        ]
+
         Repeater {
-          // md-bell-sleep U+F00A0 (its outline U+F0A93), md-send-clock-outline U+F1164, md-emoticon-outline U+F01F2, md-paperclip U+F03E2,
-          // md-plus-circle-outline U+F0419, md-sticker-emoji U+F0785, md-video U+F0567, md-microphone U+F036C
-          model: [
-            { glyph: String.fromCodePoint(root.chat && root.chat.silent ? 0xF00A0 : 0xF0A93), action: "silent",
-              hint: (root.chat && root.chat.silent ? "Silent sending is on: messages here go without sound" : "Silent sending in this chat")
-                    + "   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.silent")[0] || "") },
-            { glyph: String.fromCodePoint(0xF1164), action: "later",
-              hint: "Send later or without sound   " + Keymap.label(Keymap.keysFor(app.shortcuts, "composer.later")[0] || "") },
-            { glyph: String.fromCodePoint(0xF01F2), action: "emoji", hint: "Emoji   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.emoji")[0] || "") },
-            { glyph: String.fromCodePoint(0xF03E2), action: "attach", hint: "Attach photos or files   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.attach")[0] || "") },
-            { glyph: String.fromCodePoint(0xF0419), action: "more", hint: "A poll, dice, a contact card or a location   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.more")[0] || "") },
-            { glyph: String.fromCodePoint(0xF0785), action: "stickers", hint: "Stickers   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.stickers")[0] || "") },
-            { glyph: String.fromCodePoint(0xF0567), action: "video", hint: "Video message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.videoNote")[0] || "") },
-            { glyph: String.fromCodePoint(0xF036C), action: "voice", hint: "Voice message   " + Keymap.label(Keymap.keysFor(app.shortcuts, "window.voice")[0] || "") }
-          ]
+          model: composerButtons.shown
           delegate: Item {
             id: composerButton
             required property var modelData
@@ -2855,6 +3280,7 @@ FocusScope {
               cursorShape: Qt.PointingHandCursor
               onClicked: {
                 if (composerButton.modelData.action === "silent") root.toggleSilent()
+                else if (composerButton.modelData.action === "overflow") root.openComposerOverflow(composerButton)
                 else root.composerAction(composerButton.modelData.action, composerButton)
               }
               onContainsMouseChanged: if (containsMouse) root.flash(composerButton.modelData.hint)
@@ -2925,6 +3351,7 @@ FocusScope {
             font.pixelSize: Style.font.body
           }
           Text {
+            visible: !root.compact
             anchors.verticalCenter: parent.verticalCenter
             text: Keymap.label(Keymap.keysFor(app.shortcuts, "voice.send")[0] || "") + " sends  ·  "
                   + Keymap.label(Keymap.keysFor(app.shortcuts, "voice.cancel")[0] || "") + " cancels"
@@ -2978,7 +3405,8 @@ FocusScope {
     anchors.right: parent.right
     anchors.top: parent.top
     anchors.bottom: parent.bottom
-    width: Math.min(Style.space(380), Math.max(Style.space(300), root.width * 0.38))
+    // Beside the chat, or over it when the chat would be left too narrow to read.
+    width: root.width < Style.space(640) ? root.width : Math.min(Style.space(380), Math.max(Style.space(300), root.width * 0.38))
     visible: root.infoOpen && !!root.chat
     app: root.app
     client: root.client
@@ -3079,6 +3507,20 @@ FocusScope {
     items: Model.moreMenu(root.chat, app.meId)
     onDismissed: root.focusComposer()
     onPicked: function (id) { root.morePicked(id) }
+  }
+
+  ContextMenu {
+    id: composerOverflowMenu
+    anchors.fill: parent
+    app: root.app
+    upward: true
+    items: composerButtons.hidden.map(function (b) { return { id: b.action, label: b.label } })
+    onDismissed: root.focusComposer()
+    onPicked: function (id) {
+      // Menus that open from a button open from the overflow button instead.
+      if (id === "silent") { root.toggleSilent(); root.focusComposer() }
+      else root.composerAction(id, root.composerOverflowAnchor)
+    }
   }
 
   ContextMenu {

@@ -30,6 +30,7 @@ DOWNLOAD_SIZES = (0, 10, 50)   # megabytes up to which a video or a file downloa
 DOWNLOADS_DEFAULT = {"photos": True, "gifs": True, "videos": 0, "files": 0}
 EMOJI_KINDS = ("emoji", "symbols", "kaomoji")   # the emoji panel's recents are "<kind>:<what it types>"
 EMOJI_RECENTS_MAX = 80
+STEALTH_MAX = 1000             # chats where opening them tells nobody you read them
 EMOJI_TEXT_MAX = 80
 SOUND_STYLES = ("pop", "drop", "knock")   # what makes each person's sound; or "off"
 SOUND_DEFAULT = "drop"
@@ -65,7 +66,7 @@ BINDS_MAX = 4 * 1024 * 1024
 def empty():
     return {"shortcuts": {}, "globalShortcuts": {}, "playbackRate": 1, "autoDownload": dict(DOWNLOADS_DEFAULT),
             "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}, "sounds": {"style": SOUND_DEFAULT, "variants": {}},
-            "quiet": False}
+            "quiet": False, "stealth": []}
 
 
 # ---------------------------------------------------------------- key combinations for Hyprland
@@ -185,6 +186,15 @@ def check(value, strict=True):
         bad("quiet is true or false")
     else:
         out["quiet"] = quiet
+    stealth = value.get("stealth", [])   # chats read in secret: nothing marks them read, nothing says you are typing
+    if not isinstance(stealth, list) or len(stealth) > STEALTH_MAX:
+        bad(f"stealth is a list of at most {STEALTH_MAX} chat ids")
+        stealth = []
+    for chat_id in stealth:
+        if isinstance(chat_id, bool) or not isinstance(chat_id, int) or chat_id == 0 or abs(chat_id) >= 2 ** 63:
+            bad("stealth holds chat ids, whole numbers")
+        elif chat_id not in out["stealth"]:
+            out["stealth"].append(chat_id)
     emoji = value.get("emoji", {})   # the emoji panel: the skin tone (0 none, 1-5) and what you use most
     if not isinstance(emoji, dict):
         bad("emoji must be an object")

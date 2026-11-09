@@ -871,6 +871,8 @@ function messageMenu(message, properties, translated, chat) {
     return later
   }
   var out = []
+  // A message that could not be sent: trying again comes first, deleting it is at the end as usual.
+  if (message.outgoing && message.sending === "failed" && message.retry === true) out.push({ id: "resend", label: "Try sending again" })
   if (!p || p.canReply) out.push({ id: "reply", label: "Reply" })
   if (p && p.canGetThread) out.push({ id: "thread", label: isObject(chat) && chat.kind === "channel" ? "Comments" : "Replies" })
   if (message.canSeeReactions && toList(message.reactions).length) out.push({ id: "reactions", label: "Who reacted" })
@@ -893,6 +895,8 @@ function messageMenu(message, properties, translated, chat) {
     out.push({ id: "save", label: "Save to Downloads" })
   }
   if (isObject(c.poll) && c.poll.voted && !c.poll.closed && !c.poll.quiz) out.push({ id: "retract", label: "Retract vote" })
+  // Your own poll, still open: closing it shows everyone the final results.
+  if (isObject(c.poll) && message.outgoing && !c.poll.closed && !message.sending) out.push({ id: "stopPoll", label: "Stop the poll" })
   if (p && p.canDeleteForAll) out.push({ id: "deleteAll", label: "Delete for everyone", danger: true })
   if (p && p.canDeleteForMe) out.push({ id: "deleteMe", label: "Delete for me", danger: true })
   return out
@@ -913,15 +917,46 @@ function muteSeconds(id) {
   return m ? Number(m[1]) : -1
 }
 
-function chatMenu(chat, listKey, searchMode) {
+function chatMenu(chat, listKey, searchMode, stealth, meId) {
   if (!isObject(chat)) return []
   var out = [{ id: "open", label: "Open" }, { id: "info", label: "Info" }]
-  if (chat.unread > 0 || chat.mentions > 0 || chat.markedUnread) out.push({ id: "read", label: "Mark as read" })
+  if (hasUnread(chat)) out.push({ id: "read", label: "Mark as read" })
   else out.push({ id: "unread", label: "Mark as unread" })
+  out.push(stealthItem(stealth))
   if (!searchMode) out.push(pinnedIn(chat, listKey) ? { id: "unpin", label: "Unpin" } : { id: "pin", label: "Pin" })
   out.push(chat.muted ? { id: "unmute", label: "Unmute" } : { id: "mute", label: "Mute" })
   out.push(chat.archived ? { id: "unarchive", label: "Move out of the archive" } : { id: "archive", label: "Archive" })
-  return out.concat(leaveActions(chat))
+  return out.concat(blockActions(chat, meId), leaveActions(chat))
+}
+
+// Anything waiting to be read: messages, mentions, reactions to your messages, or the chat marked unread by hand.
+function hasUnread(chat) {
+  return isObject(chat) && (chat.unread > 0 || chat.mentions > 0 || chat.unreadReactions > 0 || chat.markedUnread === true)
+}
+
+// Stealth: reading the chat here tells nobody, until you mark it read yourself.
+function stealthItem(stealth) {
+  return stealth ? { id: "unstealth", label: "Stop reading in stealth" } : { id: "stealth", label: "Read in stealth" }
+}
+
+// Whether a chat is one you read in stealth; `ids` is the list kept in the settings.
+function isStealth(ids, chatId) {
+  return Array.isArray(ids) && typeof chatId === "number" && ids.indexOf(chatId) >= 0
+}
+
+// A list of chat ids as a plain array. What reaches the window through a signal is a Qt list, not an
+// Array (Array.isArray is false for it), so testing for an Array would throw the ids away.
+function idList(value) {
+  if (!value || typeof value !== "object" || typeof value.length !== "number") return []
+  var out = []
+  for (var i = 0; i < value.length && i < 1000; i++) if (typeof value[i] === "number") out.push(value[i])
+  return out
+}
+
+// Blocking the person a private chat is with (a bot too); never yourself.
+function blockActions(chat, meId) {
+  if (!isObject(chat) || chat.kind !== "private" || !chat.userId || chat.userId === meId) return []
+  return [chat.blocked === true ? { id: "unblock", label: "Unblock" } : { id: "block", label: chat.bot ? "Block the bot" : "Block", danger: true }]
 }
 
 // Leaving a group or channel; clearing or deleting a chat with a person (your copy only).
@@ -973,16 +1008,18 @@ function infoDetails(chat, details) {
   return out
 }
 
-function infoActions(chat, meId) {
+function infoActions(chat, meId, stealth) {
   if (!isObject(chat)) return []
   var out = [{ id: "mute", label: chat.muted ? "Unmute" : "Mute" }, { id: "search", label: "Search" }]
+  if (hasUnread(chat)) out.push({ id: "read", label: "Mark as read" })
+  out.push(stealthItem(stealth))
   if (chat.canSetAutoDelete) out.push({ id: "autoDelete", label: "Auto-delete messages" })
   if (chat.kind === "private" && !chat.bot && chat.userId && chat.userId !== meId)
     out.push({ id: "secret", label: "Start a secret chat" }, { id: "hearSound", label: "Hear their sound" },
              { id: "otherSound", label: "Give them another sound" })
   if (chat.kind === "secret" && isObject(chat.secret) && chat.secret.state !== "closed")
     out.push({ id: "endSecret", label: "End the secret chat", danger: true })
-  return out.concat(leaveActions(chat))
+  return out.concat(blockActions(chat, meId), leaveActions(chat))
 }
 
 function secretStateText(chat) {
@@ -1531,6 +1568,41 @@ function proxyText(proxy, ping, connection) {
 function connectionText(state) {
   return ({ network: "Waiting for the network…", proxy: "Connecting to the proxy…", connecting: "Connecting…",
             updating: "Updating…", ready: "Connected" })[state] || ""
+}
+
+// ---------------------------------------------------------------- inline bots
+
+// "@bot query" at the start of the composer asks that bot, as in Telegram's apps: the bot's username
+// and what follows its space (possibly nothing yet). Null for anything else, a mention included.
+function inlineQuery(text) {
+  var m = /^@([A-Za-z0-9_]{3,32}) ([^]*)$/.exec(String(text || ""))
+  if (!m || m[2].length > 256) return null
+  return { bot: m[1], query: m[2] }
+}
+
+var INLINE_KINDS = { article: "Link", photo: "Photo", gif: "GIF", sticker: "Sticker", video: "Video", audio: "Audio",
+                     voice: "Voice message", document: "File", location: "Location", venue: "Place", contact: "Contact", game: "Game" }
+
+// What a result's row says: its own title, or what kind of thing it is.
+function inlineTitle(result) {
+  if (!isObject(result)) return ""
+  return String(result.title || "") || INLINE_KINDS[result.kind] || "Result"
+}
+
+// The small picture for a result's row: { file, mini } — a file to show once downloaded (only still
+// formats), and the tiny inline thumbnail to show until then. Either can be null.
+function inlineThumb(result) {
+  if (!isObject(result)) return { file: null, mini: null }
+  var media = isObject(result.media) ? result.media : null
+  var candidates = [result.thumb, media && media.thumb, media && media.preview, media && result.kind === "photo" ? media : null]
+  var file = null
+  for (var i = 0; i < candidates.length && !file; i++) {
+    var c = candidates[i]
+    if (!isObject(c) || !isObject(c.file)) continue
+    if (c.format && ["jpeg", "png", "webp"].indexOf(c.format) < 0) continue
+    file = c.file
+  }
+  return { file: file, mini: (media && media.mini) || result.mini || null }
 }
 
 // ---------------------------------------------------------------- a link's preview while typing, disappearing messages

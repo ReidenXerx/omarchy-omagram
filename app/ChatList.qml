@@ -145,8 +145,13 @@ FocusScope {
   function openChatMenu(chat, x, y) {
     if (!chat) return
     root.menuChat = chat
+    root.confirmingBlock = false
+    root.menuAt = Qt.point(x, y)
     chatMenu.open(x, y)
   }
+  // Blocking asks once more, in the same place: the menu comes back as the question.
+  property bool confirmingBlock: false
+  property point menuAt: Qt.point(0, 0)
 
   function openMenuAtCursor() {
     var chat = root.cursorChat()
@@ -168,6 +173,13 @@ FocusScope {
     else if (id === "pin" || id === "unpin") root.pinRequested(chat.id)
     else if (id === "mute" || id === "unmute") root.muteRequested(chat.id)
     else if (id === "archive" || id === "unarchive") root.archiveRequested(chat.id)
+    else if (id === "stealth" || id === "unstealth") app.setStealth(chat.id, id === "stealth")
+    else if (id === "unblock") app.setBlocked(chat.id, false)
+    else if (id === "blockYes") app.setBlocked(chat.id, true)
+    else if (id === "block") {
+      root.confirmingBlock = true
+      chatMenu.open(root.menuAt.x, root.menuAt.y)
+    }
   }
 
   // From anywhere in the window: open the chat above or below the one that is open.
@@ -605,6 +617,15 @@ FocusScope {
                 Layout.fillWidth: true
                 spacing: Style.space(6)
 
+                // md-incognito U+F05F9: read in stealth, so opening it marks nothing read
+                Text {
+                  visible: Model.isStealth(app.stealthChats, row.chat.id)
+                  text: String.fromCodePoint(0xF05F9)
+                  color: app.muted
+                  font.family: app.glyphFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+
                 // md-lock U+F033E: a secret chat
                 Text {
                   visible: row.chat.kind === "secret"
@@ -785,7 +806,10 @@ FocusScope {
     id: chatMenu
     anchors.fill: parent
     app: root.app
-    items: Model.chatMenu(root.menuChat ? (Model.findChat(root.allChats, root.menuChat.id) || root.menuChat) : null, root.listKey, root.searchMode)
+    items: root.confirmingBlock && root.menuChat
+           ? [{ id: "blockYes", label: "Block " + Model.chatTitle(root.menuChat, app.meId) + "?", danger: true }, { id: "blockNo", label: "Cancel" }]
+           : Model.chatMenu(root.menuChat ? (Model.findChat(root.allChats, root.menuChat.id) || root.menuChat) : null, root.listKey, root.searchMode,
+                            !!root.menuChat && Model.isStealth(app.stealthChats, root.menuChat.id), app.meId)
     onDismissed: root.focusList()
     onPicked: function (id) { root.focusList(); root.chatMenuPicked(id) }
   }

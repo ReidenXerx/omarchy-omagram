@@ -37,6 +37,12 @@
 - **Built for Omarchy.** Your theme's colours with text kept readable, the keyboard first everywhere,
   every shortcut yours to change, global keys registered with Hyprland without touching your config,
   and silent sending per chat that your other Telegram apps follow.
+- **Read in stealth.** Turn it on for a chat (its menu, or its info) and reading it here tells no
+  one: nothing is marked read, no "typing…" goes out, a voice message you play stays unlistened, and
+  the unread count stays put on all your devices. The mask button above the chat switches it on and
+  off (`Ctrl+Shift+G`, or the chat's menu), lit while it is on, and the chat list shows the mask too;
+  mark it read yourself when you choose (the ✓✓ button above the chat, `Ctrl+Shift+K`, or its menu). Sending a message there
+  still counts as having read it, as Telegram has it.
 - **Emoji by name, in three languages.** The emoji panel finds emoji, symbols and kaomoji by their
   English, Ukrainian or Russian names and keeps the ones you use and your skin tone. Reactions to your
   messages count as seen when you open the chat, instead of one by one.
@@ -50,6 +56,10 @@
   contact or anyone's @username, or create a group or a channel (`Ctrl+Shift+N`, or the pencil).
   Your chat with yourself is Saved Messages, and a forum group opens on its topics; a channel
   post's comments and the replies to a message open the same way (`c`, or the bar under it).
+  Mark a whole chat read from the ✓✓ button above it, its menu or its info, and block or unblock
+  a person (or a bot) from the same menu or info. In a narrow window the chat list and the chat take
+  turns, with a back arrow above the chat, and the buttons beside the message box that no longer
+  fit move into a ⋯ menu.
 - **Chat info** — a panel (`Ctrl+I`) with a person's bio, username and phone, or a group's
   description and invite link; its members; and everything shared in it: photos and videos,
   files, links, voice messages, music and GIFs. Leave a group, or clear or delete a chat, from it.
@@ -62,7 +72,10 @@
   shows plainly), at a time you pick or once the other person is online (`Ctrl+Alt+Enter`). Search finds public
   groups and channels by name too; one you open is joined from the bar that takes the message box's
   place. The + button (`Ctrl+Shift+A`) sends a poll or a quiz, dice, a person's contact card, or a
-  location: coordinates, or a Google Maps or OpenStreetMap link pasted in.
+  location: coordinates, or a Google Maps or OpenStreetMap link pasted in; stop a poll of yours from
+  its menu. A message that could not be sent offers to try again from its menu. Inline bots work
+  as in Telegram's apps: type `@gif cats` (or any inline bot's name and a space) at the start of the
+  message box and pick from the results with the arrows and `Enter`.
 - **Rich messages** — formatting (typed the way Telegram's own apps read it: `**bold**`,
   `__italic__`, `~~strikethrough~~`, `||spoiler||`, `` `code` ``, `[text](address)`, or with the keys
   below), links, mentions and hashtags, spoilers, link previews (shown as you type, under or above the text, or left out), polls
@@ -206,6 +219,8 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Ctrl+Shift+M` | mute or unmute the open chat |
 | `Ctrl+Shift+D` | set messages in the open chat to disappear after a day, a week or a month |
 | `Ctrl+Shift+B` | silent sending in the open chat, on or off: Telegram's own setting, so your other apps follow it |
+| `Ctrl+Shift+G` | read the open chat in stealth, on or off: nothing is marked read and no "typing…" goes out |
+| `Ctrl+Shift+K` | mark everything in the open chat as read (in a stealth chat too) |
 | `Ctrl+Shift+P` | go to the pinned message |
 | `Ctrl+I` | the chat's info (`Tab` switches its tabs, `Enter` opens, `Esc` closes) |
 | `Ctrl+Shift+N` | start a chat, a group or a channel (`Enter` opens or adds, `Ctrl+Enter` goes on) |
@@ -242,7 +257,8 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `x` | select or unselect (so does Ctrl+click); `Shift+R`, `f`, `y` and `d` then act on everything selected |
 | `m`, `Menu` or `Shift+F10` | the message's menu (so does a right click) |
 | `d` or `Delete` | delete (press again to confirm) |
-| `Esc` or `i` | clear the selection, or back to the composer |
+| `Esc` | back, one step at a time: clear the selection, leave scheduled messages or a topic, then the chat list |
+| `i` | back to the message box |
 
 **Composer**
 
@@ -256,7 +272,7 @@ own keys never change, so a bad choice can always be undone. Your choices are ke
 | `Ctrl+Shift+L` | the link preview: under the text, above it, or none |
 | `Ctrl+Alt+Enter` | send later or when they are online; scheduled messages are listed there too |
 | `↑` in an empty composer | edit your last message |
-| `Esc` | cancel a reply or edit |
+| `Esc` | cancel a reply, an edit or the files waiting to go; with nothing to cancel, back to the chat list |
 | `Ctrl+O` / `Ctrl+Shift+O` | attach photos / send files uncompressed |
 | `Ctrl+Shift+A` | a poll, dice, a contact card or a location |
 | `Ctrl+V` / `Ctrl+Shift+V` | with files or a picture copied: attach them / send them as files |

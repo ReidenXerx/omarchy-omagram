@@ -23,13 +23,20 @@ Item {
 
   property int nextId: 1
   property var callbacks: ({})
+  // When each waiting request gives up (ms since the epoch), by id. The service gives up on
+  // Telegram itself (after a minute, or up to 15 for a download it waits on), and a service that
+  // goes away fails everything at once when the connection drops. This only catches one that is
+  // still connected but no longer answering, so it waits longer than any of the service's own.
+  property var deadlines: ({})
+  readonly property int defaultTimeoutMs: 960000
   property real lastStartAttempt: 0
   property var sock: null
 
   signal hello(var result)
   signal serviceEvent(string name, var message)
 
-  function request(cmd, args, callback) {
+  // `timeoutMs` (optional) for a request that may take longer than usual, such as sending files; 0 waits for good.
+  function request(cmd, args, callback, timeoutMs) {
     // The socket itself, not `connected`: that binding may not have caught up yet inside the
     // socket's own connection handler, which is where hello is sent.
     if (!client.sock || !client.sock.connected) {
@@ -37,9 +44,32 @@ Item {
       return
     }
     var id = client.nextId++
-    if (callback) client.callbacks[id] = callback
+    if (callback) {
+      client.callbacks[id] = callback
+      var wait = typeof timeoutMs === "number" ? timeoutMs : client.defaultTimeoutMs
+      if (wait > 0) client.deadlines[id] = Date.now() + wait
+    }
     client.sock.write(JSON.stringify({ id: id, cmd: cmd, args: args || {} }) + "\n")
     client.sock.flush()
+  }
+
+  // Gives up on requests past their deadline: each hears back once, as if the service had said so.
+  function expire() {
+    var now = Date.now()
+    for (var id in client.deadlines) {
+      if (client.deadlines[id] > now) continue
+      var callback = client.callbacks[id]
+      delete client.deadlines[id]
+      delete client.callbacks[id]
+      if (callback) callback({ ok: false, error: "Omagram's service did not answer in time" })
+    }
+  }
+
+  Timer {
+    interval: 5000
+    repeat: true
+    running: true   // cheap: a handful of waiting requests at most
+    onTriggered: client.expire()
   }
 
   function handleLine(line) {
@@ -48,6 +78,7 @@ Item {
     if (!message || typeof message !== "object") return
     if (typeof message.id === "number") {
       var callback = client.callbacks[message.id]
+      delete client.deadlines[message.id]
       if (callback) {
         delete client.callbacks[message.id]
         callback(message)
@@ -60,6 +91,7 @@ Item {
   function failPending() {
     var pending = client.callbacks
     client.callbacks = ({})
+    client.deadlines = ({})
     for (var id in pending) pending[id]({ ok: false, error: "The connection to Omagram's service was lost" })
   }
 

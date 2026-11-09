@@ -430,6 +430,48 @@ class Messages(unittest.TestCase):
         self.assertEqual((m["id"], m["senderName"], m["replyTo"], m["sending"], m["content"]["text"]),
                          (10, "Ann", {"chatId": 1, "messageId": 9}, "pending", "hi"))
 
+    def test_failed_message_says_whether_it_can_retry_and_why(self):
+        failed = {"@type": "messageSendingStateFailed", "error": {"@type": "error", "code": 400, "message": "x" * 500}, "can_retry": True}
+        m = self.s.message(text_message(10, 1, "hi", outgoing=True, sending_state=failed))
+        self.assertEqual((m["sending"], m["retry"], m["sendError"]), ("failed", True, "x" * model.SEND_ERROR_MAX))
+        m = self.s.message(text_message(10, 1, "hi", sending_state=dict(failed, can_retry=False, error={"message": "FLOOD"})))
+        self.assertEqual((m["retry"], m["sendError"]), (False, "FLOOD"))
+        for state in (None, {"@type": "messageSendingStatePending"}):
+            m = self.s.message(text_message(10, 1, "hi", sending_state=state))
+            self.assertEqual((m["retry"], m["sendError"]), (False, ""))
+
+    def test_chat_is_blocked_from_its_block_list(self):
+        self.s.apply({"@type": "updateNewChat", "chat": dict(chat(1), block_list={"@type": "blockListMain"})})
+        self.assertIs(self.s.chat_view(1)["blocked"], True)
+        events = self.s.apply({"@type": "updateChatBlockList", "chat_id": 1, "block_list": None})
+        self.assertEqual((events[0]["event"], events[0]["chat"]["blocked"]), ("chat", False))
+        self.s.apply({"@type": "updateChatBlockList", "chat_id": 1, "block_list": {"@type": "blockListStories"}})
+        self.assertIs(self.s.chat_view(1)["blocked"], False, "hiding stories is not blocking")
+        self.assertEqual(self.s.apply({"@type": "updateChatBlockList", "chat_id": 99, "block_list": None}), [])
+
+    def test_inline_results_by_kind(self):
+        file = {"@type": "file", "id": 5, "size": 1, "local": {}}
+        cases = {
+            "inlineQueryResultAnimation": ("gif", {"animation": {"@type": "animation", "animation": file, "width": 3, "height": 4}}),
+            "inlineQueryResultSticker": ("sticker", {"sticker": {"@type": "sticker", "sticker": file, "format": {"@type": "stickerFormatWebp"}}}),
+            "inlineQueryResultVideo": ("video", {"video": {"@type": "video", "video": file}}),
+            "inlineQueryResultAudio": ("audio", {"audio": {"@type": "audio", "audio": file, "title": "Song", "performer": "Band"}}),
+            "inlineQueryResultVoiceNote": ("voice", {"voice_note": {"@type": "voiceNote", "voice": file}}),
+            "inlineQueryResultDocument": ("document", {"document": {"@type": "document", "document": file, "file_name": "a.pdf"}}),
+        }
+        for t, (kind, fields) in cases.items():
+            v = model.inline_result_view(dict(fields, **{"@type": t, "id": "r", "title": "T"}), "")
+            self.assertEqual((v["kind"], v["media"]["file"]["id"]), (kind, 5), t)
+        audio = model.inline_result_view(dict(cases["inlineQueryResultAudio"][1], **{"@type": "inlineQueryResultAudio", "id": "r"}), "")
+        self.assertEqual((audio["title"], audio["description"]), ("Song", "Band"))
+        venue = model.inline_result_view({"@type": "inlineQueryResultVenue", "id": "v", "venue": {
+            "@type": "venue", "title": "Cafe", "address": "Main St", "location": {"@type": "location", "latitude": 1, "longitude": 2}}}, "")
+        self.assertEqual((venue["kind"], venue["title"], venue["description"], venue["location"]["lat"]), ("venue", "Cafe", "Main St", 1.0))
+        for bad in ({"@type": "inlineQueryResultPhoto", "id": "x"}, {"@type": "inlineQueryResultArticle"}, {"@type": "other", "id": "x"},
+                    {"@type": "inlineQueryResultLocation", "id": "x", "location": {"latitude": 99, "longitude": 0}}, None, "junk"):
+            self.assertIsNone(model.inline_result_view(bad, ""), bad)
+        self.assertEqual(len(model.inline_result_view({"@type": "inlineQueryResultArticle", "id": "i" * 200, "title": "t" * 999}, "")["id"]), 64)
+
     def test_int64_ids_as_strings_and_deletes(self):
         m = self.s.message(text_message("123456789012", "-1001234567890", "x"))
         self.assertEqual((m["id"], m["chatId"]), (123456789012, -1001234567890))

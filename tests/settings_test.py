@@ -84,6 +84,15 @@ class Combos(unittest.TestCase):
 
 
 class Checking(unittest.TestCase):
+    def test_stealth_chats(self):
+        self.assertEqual(prefs.check({"stealth": [5, -100, 5]})["stealth"], [5, -100])
+        self.assertEqual(prefs.check({})["stealth"], [])
+        for bad in ("5", [True], ["5"], [1.5], [0], [2 ** 63], {"a": 1}, list(range(1, prefs.STEALTH_MAX + 2))):
+            with self.assertRaises(ValueError, msg=bad):
+                prefs.check({"stealth": bad})
+        self.assertEqual(prefs.check({"stealth": [3, "x", True]}, strict=False)["stealth"], [3])
+        self.assertEqual(len(prefs.check({"stealth": list(range(1, prefs.STEALTH_MAX + 1))})["stealth"]), prefs.STEALTH_MAX)
+
     def test_strict_checks(self):
         good = {"shortcuts": {"window.voice": ["Ctrl+Alt+V", "Ctrl+Alt+V"], "list.pin": []},
                 "globalShortcuts": {"global.quickReply": "super + alt + m", "global.panel": ""}}
@@ -91,7 +100,7 @@ class Checking(unittest.TestCase):
                                              "globalShortcuts": {"global.quickReply": "SUPER + ALT + M"}, "playbackRate": 1,
                                              "autoDownload": {"photos": True, "gifs": True, "videos": 0, "files": 0},
                                              "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}},
-                                             "sounds": {"style": "drop", "variants": {}}, "quiet": False})
+                                             "sounds": {"style": "drop", "variants": {}}, "quiet": False, "stealth": []})
         self.assertEqual(prefs.check(dict(good, sounds={"style": "off", "variants": {"500": 3}}))["sounds"], {"style": "off", "variants": {"500": 3}})
         mine = {"tone": 2, "recents": {"emoji:👍": {"c": 1.5, "t": 1789000000000}, "kaomoji:(╯°□°）╯︵ ┻━┻": {"c": 1, "t": 1789000000001}}}
         self.assertEqual(prefs.check(dict(good, emoji=mine))["emoji"], mine)
@@ -122,7 +131,7 @@ class Checking(unittest.TestCase):
         self.assertEqual(prefs.check(mixed, strict=False),
                          {"shortcuts": {"window.voice": ["Ctrl+Alt+V"]}, "globalShortcuts": {"global.quickReply": "SUPER + M"},
                           "playbackRate": 1, "autoDownload": {"photos": True, "gifs": True, "videos": 50, "files": 0},
-                          "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}, "sounds": {"style": "drop", "variants": {}}, "quiet": False})
+                          "reactionsSeen": True, "emoji": {"tone": 0, "recents": {}}, "sounds": {"style": "drop", "variants": {}}, "quiet": False, "stealth": []})
         self.assertEqual(prefs.check("junk", strict=False), prefs.empty())
         # A style from before the pops (a bell, a plucked string...) comes back as the default, the tunes you changed kept.
         self.assertEqual(prefs.check({"sounds": {"style": "glass", "variants": {"7": 2}}}, strict=False)["sounds"],

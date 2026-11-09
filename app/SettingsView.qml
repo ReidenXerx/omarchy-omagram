@@ -859,6 +859,8 @@ FocusScope {
           font.bold: true
         }
         Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
           text: "↑↓ choose  ·  Enter open or change  ·  A add a key  ·  Backspace remove  ·  R reset  ·  Esc close"
           color: settings.app.muted
           font.family: settings.app.fontFamily
@@ -1034,6 +1036,8 @@ FocusScope {
           }
           Text {
             visible: !!row.modelData.note
+            width: row.width - Style.space(8)
+            elide: Text.ElideRight
             text: row.modelData.note || ""
             color: settings.app.muted
             font.family: settings.app.fontFamily
